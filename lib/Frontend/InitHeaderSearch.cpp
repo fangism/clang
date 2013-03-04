@@ -347,28 +347,35 @@ AddDefaultCPlusPlusIncludePaths(const llvm::Triple &triple, const HeaderSearchOp
 
     case llvm::Triple::ppc:
     case llvm::Triple::ppc64:
+// This is a local hack-only, do not submit or commit.
+/**
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.2.1",
-                                  "powerpc-apple-darwin10", "", "ppc64",
+                                  "powerpc-apple-darwin8", "", "ppc64",
                                   triple);
+**/
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.0.0",
-                                  "powerpc-apple-darwin10", "", "ppc64",
+                                  "powerpc-apple-darwin8", "", "ppc64",
                                   triple);
       break;
 
     case llvm::Triple::x86:
     case llvm::Triple::x86_64:
+/**
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.2.1",
-                                  "i686-apple-darwin10", "", "x86_64", triple);
+                                  "i686-apple-darwin8", "", "x86_64", triple);
+**/
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.0.0",
                                   "i686-apple-darwin8", "", "", triple);
       break;
 
     case llvm::Triple::arm:
     case llvm::Triple::thumb:
+/**
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.2.1",
-                                  "arm-apple-darwin10", "v7", "", triple);
+                                  "arm-apple-darwin8", "v7", "", triple);
       AddGnuCPlusPlusIncludePaths("/usr/include/c++/4.2.1",
-                                  "arm-apple-darwin10", "v6", "", triple);
+                                  "arm-apple-darwin8", "v6", "", triple);
+**/
       break;
     }
     return;

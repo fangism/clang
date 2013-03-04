@@ -6240,7 +6240,10 @@ void clang::setThreadBackgroundPriority() {
 
   // FIXME: Move to llvm/Support and make it cross-platform.
 #ifdef __APPLE__
+// constants are not defined on darwin8, expected in <sys/resource.h>
+#if	defined(PRIO_DARWIN_THREAD) && defined(PRIO_DARWIN_BG)
   setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG);
+#endif
 #endif
 }
 

@@ -4012,6 +4012,14 @@ void darwin::DarwinTool::AddDarwinArch(const ArgList &Args,
 
   // Derived from darwin_arch spec.
   CmdArgs.push_back("-arch");
+#if 1
+// suggested patch from http://llvm.org/bugs/show_bug.cgi?id=3830
+  if (ArchName == "powerpc")
+    CmdArgs.push_back("ppc");
+  else if (ArchName == "powerpc64")
+    CmdArgs.push_back("ppc64");
+  else
+#endif
   CmdArgs.push_back(Args.MakeArgString(ArchName));
 
   // FIXME: Is this needed anymore?
