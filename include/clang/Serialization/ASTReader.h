@@ -277,10 +277,16 @@ private:
   FileManager &FileMgr;
   DiagnosticsEngine &Diags;
 
+#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
+public:	// workaround to grant access to classes nested within ASTDeclReader
+#endif
   /// \brief The semantic analysis object that will be processing the
   /// AST files and the translation unit that uses it.
   Sema *SemaObj;
 
+#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
+private:
+#endif
   /// \brief The preprocessor that will be loading the source file.
   Preprocessor &PP;
 
@@ -822,6 +828,9 @@ private:
   /// since the last time the declaration chains were linked.
   llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
   
+#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
+public:	// workaround to grant access to classes nested within ASTDeclReader
+#endif
   /// \brief The list of redeclaration chains that still need to be 
   /// reconstructed.
   ///
@@ -833,6 +842,9 @@ private:
   /// \brief Keeps track of the elements added to PendingDeclChains.
   llvm::SmallSet<serialization::DeclID, 16> PendingDeclChainsKnown;
 
+#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
+private:
+#endif
   /// \brief The set of Objective-C categories that have been deserialized
   /// since the last time the declaration chains were linked.
   llvm::SmallPtrSet<ObjCCategoryDecl *, 16> CategoriesDeserialized;
