@@ -4938,6 +4938,7 @@ static char getObjCEncodingForPrimitiveKind(const ASTContext *C,
       llvm_unreachable("invalid builtin type for @encode");
     }
     llvm_unreachable("invalid BuiltinType::Kind value");
+    return '\0';	// unreachable, just to suppress warning
 }
 
 static char ObjCEncodingForEnumType(const ASTContext *C, const EnumType *ET) {
