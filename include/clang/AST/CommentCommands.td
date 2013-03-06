@@ -24,6 +24,7 @@ class Command<string name> {
   bit IsVerbatimBlockEndCommand = 0;
   bit IsVerbatimLineCommand = 0;
   bit IsDeclarationCommand = 0;
+  bit IsFunctionDeclarationCommand = 0;
 }
 
 class InlineCommand<string name> : Command<name> {
@@ -57,6 +58,12 @@ class VerbatimLineCommand<string name> : Command<name> {
 class DeclarationVerbatimLineCommand<string name> :
       VerbatimLineCommand<name> {
   let IsDeclarationCommand = 1;
+}
+
+class FunctionDeclarationVerbatimLineCommand<string name> :
+      VerbatimLineCommand<name> {
+  let IsDeclarationCommand = 1;
+  let IsFunctionDeclarationCommand = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -102,6 +109,7 @@ def Headerfile : BlockCommand<"headerfile"> { let IsHeaderfileCommand = 1; }
 // We don't do any additional semantic analysis for the following
 // BlockCommands.  It might be a good idea to do something extra for them, but
 // for now we model them as plain BlockCommands.
+def Attention  : BlockCommand<"attention">;
 def Author     : BlockCommand<"author">;
 def Authors    : BlockCommand<"authors">;
 def Bug        : BlockCommand<"bug">;
@@ -178,9 +186,9 @@ def Interface : DeclarationVerbatimLineCommand<"interface">;
 def Protocol  : DeclarationVerbatimLineCommand<"protocol">;
 def Category  : DeclarationVerbatimLineCommand<"category">;
 def Template  : DeclarationVerbatimLineCommand<"template">;
-def Function  : DeclarationVerbatimLineCommand<"function">;
-def Method    : DeclarationVerbatimLineCommand<"method">;
-def Callback  : DeclarationVerbatimLineCommand<"callback">;
+def Function  : FunctionDeclarationVerbatimLineCommand<"function">;
+def Method    : FunctionDeclarationVerbatimLineCommand<"method">;
+def Callback  : FunctionDeclarationVerbatimLineCommand<"callback">;
 def Const     : DeclarationVerbatimLineCommand<"const">;
 def Constant  : DeclarationVerbatimLineCommand<"constant">;
 def Struct    : DeclarationVerbatimLineCommand<"struct">;

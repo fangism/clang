@@ -34,6 +34,7 @@ enum TokenType {
   TT_ConditionalExpr,
   TT_CtorInitializerColon,
   TT_ImplicitStringLiteral,
+  TT_InheritanceColon,
   TT_LineComment,
   TT_ObjCArrayLiteral,
   TT_ObjCBlockLParen,
@@ -72,9 +73,9 @@ public:
       : FormatTok(FormatTok), Type(TT_Unknown), SpacesRequiredBefore(0),
         CanBreakBefore(false), MustBreakBefore(false),
         ClosesTemplateDeclaration(false), MatchingParen(NULL),
-        ParameterCount(1), BindingStrength(0), SplitPenalty(0),
+        ParameterCount(0), BindingStrength(0), SplitPenalty(0),
         LongestObjCSelectorName(0), Parent(NULL), FakeLParens(0),
-        FakeRParens(0) {
+        FakeRParens(0), LastInChainOfCalls(false) {
   }
 
   bool is(tok::TokenKind Kind) const { return FormatTok.Tok.is(Kind); }
@@ -126,6 +127,9 @@ public:
   /// \brief Insert this many fake ) after this token for correct indentation.
   unsigned FakeRParens;
 
+  /// \brief Is this the last "." or "->" in a builder-type call?
+  bool LastInChainOfCalls;
+
   const AnnotatedToken *getPreviousNoneComment() const {
     AnnotatedToken *Tok = Parent;
     while (Tok != NULL && Tok->is(tok::comment))
@@ -139,7 +143,8 @@ public:
   AnnotatedLine(const UnwrappedLine &Line)
       : First(Line.Tokens.front()), Level(Line.Level),
         InPPDirective(Line.InPPDirective),
-        MustBeDeclaration(Line.MustBeDeclaration) {
+        MustBeDeclaration(Line.MustBeDeclaration),
+        MightBeFunctionDecl(false) {
     assert(!Line.Tokens.empty());
     AnnotatedToken *Current = &First;
     for (std::list<FormatToken>::const_iterator I = ++Line.Tokens.begin(),
@@ -154,7 +159,8 @@ public:
   AnnotatedLine(const AnnotatedLine &Other)
       : First(Other.First), Type(Other.Type), Level(Other.Level),
         InPPDirective(Other.InPPDirective),
-        MustBeDeclaration(Other.MustBeDeclaration) {
+        MustBeDeclaration(Other.MustBeDeclaration),
+        MightBeFunctionDecl(Other.MightBeFunctionDecl) {
     Last = &First;
     while (!Last->Children.empty()) {
       Last->Children[0].Parent = Last;
@@ -169,6 +175,7 @@ public:
   unsigned Level;
   bool InPPDirective;
   bool MustBeDeclaration;
+  bool MightBeFunctionDecl;
 };
 
 inline prec::Level getPrecedence(const AnnotatedToken &Tok) {
