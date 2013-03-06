@@ -4899,9 +4899,9 @@ InitializationSequence::Perform(Sema &S,
           if (DeclaratorDecl *DD = Entity.getDecl()) {
             if (TypeSourceInfo *TInfo = DD->getTypeSourceInfo()) {
               TypeLoc TL = TInfo->getTypeLoc();
-              if (IncompleteArrayTypeLoc *ArrayLoc
-                                      = dyn_cast<IncompleteArrayTypeLoc>(&TL))
-              Brackets = ArrayLoc->getBracketsRange();
+              if (IncompleteArrayTypeLoc ArrayLoc =
+                      TL.getAs<IncompleteArrayTypeLoc>())
+                Brackets = ArrayLoc.getBracketsRange();
             }
           }
 
@@ -5551,7 +5551,8 @@ InitializationSequence::Perform(Sema &S,
 
 /// Somewhere within T there is an uninitialized reference subobject.
 /// Dig it out and diagnose it.
-bool DiagnoseUninitializedReference(Sema &S, SourceLocation Loc, QualType T) {
+static bool DiagnoseUninitializedReference(Sema &S, SourceLocation Loc,
+                                           QualType T) {
   if (T->isReferenceType()) {
     S.Diag(Loc, diag::err_reference_without_init)
       << T.getNonReferenceType();
