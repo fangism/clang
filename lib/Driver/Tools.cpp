@@ -1414,15 +1414,21 @@ static void addExceptionArgs(const ArgList &Args, types::ID InputType,
     CmdArgs.push_back("-fexceptions");
 }
 
+/// \brief Check if the toolchain should use the integrated assembler.
+static bool ShouldUseIntegratedAssembler(const ArgList &Args,
+                                         const ToolChain &TC) {
+  return Args.hasFlag(options::OPT_integrated_as,
+                      options::OPT_no_integrated_as,
+                      TC.IsIntegratedAssemblerDefault());
+}
+
 static bool ShouldDisableCFI(const ArgList &Args,
                              const ToolChain &TC) {
   bool Default = true;
   if (TC.getTriple().isOSDarwin()) {
     // The native darwin assembler doesn't support cfi directives, so
     // we disable them if we think the .s file will be passed to it.
-    Default = Args.hasFlag(options::OPT_integrated_as,
-                           options::OPT_no_integrated_as,
-                           TC.IsIntegratedAssemblerDefault());
+    Default = ShouldUseIntegratedAssembler(Args, TC);
   }
   return !Args.hasFlag(options::OPT_fdwarf2_cfi_asm,
                        options::OPT_fno_dwarf2_cfi_asm,
@@ -1431,13 +1437,9 @@ static bool ShouldDisableCFI(const ArgList &Args,
 
 static bool ShouldDisableDwarfDirectory(const ArgList &Args,
                                         const ToolChain &TC) {
-  bool IsIADefault = TC.IsIntegratedAssemblerDefault();
-  bool UseIntegratedAs = Args.hasFlag(options::OPT_integrated_as,
-                                      options::OPT_no_integrated_as,
-                                      IsIADefault);
   bool UseDwarfDirectory = Args.hasFlag(options::OPT_fdwarf_directory_asm,
                                         options::OPT_fno_dwarf_directory_asm,
-                                        UseIntegratedAs);
+                                        ShouldUseIntegratedAssembler(Args, TC));
   return !UseDwarfDirectory;
 }
 
@@ -2332,8 +2334,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     if (Output.isFilename()) {
       CmdArgs.push_back("-coverage-file");
       SmallString<128> CoverageFilename(Output.getFilename());
-      if (!C.getArgs().hasArg(options::OPT_no_canonical_prefixes))
-        llvm::sys::fs::make_absolute(CoverageFilename);
+      if (llvm::sys::path::is_relative(CoverageFilename.str())) {
+        if (const char *pwd = ::getenv("PWD")) {
+          if (llvm::sys::path::is_absolute(pwd)) {
+            SmallString<128> Pwd(pwd);
+            llvm::sys::path::append(Pwd, CoverageFilename.str());
+            CoverageFilename.swap(Pwd);
+          }
+        }
+      }
       CmdArgs.push_back(Args.MakeArgString(CoverageFilename));
     }
   }
@@ -2795,8 +2804,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_fmodules_ignore_macro);
 
   // -fmodules-autolink (on by default when modules is enabled) automatically
-  // links against libraries for imported modules.
-  if (HaveModules &&
+  // links against libraries for imported modules.  This requires the
+  // integrated assembler.
+  if (HaveModules && ShouldUseIntegratedAssembler(Args, getToolChain()) &&
       Args.hasFlag(options::OPT_fmodules_autolink,
                    options::OPT_fno_modules_autolink,
                    true)) {

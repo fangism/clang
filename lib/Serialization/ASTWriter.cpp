@@ -42,6 +42,7 @@
 #include "clang/Serialization/ASTReader.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include "llvm/Support/FileSystem.h"
@@ -1231,8 +1232,9 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr, StringRef isysroot) {
   IFAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // File name
   unsigned IFAbbrevCode = Stream.EmitAbbrev(IFAbbrev);
 
-  // Write out all of the input files.
-  std::vector<uint32_t> InputFileOffsets;
+  // Get all ContentCache objects for files, sorted by whether the file is a
+  // system one or not. System files go at the back, users files at the front.
+  std::deque<const SrcMgr::ContentCache *> SortedFiles;
   for (unsigned I = 1, N = SourceMgr.local_sloc_entry_size(); I != N; ++I) {
     // Get this source location entry.
     const SrcMgr::SLocEntry *SLoc = &SourceMgr.getLocalSLocEntry(I);
@@ -1245,6 +1247,19 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr, StringRef isysroot) {
     if (!Cache->OrigEntry)
       continue;
 
+    if (Cache->IsSystemFile)
+      SortedFiles.push_back(Cache);
+    else
+      SortedFiles.push_front(Cache);
+  }
+
+  unsigned UserFilesNum = 0;
+  // Write out all of the input files.
+  std::vector<uint32_t> InputFileOffsets;
+  for (std::deque<const SrcMgr::ContentCache *>::iterator
+         I = SortedFiles.begin(), E = SortedFiles.end(); I != E; ++I) {
+    const SrcMgr::ContentCache *Cache = *I;
+
     uint32_t &InputFileID = InputFileIDs[Cache->OrigEntry];
     if (InputFileID != 0)
       continue; // already recorded this file.
@@ -1253,6 +1268,9 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr, StringRef isysroot) {
     InputFileOffsets.push_back(Stream.GetCurrentBitNo());
 
     InputFileID = InputFileOffsets.size();
+
+    if (!Cache->IsSystemFile)
+      ++UserFilesNum;
 
     Record.clear();
     Record.push_back(INPUT_FILE);
@@ -1289,6 +1307,8 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr, StringRef isysroot) {
   BitCodeAbbrev *OffsetsAbbrev = new BitCodeAbbrev();
   OffsetsAbbrev->Add(BitCodeAbbrevOp(INPUT_FILE_OFFSETS));
   OffsetsAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // # input files
+  OffsetsAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // # non-system
+                                                                //   input files
   OffsetsAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));   // Array
   unsigned OffsetsAbbrevCode = Stream.EmitAbbrev(OffsetsAbbrev);
 
@@ -1296,6 +1316,7 @@ void ASTWriter::WriteInputFiles(SourceManager &SourceMgr, StringRef isysroot) {
   Record.clear();
   Record.push_back(INPUT_FILE_OFFSETS);
   Record.push_back(InputFileOffsets.size());
+  Record.push_back(UserFilesNum);
   Stream.EmitRecordWithBlob(OffsetsAbbrevCode, Record, data(InputFileOffsets));
 }
 
@@ -1363,44 +1384,53 @@ namespace {
   // Trait used for the on-disk hash table of header search information.
   class HeaderFileInfoTrait {
     ASTWriter &Writer;
+    const HeaderSearch &HS;
     
     // Keep track of the framework names we've used during serialization.
     SmallVector<char, 128> FrameworkStringData;
     llvm::StringMap<unsigned> FrameworkNameOffset;
     
   public:
-    HeaderFileInfoTrait(ASTWriter &Writer)
-      : Writer(Writer) { }
+    HeaderFileInfoTrait(ASTWriter &Writer, const HeaderSearch &HS)
+      : Writer(Writer), HS(HS) { }
     
-    typedef const char *key_type;
-    typedef key_type key_type_ref;
+    struct key_type {
+      const FileEntry *FE;
+      const char *Filename;
+    };
+    typedef const key_type &key_type_ref;
     
     typedef HeaderFileInfo data_type;
     typedef const data_type &data_type_ref;
     
-    static unsigned ComputeHash(const char *path) {
-      // The hash is based only on the filename portion of the key, so that the
-      // reader can match based on filenames when symlinking or excess path
-      // elements ("foo/../", "../") change the form of the name. However,
-      // complete path is still the key.
-      return llvm::HashString(llvm::sys::path::filename(path));
+    static unsigned ComputeHash(key_type_ref key) {
+      // The hash is based only on size/time of the file, so that the reader can
+      // match even when symlinking or excess path elements ("foo/../", "../")
+      // change the form of the name. However, complete path is still the key.
+      return llvm::hash_combine(key.FE->getSize(),
+                                key.FE->getModificationTime());
     }
     
     std::pair<unsigned,unsigned>
-    EmitKeyDataLength(raw_ostream& Out, const char *path,
-                      data_type_ref Data) {
-      unsigned StrLen = strlen(path);
-      clang::io::Emit16(Out, StrLen);
+    EmitKeyDataLength(raw_ostream& Out, key_type_ref key, data_type_ref Data) {
+      unsigned KeyLen = strlen(key.Filename) + 1 + 8 + 8;
+      clang::io::Emit16(Out, KeyLen);
       unsigned DataLen = 1 + 2 + 4 + 4;
+      if (Data.isModuleHeader)
+        DataLen += 4;
       clang::io::Emit8(Out, DataLen);
-      return std::make_pair(StrLen + 1, DataLen);
+      return std::make_pair(KeyLen, DataLen);
     }
     
-    void EmitKey(raw_ostream& Out, const char *path, unsigned KeyLen) {
-      Out.write(path, KeyLen);
+    void EmitKey(raw_ostream& Out, key_type_ref key, unsigned KeyLen) {
+      clang::io::Emit64(Out, key.FE->getSize());
+      KeyLen -= 8;
+      clang::io::Emit64(Out, key.FE->getModificationTime());
+      KeyLen -= 8;
+      Out.write(key.Filename, KeyLen);
     }
     
-    void EmitData(raw_ostream &Out, key_type_ref,
+    void EmitData(raw_ostream &Out, key_type_ref key,
                   data_type_ref Data, unsigned DataLen) {
       using namespace clang::io;
       uint64_t Start = Out.tell(); (void)Start;
@@ -1434,7 +1464,12 @@ namespace {
           Offset = Pos->second;
       }
       Emit32(Out, Offset);
-      
+
+      if (Data.isModuleHeader) {
+        Module *Mod = HS.findModuleForHeader(key.FE);
+        Emit32(Out, Writer.getExistingSubmoduleID(Mod));
+      }
+
       assert(Out.tell() - Start == DataLen && "Wrong data length");
     }
     
@@ -1453,7 +1488,7 @@ void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS, StringRef isysroot) {
   if (FilesByUID.size() > HS.header_file_size())
     FilesByUID.resize(HS.header_file_size());
   
-  HeaderFileInfoTrait GeneratorTrait(*this);
+  HeaderFileInfoTrait GeneratorTrait(*this, HS);
   OnDiskChainedHashTableGenerator<HeaderFileInfoTrait> Generator;  
   SmallVector<const char *, 4> SavedStrings;
   unsigned NumHeaderSearchEntries = 0;
@@ -1479,7 +1514,8 @@ void ASTWriter::WriteHeaderSearch(const HeaderSearch &HS, StringRef isysroot) {
       SavedStrings.push_back(Filename);
     }
     
-    Generator.insert(Filename, HFI, GeneratorTrait);
+    HeaderFileInfoTrait::key_type key = { File, Filename };
+    Generator.insert(key, HFI, GeneratorTrait);
     ++NumHeaderSearchEntries;
   }
   
@@ -1992,6 +2028,18 @@ unsigned ASTWriter::getSubmoduleID(Module *Mod) {
   return SubmoduleIDs[Mod] = NextSubmoduleID++;
 }
 
+unsigned ASTWriter::getExistingSubmoduleID(Module *Mod) const {
+  if (!Mod)
+    return 0;
+
+  llvm::DenseMap<Module *, unsigned>::const_iterator
+    Known = SubmoduleIDs.find(Mod);
+  if (Known != SubmoduleIDs.end())
+    return Known->second;
+
+  return 0;
+}
+
 /// \brief Compute the number of modules within the given tree (including the
 /// given module).
 static unsigned getNumberOfModules(Module *Mod) {
@@ -2142,11 +2190,13 @@ void ASTWriter::WriteSubmodules(Module *WritingModule) {
       Stream.EmitRecordWithBlob(ExcludedHeaderAbbrev, Record, 
                                 Mod->ExcludedHeaders[I]->getName());
     }
-    for (unsigned I = 0, N = Mod->TopHeaders.size(); I != N; ++I) {
+    ArrayRef<const FileEntry *>
+      TopHeaders = Mod->getTopHeaders(PP->getFileManager());
+    for (unsigned I = 0, N = TopHeaders.size(); I != N; ++I) {
       Record.clear();
       Record.push_back(SUBMODULE_TOPHEADER);
       Stream.EmitRecordWithBlob(TopHeaderAbbrev, Record,
-                                Mod->TopHeaders[I]->getName());
+                                TopHeaders[I]->getName());
     }
 
     // Emit the imports. 
