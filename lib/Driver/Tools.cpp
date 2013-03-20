@@ -4267,6 +4267,7 @@ void darwin::Link::AddLinkArgs(Compilation &C,
 
   // Add the deployment target.
   VersionTuple TargetVersion = DarwinTC.getTargetVersion();
+  const std::string mmvs1(TargetVersion.getAsString());
 
   // If we had an explicit -mios-simulator-version-min argument, honor that,
   // otherwise use the traditional deployment targets. We can't just check the
@@ -4275,13 +4276,25 @@ void darwin::Link::AddLinkArgs(Compilation &C,
   //
   // FIXME: We may be able to remove this, once we can verify no one depends on
   // it.
-  if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ))
+  if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ)) {
     CmdArgs.push_back("-ios_simulator_version_min");
-  else if (DarwinTC.isTargetIPhoneOS())
+    CmdArgs.push_back(Args.MakeArgString(mmvs1));
+  } else if (DarwinTC.isTargetIPhoneOS()) {
     CmdArgs.push_back("-iphoneos_version_min");
-  else
+    CmdArgs.push_back(Args.MakeArgString(mmvs1));
+  } else {
     CmdArgs.push_back("-macosx_version_min");
-  CmdArgs.push_back(Args.MakeArgString(TargetVersion.getAsString()));
+    const unsigned vmin = *TargetVersion.getMinor();
+    if (vmin <= 4) {
+    const VersionTuple
+      MmTargetVersion(TargetVersion.getMajor(), vmin);
+      // for darwin8 ld: omit subminor number, so we get 10.4 instead of 10.4.0
+      const std::string mmvs2(MmTargetVersion.getAsString());
+      CmdArgs.push_back(Args.MakeArgString(mmvs2));
+    } else {
+      CmdArgs.push_back(Args.MakeArgString(mmvs1));
+    }
+  }
 
   Args.AddLastArg(CmdArgs, options::OPT_nomultidefs);
   Args.AddLastArg(CmdArgs, options::OPT_multi__module);
