@@ -3012,16 +3012,17 @@ static bool CheckExtensionTraitOperandType(Sema &S, QualType T,
                                            SourceRange ArgRange,
                                            UnaryExprOrTypeTrait TraitKind) {
   // C99 6.5.3.4p1:
-  if (T->isFunctionType()) {
-    // alignof(function) is allowed as an extension.
-    if (TraitKind == UETT_SizeOf)
-      S.Diag(Loc, diag::ext_sizeof_function_type) << ArgRange;
+  if (T->isFunctionType() &&
+      (TraitKind == UETT_SizeOf || TraitKind == UETT_AlignOf)) {
+    // sizeof(function)/alignof(function) is allowed as an extension.
+    S.Diag(Loc, diag::ext_sizeof_alignof_function_type)
+      << TraitKind << ArgRange;
     return false;
   }
 
   // Allow sizeof(void)/alignof(void) as an extension.
   if (T->isVoidType()) {
-    S.Diag(Loc, diag::ext_sizeof_void_type) << TraitKind << ArgRange;
+    S.Diag(Loc, diag::ext_sizeof_alignof_void_type) << TraitKind << ArgRange;
     return false;
   }
 
@@ -3807,6 +3808,7 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc,
 
       Arg = ArgE.takeAs<Expr>();
     } else {
+      assert(FDecl && "can't use default arguments without a known callee");
       Param = FDecl->getParamDecl(i);
 
       ExprResult ArgExpr =
@@ -10037,6 +10039,9 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
 
   if (CheckInferredResultType)
     EmitRelatedResultTypeNote(SrcExpr);
+
+  if (Action == AA_Returning && ConvTy == IncompatiblePointer)
+    EmitRelatedResultTypeNoteForReturn(DstType);
   
   if (Complained)
     *Complained = true;
@@ -10500,6 +10505,9 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
         if (!Constructor->isUsed(false))
           DefineImplicitMoveConstructor(Loc, Constructor);
       }
+    } else if (Constructor->getInheritedConstructor()) {
+      if (!Constructor->isUsed(false))
+        DefineInheritingConstructor(Loc, Constructor);
     }
 
     MarkVTableUsed(Loc, Constructor->getParent());
@@ -10594,7 +10602,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
 
   // Keep track of used but undefined functions.
   if (!Func->isDefined()) {
-    if (Func->getLinkage() != ExternalLinkage)
+    if (mightHaveNonExternalLinkage(Func))
       UndefinedButUsed.insert(std::make_pair(Func->getCanonicalDecl(), Loc));
     else if (Func->getMostRecentDecl()->isInlined() &&
              (LangOpts.CPlusPlus || !LangOpts.GNUInline) &&

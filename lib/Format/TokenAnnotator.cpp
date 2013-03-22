@@ -92,14 +92,14 @@ public:
                    IdentifierInfo &Ident_in)
       : SourceMgr(SourceMgr), Lex(Lex), Line(Line), CurrentToken(&Line.First),
         KeywordVirtualFound(false), Ident_in(Ident_in) {
-    Contexts.push_back(Context(1, /*IsExpression=*/ false));
+    Contexts.push_back(Context(tok::unknown, 1, /*IsExpression=*/ false));
   }
 
 private:
   bool parseAngle() {
     if (CurrentToken == NULL)
       return false;
-    ScopedContextCreator ContextCreator(*this, 10);
+    ScopedContextCreator ContextCreator(*this, tok::less, 10);
     AnnotatedToken *Left = CurrentToken->Parent;
     Contexts.back().IsExpression = false;
     while (CurrentToken != NULL) {
@@ -124,7 +124,7 @@ private:
   bool parseParens(bool LookForDecls = false) {
     if (CurrentToken == NULL)
       return false;
-    ScopedContextCreator ContextCreator(*this, 1);
+    ScopedContextCreator ContextCreator(*this, tok::l_paren, 1);
 
     // FIXME: This is a bit of a hack. Do better.
     Contexts.back().ColonIsForRangeExpr =
@@ -204,8 +204,8 @@ private:
          isUnaryOperator(*Parent) || Parent->Type == TT_ObjCForIn ||
          Parent->Type == TT_CastRParen ||
          getBinOpPrecedence(Parent->FormatTok.Tok.getKind(), true, true) >
-         prec::Unknown);
-    ScopedContextCreator ContextCreator(*this, 10);
+             prec::Unknown);
+    ScopedContextCreator ContextCreator(*this, tok::l_square, 10);
     Contexts.back().IsExpression = true;
     bool StartsObjCArrayLiteral = Parent && Parent->is(tok::at);
 
@@ -256,7 +256,7 @@ private:
     // Lines are fine to end with '{'.
     if (CurrentToken == NULL)
       return true;
-    ScopedContextCreator ContextCreator(*this, 1);
+    ScopedContextCreator ContextCreator(*this, tok::l_brace, 1);
     AnnotatedToken *Left = CurrentToken->Parent;
     while (CurrentToken != NULL) {
       if (CurrentToken->is(tok::r_brace)) {
@@ -319,15 +319,17 @@ private:
         Tok->Type = TT_ObjCMethodSpecifier;
       break;
     case tok::colon:
+      if (Tok->Parent == NULL)
+        return false;
       // Colons from ?: are handled in parseConditional().
-      if (Tok->Parent->is(tok::r_paren)) {
+      if (Tok->Parent->is(tok::r_paren) && Contexts.size() == 1) {
         Tok->Type = TT_CtorInitializerColon;
       } else if (Contexts.back().ColonIsObjCMethodExpr ||
                  Line.First.Type == TT_ObjCMethodSpecifier) {
         Tok->Type = TT_ObjCMethodExpr;
         Tok->Parent->Type = TT_ObjCSelectorName;
         if (Tok->Parent->FormatTok.TokenLength >
-            Contexts.back().LongestObjCSelectorName)
+                Contexts.back().LongestObjCSelectorName)
           Contexts.back().LongestObjCSelectorName =
               Tok->Parent->FormatTok.TokenLength;
         if (Contexts.back().FirstObjCSelectorName == NULL)
@@ -336,6 +338,8 @@ private:
         Tok->Type = TT_RangeBasedForLoopColon;
       } else if (Contexts.size() == 1) {
         Tok->Type = TT_InheritanceColon;
+      } else if (Contexts.back().ContextKind == tok::l_paren) {
+        Tok->Type = TT_InlineASMColon;
       }
       break;
     case tok::kw_if:
@@ -531,12 +535,14 @@ private:
   /// \brief A struct to hold information valid in a specific context, e.g.
   /// a pair of parenthesis.
   struct Context {
-    Context(unsigned BindingStrength, bool IsExpression)
-        : BindingStrength(BindingStrength), LongestObjCSelectorName(0),
-          ColonIsForRangeExpr(false), ColonIsObjCMethodExpr(false),
-          FirstObjCSelectorName(NULL), IsExpression(IsExpression),
-          CanBeExpression(true) {}
+    Context(tok::TokenKind ContextKind, unsigned BindingStrength,
+            bool IsExpression)
+        : ContextKind(ContextKind), BindingStrength(BindingStrength),
+          LongestObjCSelectorName(0), ColonIsForRangeExpr(false),
+          ColonIsObjCMethodExpr(false), FirstObjCSelectorName(NULL),
+          IsExpression(IsExpression), CanBeExpression(true) {}
 
+    tok::TokenKind ContextKind;
     unsigned BindingStrength;
     unsigned LongestObjCSelectorName;
     bool ColonIsForRangeExpr;
@@ -551,9 +557,12 @@ private:
   struct ScopedContextCreator {
     AnnotatingParser &P;
 
-    ScopedContextCreator(AnnotatingParser &P, unsigned Increase) : P(P) {
-      P.Contexts.push_back(Context(P.Contexts.back().BindingStrength + Increase,
-                                   P.Contexts.back().IsExpression));
+    ScopedContextCreator(AnnotatingParser &P, tok::TokenKind ContextKind,
+                         unsigned Increase)
+        : P(P) {
+      P.Contexts.push_back(
+          Context(ContextKind, P.Contexts.back().BindingStrength + Increase,
+                  P.Contexts.back().IsExpression));
     }
 
     ~ScopedContextCreator() { P.Contexts.pop_back(); }
@@ -661,7 +670,7 @@ private:
       return TT_PointerOrReference;
 
     if (PrevToken->isOneOf(tok::l_paren, tok::l_square, tok::l_brace,
-                           tok::comma, tok::kw_return, tok::colon,
+                           tok::comma, tok::semi, tok::kw_return, tok::colon,
                            tok::equal) ||
         PrevToken->Type == TT_BinaryOperator ||
         PrevToken->Type == TT_UnaryOperator || PrevToken->Type == TT_CastRParen)
@@ -672,9 +681,14 @@ private:
 
     if (PrevToken->FormatTok.Tok.isLiteral() ||
         PrevToken->isOneOf(tok::r_paren, tok::r_square) ||
-        NextToken->FormatTok.Tok.isLiteral() || isUnaryOperator(*NextToken) ||
-        NextToken->isOneOf(tok::l_paren, tok::l_square))
+        NextToken->FormatTok.Tok.isLiteral() || isUnaryOperator(*NextToken))
       return TT_BinaryOperator;
+
+    // "*(" is probably part of a function type if within template parameters.
+    // Otherwise, it is probably a binary operator.
+    if (NextToken->is(tok::l_paren))
+      return Contexts.back().ContextKind == tok::less ? TT_PointerOrReference
+                                                      : TT_BinaryOperator;
 
     // It is very unlikely that we are going to find a pointer or reference type
     // definition on the RHS of an assignment.
@@ -755,7 +769,8 @@ public:
       if (Current) {
         if (Current->Type == TT_ConditionalExpr)
           CurrentPrecedence = 1 + (int) prec::Conditional;
-        else if (Current->is(tok::semi))
+        else if (Current->is(tok::semi) || Current->Type == TT_InlineASMColon ||
+                 Current->Type == TT_CtorInitializerColon)
           CurrentPrecedence = 1;
         else if (Current->Type == TT_BinaryOperator || Current->is(tok::comma))
           CurrentPrecedence = 1 + (int) getPrecedence(*Current);
@@ -922,14 +937,15 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     return 20;
 
   if (opensScope(Left))
-    return 20;
+    return Left.ParameterCount > 1 ? prec::Comma : 20;
 
   if (Right.is(tok::lessless)) {
     if (Left.is(tok::string_literal)) {
-      char LastChar =
-          StringRef(Left.FormatTok.Tok.getLiteralData(),
-                    Left.FormatTok.TokenLength).drop_back(1).rtrim().back();
-      if (LastChar == ':' || LastChar == '=')
+      StringRef Content = StringRef(Left.FormatTok.Tok.getLiteralData(),
+                                    Left.FormatTok.TokenLength);
+      Content = Content.drop_back(1).drop_front(1).trim();
+      if (Content.size() > 1 &&
+          (Content.back() == ':' || Content.back() == '='))
         return 100;
     }
     return prec::Shift;
@@ -978,7 +994,8 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
             !Style.PointerBindsToType);
   if (Left.Type == TT_PointerOrReference)
     return Right.FormatTok.Tok.isLiteral() ||
-           ((Right.Type != TT_PointerOrReference) && Style.PointerBindsToType);
+           ((Right.Type != TT_PointerOrReference) &&
+            Right.isNot(tok::l_paren) && Style.PointerBindsToType);
   if (Right.is(tok::star) && Left.is(tok::l_paren))
     return false;
   if (Left.is(tok::l_square))
@@ -1041,7 +1058,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
   if (Tok.is(tok::l_paren) && !Tok.Children.empty() &&
       Tok.Children[0].Type == TT_PointerOrReference &&
       !Tok.Children[0].Children.empty() &&
-      Tok.Children[0].Children[0].isNot(tok::r_paren))
+      Tok.Children[0].Children[0].isNot(tok::r_paren) &&
+      Tok.Parent->isNot(tok::l_paren))
     return true;
   if (Tok.Parent->Type == TT_UnaryOperator || Tok.Parent->Type == TT_CastRParen)
     return false;
@@ -1054,7 +1072,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
            Tok.Parent->Type == TT_TemplateCloser &&
            Style.Standard != FormatStyle::LS_Cpp11;
   }
-  if (Tok.is(tok::arrowstar) || Tok.Parent->is(tok::arrowstar))
+  if (Tok.isOneOf(tok::arrowstar, tok::periodstar) ||
+      Tok.Parent->isOneOf(tok::arrowstar, tok::periodstar))
     return false;
   if (Tok.Type == TT_BinaryOperator || Tok.Parent->Type == TT_BinaryOperator)
     return true;
@@ -1111,12 +1130,12 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
       Left.Parent->is(tok::r_paren))
     return !Right.isOneOf(tok::l_brace, tok::semi, tok::equal);
 
+  if (Right.is(tok::kw___attribute))
+    return true;
+
   // We only break before r_brace if there was a corresponding break before
   // the l_brace, which is tracked by BreakBeforeClosingBrace.
-  if (Right.is(tok::r_brace))
-    return false;
-
-  if (Right.isOneOf(tok::r_paren, tok::greater))
+  if (Right.isOneOf(tok::r_brace, tok::r_paren, tok::greater))
     return false;
   if (Left.is(tok::identifier) && Right.is(tok::string_literal))
     return true;
