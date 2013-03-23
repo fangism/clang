@@ -12,7 +12,7 @@
 
 // CHECK: {{ld(.exe)?"}}
 // CHECK: -macosx_version_min
-// CHECK: 10.4.0
+// CHECK: 10.4
 // CHECK: {{ld(.exe)?"}}
 // CHECK: -macosx_version_min
 // CHECK: 10.5.0
