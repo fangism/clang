@@ -490,6 +490,7 @@ TEST_F(FormatTest, FormatsLabels) {
 //===----------------------------------------------------------------------===//
 
 TEST_F(FormatTest, UnderstandsSingleLineComments) {
+  verifyFormat("//* */");
   verifyFormat("// line 1\n"
                "// line 2\n"
                "void f() {}\n");
@@ -591,6 +592,21 @@ TEST_F(FormatTest, UnderstandsSingleLineComments) {
   verifyGoogleFormat(
       "aaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
       "    aaaaaaaaaaaaaaaaaaaaaa);  // 81 cols with this comment");
+}
+
+TEST_F(FormatTest, CanFormatCommentsLocally) {
+  EXPECT_EQ("int a;    // comment\n"
+            "int    b; // comment",
+            format("int   a; // comment\n"
+                   "int    b; // comment",
+                   0, 0, getLLVMStyle()));
+  EXPECT_EQ("int   a; // comment\n"
+            "         // line 2\n"
+            "int b;",
+            format("int   a; // comment\n"
+                   "            // line 2\n"
+                   "int b;",
+                   28, 0, getLLVMStyle()));
 }
 
 TEST_F(FormatTest, RemovesTrailingWhitespaceOfComments) {
@@ -2066,6 +2082,8 @@ TEST_F(FormatTest, UnderstandsUnaryOperators) {
                "case -1:\n"
                "  break;\n"
                "}");
+  verifyFormat("#define X -1");
+  verifyFormat("#define X -kConstant");
 
   verifyFormat("const NSPoint kBrowserFrameViewPatternOffset = { -5, +3 };");
   verifyFormat("const NSPoint kBrowserFrameViewPatternOffset = { +5, -3 };");
@@ -2797,6 +2815,7 @@ TEST_F(FormatTest, FormatForObjectiveCMethodDecls) {
 
   // If there's no return type (very rare in practice!), LLVM and Google style
   // agree.
+  verifyFormat("- foo;");
   verifyFormat("- foo:(int)f;");
   verifyGoogleFormat("- foo:(int)foo;");
 }

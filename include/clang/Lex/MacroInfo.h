@@ -101,6 +101,9 @@ private:
   /// \brief Must warn if the macro is unused at the end of translation unit.
   bool IsWarnIfUnused : 1;
 
+  /// \brief Whether this macro info was loaded from an AST file.
+  unsigned FromASTFile : 1;
+
   ~MacroInfo() {
     assert(ArgumentList == 0 && "Didn't call destroy before dtor!");
   }
@@ -272,8 +275,28 @@ public:
     IsDisabled = true;
   }
 
+  /// \brief Determine whether this macro info came from an AST file (such as
+  /// a precompiled header or module) rather than having been parsed.
+  bool isFromASTFile() const { return FromASTFile; }
+
+  /// \brief Retrieve the global ID of the module that owns this particular
+  /// macro info.
+  unsigned getOwningModuleID() const {
+    if (isFromASTFile())
+      return *(const unsigned*)(this+1);
+
+    return 0;
+  }
+
 private:
   unsigned getDefinitionLengthSlow(SourceManager &SM) const;
+
+  void setOwningModuleID(unsigned ID) {
+    assert(isFromASTFile());
+    *(unsigned*)(this+1) = ID;
+  }
+
+  friend class Preprocessor;
 };
 
 /// \brief Encapsulates changes to the "macros namespace" (the location where
@@ -309,7 +332,10 @@ class MacroDirective {
   /// If invalid, this macro has not been explicitly given any visibility.
   SourceLocation VisibilityLocation;
 
-  /// \brief True if this macro was loaded from an AST file.
+  /// \brief True if the macro directive was loaded from a PCH file.
+  bool IsFromPCH : 1;
+
+  /// \brief True if this macro was imported from a module.
   bool IsImported : 1;
 
   /// \brief Whether the macro has public (when described in a module).
@@ -331,14 +357,14 @@ class MacroDirective {
 public:
   explicit MacroDirective(MacroInfo *MI)
     : Info(MI), Previous(0), Loc(MI->getDefinitionLoc()),
-      IsImported(false), IsPublic(true), IsHidden(false), IsAmbiguous(false),
-      ChangedAfterLoad(false) {
+      IsFromPCH(false), IsImported(false), IsPublic(true), IsHidden(false),
+      IsAmbiguous(false), ChangedAfterLoad(false) {
     assert(MI && "MacroInfo is null");
   }
 
   MacroDirective(MacroInfo *MI, SourceLocation Loc, bool isImported)
     : Info(MI), Previous(0), Loc(Loc),
-      IsImported(isImported), IsPublic(true), IsHidden(false),
+      IsFromPCH(false), IsImported(isImported), IsPublic(true), IsHidden(false),
       IsAmbiguous(false), ChangedAfterLoad(false) {
     assert(MI && "MacroInfo is null");
   }
@@ -389,7 +415,12 @@ public:
   /// public or private within its module.
   SourceLocation getVisibilityLocation() const { return VisibilityLocation; }
 
-  /// \brief True if this macro was loaded from an AST file.
+  /// \brief Return true if the macro directive was loaded from a PCH file.
+  bool isFromPCH() const { return IsFromPCH; }
+
+  void setIsFromPCH() { IsFromPCH = true; }
+
+  /// \brief True if this macro was imported from a module.
   bool isImported() const { return IsImported; }
 
   /// \brief Determine whether this macro is currently defined (and has not

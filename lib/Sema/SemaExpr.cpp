@@ -1431,7 +1431,7 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
 ExprResult
 Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
                        const DeclarationNameInfo &NameInfo,
-                       const CXXScopeSpec *SS) {
+                       const CXXScopeSpec *SS, NamedDecl *FoundD) {
   if (getLangOpts().CUDA)
     if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext))
       if (const FunctionDecl *Callee = dyn_cast<FunctionDecl>(D)) {
@@ -1455,7 +1455,7 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
                                               : NestedNameSpecifierLoc(),
                                        SourceLocation(),
                                        D, refersToEnclosingScope,
-                                       NameInfo, Ty, VK);
+                                       NameInfo, Ty, VK, FoundD);
 
   MarkDeclRefReferenced(E);
 
@@ -2360,8 +2360,8 @@ Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
   // If this is a single, fully-resolved result and we don't need ADL,
   // just build an ordinary singleton decl ref.
   if (!NeedsADL && R.isSingleResult() && !R.getAsSingle<FunctionTemplateDecl>())
-    return BuildDeclarationNameExpr(SS, R.getLookupNameInfo(),
-                                    R.getFoundDecl());
+    return BuildDeclarationNameExpr(SS, R.getLookupNameInfo(), R.getFoundDecl(),
+                                    R.getRepresentativeDecl());
 
   // We only need to check the declaration if there's exactly one
   // result, because in the overloaded case the results can only be
@@ -2389,7 +2389,7 @@ Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
 ExprResult
 Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
                                const DeclarationNameInfo &NameInfo,
-                               NamedDecl *D) {
+                               NamedDecl *D, NamedDecl *FoundD) {
   assert(D && "Cannot refer to a NULL declaration");
   assert(!isa<FunctionTemplateDecl>(D) &&
          "Cannot refer unambiguously to a function template");
@@ -2585,7 +2585,7 @@ Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
       break;
     }
 
-    return BuildDeclRefExpr(VD, type, valueKind, NameInfo, &SS);
+    return BuildDeclRefExpr(VD, type, valueKind, NameInfo, &SS, FoundD);
   }
 }
 
@@ -10698,7 +10698,7 @@ static ExprResult captureInLambda(Sema &S, LambdaScopeInfo *LSI,
   // Introduce a new evaluation context for the initialization, so
   // that temporaries introduced as part of the capture are retained
   // to be re-"exported" from the lambda expression itself.
-  S.PushExpressionEvaluationContext(Sema::PotentiallyEvaluated);
+  EnterExpressionEvaluationContext scope(S, Sema::PotentiallyEvaluated);
 
   // C++ [expr.prim.labda]p12:
   //   An entity captured by a lambda-expression is odr-used (3.2) in
@@ -10749,7 +10749,6 @@ static ExprResult captureInLambda(Sema &S, LambdaScopeInfo *LSI,
     if (Subscript.isInvalid()) {
       S.CleanupVarDeclMarking();
       S.DiscardCleanupsInEvaluationContext();
-      S.PopExpressionEvaluationContext();
       return ExprError();
     }
 
@@ -10785,7 +10784,6 @@ static ExprResult captureInLambda(Sema &S, LambdaScopeInfo *LSI,
   // Exit the expression evaluation context used for the capture.
   S.CleanupVarDeclMarking();
   S.DiscardCleanupsInEvaluationContext();
-  S.PopExpressionEvaluationContext();
   return Result;
 }
 
@@ -10971,6 +10969,10 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation Loc,
             // actually requires the destructor.
             if (isa<ParmVarDecl>(Var))
               FinalizeVarWithDestructor(Var, Record);
+
+            // Enter a new evaluation context to insulate the copy
+            // full-expression.
+            EnterExpressionEvaluationContext scope(*this, PotentiallyEvaluated);
 
             // According to the blocks spec, the capture of a variable from
             // the stack requires a const copy constructor.  This is not true
