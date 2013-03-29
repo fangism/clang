@@ -1476,13 +1476,14 @@ void ASTReader::resolvePendingMacro(IdentifierInfo *II,
 
   MacroInfo *MI = getMacro(GMacID);
   SubmoduleID SubModID = MI->getOwningModuleID();
-  MacroDirective *MD = PP.AllocateMacroDirective(MI, ImportLoc,
-                                                 /*isImported=*/true);
+  MacroDirective *MD = PP.AllocateDefMacroDirective(MI, ImportLoc,
+                                                    /*isImported=*/true);
 
   // Determine whether this macro definition is visible.
   bool Hidden = false;
+  Module *Owner = 0;
   if (SubModID) {
-    if (Module *Owner = getSubmodule(SubModID)) {
+    if ((Owner = getSubmodule(SubModID))) {
       if (Owner->NameVisibility == Module::Hidden) {
         // The owning module is not visible, and this macro definition
         // should not be, either.
@@ -1494,10 +1495,9 @@ void ASTReader::resolvePendingMacro(IdentifierInfo *II,
       }
     }
   }
-  MD->setHidden(Hidden);
 
   if (!Hidden)
-    installImportedMacro(II, MD);
+    installImportedMacro(II, MD, Owner);
 }
 
 void ASTReader::installPCHMacroDirectives(IdentifierInfo *II,
@@ -1527,22 +1527,30 @@ void ASTReader::installPCHMacroDirectives(IdentifierInfo *II,
   MacroDirective *Latest = 0, *Earliest = 0;
   unsigned Idx = 0, N = Record.size();
   while (Idx < N) {
-    GlobalMacroID GMacID = getGlobalMacroID(M, Record[Idx++]);
-    MacroInfo *MI = getMacro(GMacID);
+    MacroDirective *MD = 0;
     SourceLocation Loc = ReadSourceLocation(M, Record, Idx);
-    SourceLocation UndefLoc = ReadSourceLocation(M, Record, Idx);
-    SourceLocation VisibilityLoc = ReadSourceLocation(M, Record, Idx);
-    bool isImported = Record[Idx++];
-    bool isPublic = Record[Idx++];
-    bool isAmbiguous = Record[Idx++];
-
-    MacroDirective *MD = PP.AllocateMacroDirective(MI, Loc, isImported);
-    if (UndefLoc.isValid())
-      MD->setUndefLoc(UndefLoc);
-    if (VisibilityLoc.isValid())
-      MD->setVisibility(isPublic, VisibilityLoc);
-    MD->setAmbiguous(isAmbiguous);
-    MD->setIsFromPCH();
+    MacroDirective::Kind K = (MacroDirective::Kind)Record[Idx++];
+    switch (K) {
+    case MacroDirective::MD_Define: {
+      GlobalMacroID GMacID = getGlobalMacroID(M, Record[Idx++]);
+      MacroInfo *MI = getMacro(GMacID);
+      bool isImported = Record[Idx++];
+      bool isAmbiguous = Record[Idx++];
+      DefMacroDirective *DefMD =
+          PP.AllocateDefMacroDirective(MI, Loc, isImported);
+      DefMD->setAmbiguous(isAmbiguous);
+      MD = DefMD;
+      break;
+    }
+    case MacroDirective::MD_Undefine:
+      MD = PP.AllocateUndefMacroDirective(Loc);
+      break;
+    case MacroDirective::MD_Visibility: {
+      bool isPublic = Record[Idx++];
+      MD = PP.AllocateVisibilityMacroDirective(Loc, isPublic);
+      break;
+    }
+    }
 
     if (!Latest)
       Latest = MD;
@@ -1554,16 +1562,66 @@ void ASTReader::installPCHMacroDirectives(IdentifierInfo *II,
   PP.setLoadedMacroDirective(II, Latest);
 }
 
-void ASTReader::installImportedMacro(IdentifierInfo *II, MacroDirective *MD) {
+/// \brief For the given macro definitions, check if they are both in system
+/// modules and if one of the two is in the clang builtin headers.
+static bool isSystemAndClangMacro(MacroInfo *PrevMI, MacroInfo *NewMI,
+                                  Module *NewOwner, ASTReader &Reader) {
+  assert(PrevMI && NewMI);
+  if (!NewOwner)
+    return false;
+  Module *PrevOwner = 0;
+  if (SubmoduleID PrevModID = PrevMI->getOwningModuleID())
+    PrevOwner = Reader.getSubmodule(PrevModID);
+  if (!PrevOwner)
+    return false;
+  if (PrevOwner == NewOwner)
+    return false;
+  if (!PrevOwner->IsSystem || !NewOwner->IsSystem)
+    return false;
+
+  SourceManager &SM = Reader.getSourceManager();
+  FileID PrevFID = SM.getFileID(PrevMI->getDefinitionLoc());
+  FileID NewFID = SM.getFileID(NewMI->getDefinitionLoc());
+  const FileEntry *PrevFE = SM.getFileEntryForID(PrevFID);
+  const FileEntry *NewFE = SM.getFileEntryForID(NewFID);
+  if (PrevFE == 0 || NewFE == 0)
+    return false;
+
+  Preprocessor &PP = Reader.getPreprocessor();
+  ModuleMap &ModMap = PP.getHeaderSearchInfo().getModuleMap();
+  const DirectoryEntry *BuiltinDir = ModMap.getBuiltinIncludeDir();
+
+  return (PrevFE->getDir() == BuiltinDir) != (NewFE->getDir() == BuiltinDir);
+}
+
+void ASTReader::installImportedMacro(IdentifierInfo *II, MacroDirective *MD,
+                                     Module *Owner) {
   assert(II && MD);
 
+  DefMacroDirective *DefMD = cast<DefMacroDirective>(MD);
   MacroDirective *Prev = PP.getMacroDirective(II);
-  if (Prev && !Prev->getInfo()->isIdenticalTo(*MD->getInfo(), PP)) {
-    Prev->setAmbiguous(true);
-    MD->setAmbiguous(true);
+  if (Prev) {
+    MacroDirective::DefInfo PrevDef = Prev->getDefinition();
+    MacroInfo *PrevMI = PrevDef.getMacroInfo();
+    MacroInfo *NewMI = DefMD->getInfo();
+    if (NewMI != PrevMI && !PrevMI->isIdenticalTo(*NewMI, PP)) {
+      // Before marking the macros as ambiguous, check if this is a case where
+      // the system macro uses a not identical definition compared to a macro
+      // from the clang headers. For example:
+      //   #define LONG_MAX __LONG_MAX__ (clang's limits.h)
+      //   #define LONG_MAX 0x7fffffffffffffffL (system's limits.h)
+      // in which case don't mark them to avoid the "ambiguous macro expansion"
+      // warning.
+      // FIXME: This should go away if the system headers get "fixed" to use
+      // identical definitions.
+      if (!isSystemAndClangMacro(PrevMI, NewMI, Owner, *this)) {
+        PrevDef.getDirective()->setAmbiguous(true);
+        DefMD->setAmbiguous(true);
+      }
+    }
   }
   
-  PP.setMacroDirective(II, MD);
+  PP.appendMacroDirective(II, MD);
 }
 
 InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
@@ -2706,7 +2764,7 @@ static void moveMethodToBackOfGlobalList(Sema &S, ObjCMethodDecl *Method) {
   }
 }
 
-void ASTReader::makeNamesVisible(const HiddenNames &Names) {
+void ASTReader::makeNamesVisible(const HiddenNames &Names, Module *Owner) {
   for (unsigned I = 0, N = Names.size(); I != N; ++I) {
     switch (Names[I].getKind()) {
     case HiddenName::Declaration: {
@@ -2723,21 +2781,7 @@ void ASTReader::makeNamesVisible(const HiddenNames &Names) {
     }
     case HiddenName::MacroVisibility: {
       std::pair<IdentifierInfo *, MacroDirective *> Macro = Names[I].getMacro();
-      Macro.second->setHidden(!Macro.second->isPublic());
-      if (Macro.second->isDefined()) {
-        installImportedMacro(Macro.first, Macro.second);
-      }
-      break;
-    }
-
-    case HiddenName::MacroUndef: {
-      std::pair<IdentifierInfo *, MacroDirective *> Macro = Names[I].getMacro();
-      if (Macro.second->isDefined()) {
-        Macro.second->setUndefLoc(Names[I].getMacroUndefLoc());
-        if (PPMutationListener *Listener = PP.getPPMutationListener())
-          Listener->UndefinedMacro(Macro.second);
-        PP.makeLoadedMacroInfoVisible(Macro.first, Macro.second);
-      }
+      installImportedMacro(Macro.first, Macro.second, Owner);
       break;
     }
     }
@@ -2773,7 +2817,7 @@ void ASTReader::makeModuleVisible(Module *Mod,
     // mark them as visible.
     HiddenNamesMapType::iterator Hidden = HiddenNamesMap.find(Mod);
     if (Hidden != HiddenNamesMap.end()) {
-      makeNamesVisible(Hidden->second);
+      makeNamesVisible(Hidden->second, Hidden->first);
       HiddenNamesMap.erase(Hidden);
     }
     
@@ -3268,7 +3312,7 @@ void ASTReader::finalizeForWriting() {
   for (HiddenNamesMapType::iterator Hidden = HiddenNamesMap.begin(),
                                  HiddenEnd = HiddenNamesMap.end();
        Hidden != HiddenEnd; ++Hidden) {
-    makeNamesVisible(Hidden->second);
+    makeNamesVisible(Hidden->second, Hidden->first);
   }
   HiddenNamesMap.clear();
 }
@@ -3443,10 +3487,9 @@ bool ASTReader::readASTFileControlBlock(StringRef Filename,
       if (Record[0] != VERSION_MAJOR)
         return true;
 
-      const std::string &CurBranch = getClangFullRepositoryVersion();
-      if (StringRef(CurBranch) != Blob)
+      if (Listener.ReadFullVersionInformation(Blob))
         return true;
-
+      
       break;
     }
     case LANGUAGE_OPTIONS:

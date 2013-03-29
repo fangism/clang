@@ -1097,11 +1097,21 @@ void Clang::AddPPCTargetArgs(const ArgList &Args,
   }
 
   // Allow override of the Altivec feature.
-  if (Args.hasFlag(options::OPT_fno_altivec, options::OPT_faltivec, false)) {
-    CmdArgs.push_back("-target-feature");
-    CmdArgs.push_back("-altivec");
-  }
+  AddTargetFeature(Args, CmdArgs,
+                   options::OPT_faltivec, options::OPT_fno_altivec,
+                   "altivec");
 
+  // Note that gcc calls this mfcrf and LLVM calls this mfocrf.
+  AddTargetFeature(Args, CmdArgs,
+                   options::OPT_mmfcrf, options::OPT_mno_mfcrf,
+                   "mfocrf");
+
+  AddTargetFeature(Args, CmdArgs,
+                   options::OPT_mpopcntd, options::OPT_mno_popcntd,
+                   "popcntd");
+
+  // It is really only possible to turn qpx off because turning qpx on is tied
+  // to using the a2q CPU.
   if (Args.hasFlag(options::OPT_mno_qpx, options::OPT_mqpx, false)) {
     CmdArgs.push_back("-target-feature");
     CmdArgs.push_back("-qpx");
@@ -1860,6 +1870,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-S");
     } else if (JA.getType() == types::TY_AST) {
       CmdArgs.push_back("-emit-pch");
+    } else if (JA.getType() == types::TY_ModuleFile) {
+      CmdArgs.push_back("-module-file-info");
     } else if (JA.getType() == types::TY_RewrittenObjC) {
       CmdArgs.push_back("-rewrite-objc");
       rewriteKind = RK_NonFragile;
@@ -1911,6 +1923,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       
       CmdArgs.push_back("-analyzer-checker=deadcode");
       
+      if (types::isCXX(Inputs[0].getType()))
+        CmdArgs.push_back("-analyzer-checker=cplusplus");
+
       // Enable the following experimental checkers for testing. 
       CmdArgs.push_back("-analyzer-checker=security.insecureAPI.UncheckedReturn");
       CmdArgs.push_back("-analyzer-checker=security.insecureAPI.getpw");
@@ -2824,6 +2839,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Pass through all -fmodules-ignore-macro arguments.
   Args.AddAllArgs(CmdArgs, options::OPT_fmodules_ignore_macro);
+  Args.AddLastArg(CmdArgs, options::OPT_fmodules_prune_interval);
+  Args.AddLastArg(CmdArgs, options::OPT_fmodules_prune_after);
 
   // -fmodules-autolink (on by default when modules is enabled) automatically
   // links against libraries for imported modules.  This requires the
@@ -3691,6 +3708,9 @@ void gcc::Common::ConstructJob(Compilation &C, const JobAction &JA,
     else if (II.getType() == types::TY_AST)
       D.Diag(diag::err_drv_no_ast_support)
         << getToolChain().getTripleString();
+    else if (II.getType() == types::TY_ModuleFile)
+      D.Diag(diag::err_drv_no_module_support)
+        << getToolChain().getTripleString();
 
     if (types::canTypeBeUserSpecified(II.getType())) {
       CmdArgs.push_back("-x");
@@ -3821,6 +3841,9 @@ void hexagon::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     else if (II.getType() == types::TY_AST)
       D.Diag(clang::diag::err_drv_no_ast_support)
         << getToolChain().getTripleString();
+    else if (II.getType() == types::TY_ModuleFile)
+      D.Diag(diag::err_drv_no_module_support)
+      << getToolChain().getTripleString();
 
     if (II.isFilename())
       CmdArgs.push_back(II.getFilename());
@@ -5601,11 +5624,11 @@ void netbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
   C.addCommand(new Command(JA, *this, Exec, CmdArgs));
 }
 
-void linuxtools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
-                                        const InputInfo &Output,
-                                        const InputInfoList &Inputs,
-                                        const ArgList &Args,
-                                        const char *LinkingOutput) const {
+void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
+                                      const InputInfo &Output,
+                                      const InputInfoList &Inputs,
+                                      const ArgList &Args,
+                                      const char *LinkingOutput) const {
   ArgStringList CmdArgs;
 
   // Add --32/--64 to make sure we get the format we want.
@@ -5722,11 +5745,11 @@ static bool hasMipsN32ABIArg(const ArgList &Args) {
   return A && (A->getValue() == StringRef("n32"));
 }
 
-void linuxtools::Link::ConstructJob(Compilation &C, const JobAction &JA,
-                                    const InputInfo &Output,
-                                    const InputInfoList &Inputs,
-                                    const ArgList &Args,
-                                    const char *LinkingOutput) const {
+void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
+                                  const InputInfo &Output,
+                                  const InputInfoList &Inputs,
+                                  const ArgList &Args,
+                                  const char *LinkingOutput) const {
   const toolchains::Linux& ToolChain =
     static_cast<const toolchains::Linux&>(getToolChain());
   const Driver &D = ToolChain.getDriver();

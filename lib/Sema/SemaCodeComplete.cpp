@@ -2575,7 +2575,7 @@ CodeCompletionResult::CreateCodeCompletionString(ASTContext &Ctx,
   if (Kind == RK_Macro) {
     const MacroDirective *MD = PP.getMacroDirectiveHistory(Macro);
     assert(MD && "Not a macro?");
-    const MacroInfo *MI = MD->getInfo();
+    const MacroInfo *MI = MD->getMacroInfo();
 
     Result.AddTypedTextChunk(
                             Result.getAllocator().CopyString(Macro->getName()));
@@ -3729,6 +3729,9 @@ void Sema::CodeCompleteTypeQualifiers(DeclSpec &DS) {
   if (getLangOpts().C99 &&
       !(DS.getTypeQualifiers() & DeclSpec::TQ_restrict))
     Results.AddResult("restrict");
+  if (getLangOpts().C11 &&
+      !(DS.getTypeQualifiers() & DeclSpec::TQ_atomic))
+    Results.AddResult("_Atomic");
   Results.ExitScope();
   HandleCodeCompleteResults(this, CodeCompleter, 
                             Results.getCompletionContext(),

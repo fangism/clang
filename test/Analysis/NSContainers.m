@@ -142,3 +142,59 @@ NSDictionary *testNilArgNSDictionary1(NSString* key) {
 NSDictionary *testNilArgNSDictionary2(NSObject *obj) {
   return [NSDictionary dictionaryWithObject:obj forKey:0]; // expected-warning {{Argument to 'NSDictionary' method 'dictionaryWithObject:forKey:' cannot be nil}}
 }
+
+// Test inline defensive checks suppression.
+void idc(id x) {
+  if (x)
+    ;
+}
+void testIDC(NSMutableDictionary *d, NSString *key) {
+  idc(key);
+  d[key] = @"abc"; // no-warning
+}
+
+@interface Foo {
+@public
+  int x;
+}
+- (int *)getPtr;
+- (int)getInt;
+- (NSMutableDictionary *)getDictPtr;
+@property (retain, readonly, nonatomic) Foo* data;
+- (NSString*) stringForKeyFE: (id<NSCopying>)key;
+@end
+
+void idc2(id x) {
+	if (!x)
+		return;
+}
+Foo *retNil() {
+  return 0;
+}
+
+void testIDC2(Foo *obj) {
+	idc2(obj);
+	*[obj getPtr] = 1; // no-warning
+}
+
+int testIDC3(Foo *obj) {
+	idc2(obj);
+  return 1/[obj getInt];
+}
+
+void testNilReceiverIDC(Foo *obj, NSString *key) {
+	NSMutableDictionary *D = [obj getDictPtr];
+  idc(D);
+  D[key] = @"abc"; // no-warning
+}
+
+void testNilReceiverRetNil2(NSMutableDictionary *D, Foo *FooPtrIn, id value) {
+  NSString* const kKeyIdentifier = @"key";
+	Foo *FooPtr = retNil();
+  NSString *key = [[FooPtr data] stringForKeyFE: kKeyIdentifier];
+  // key is nil because FooPtr is nil. However, FooPtr is set to nil inside an
+  // inlined function, so this error report should be suppressed.
+  [D setObject: value forKey: key]; // no-warning
+}
+
+

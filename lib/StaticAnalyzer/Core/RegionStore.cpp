@@ -371,6 +371,7 @@ public:
                              InvalidatedSymbols &IS,
                              const CallEvent *Call,
                              ArrayRef<const MemRegion *> ConstRegions,
+                             InvalidatedSymbols &ConstIS,
                              InvalidatedRegions *Invalidated);
 
   bool scanReachableSymbols(Store S, const MemRegion *R,
@@ -833,14 +834,22 @@ RegionStoreManager::removeSubRegionBindings(RegionBindingsConstRef B,
                                             const SubRegion *Top) {
   BindingKey TopKey = BindingKey::Make(Top, BindingKey::Default);
   const MemRegion *ClusterHead = TopKey.getBaseRegion();
+
   if (Top == ClusterHead) {
     // We can remove an entire cluster's bindings all in one go.
     return B.remove(Top);
   }
 
   const ClusterBindings *Cluster = B.lookup(ClusterHead);
-  if (!Cluster)
+  if (!Cluster) {
+    // If we're invalidating a region with a symbolic offset, we need to make
+    // sure we don't treat the base region as uninitialized anymore.
+    if (TopKey.hasSymbolicOffset()) {
+      const SubRegion *Concrete = TopKey.getConcreteOffsetRegion();
+      return B.addBinding(Concrete, BindingKey::Default, UnknownVal());
+    }
     return B;
+  }
 
   SmallVector<BindingPair, 32> Bindings;
   collectSubRegionBindings(Bindings, svalBuilder, *Cluster, Top, TopKey,
@@ -874,6 +883,7 @@ class invalidateRegionsWorker : public ClusterAnalysis<invalidateRegionsWorker>
   unsigned Count;
   const LocationContext *LCtx;
   InvalidatedSymbols &IS;
+  InvalidatedSymbols &ConstIS;
   StoreManager::InvalidatedRegions *Regions;
 public:
   invalidateRegionsWorker(RegionStoreManager &rm,
@@ -882,13 +892,16 @@ public:
                           const Expr *ex, unsigned count,
                           const LocationContext *lctx,
                           InvalidatedSymbols &is,
+                          InvalidatedSymbols &inConstIS,
                           StoreManager::InvalidatedRegions *r,
                           bool includeGlobals)
     : ClusterAnalysis<invalidateRegionsWorker>(rm, stateMgr, b, includeGlobals),
-      Ex(ex), Count(count), LCtx(lctx), IS(is), Regions(r) {}
+      Ex(ex), Count(count), LCtx(lctx), IS(is), ConstIS(inConstIS), Regions(r){}
 
+  /// \param IsConst Specifies if the region we are invalidating is constant.
+  /// If it is, we invalidate all subregions, but not the base region itself.
   void VisitCluster(const MemRegion *baseR, const ClusterBindings *C,
-                    bool Flag);
+                    bool IsConst);
   void VisitBinding(SVal V);
 };
 }
@@ -956,12 +969,19 @@ void invalidateRegionsWorker::VisitCluster(const MemRegion *baseR,
     return;
   }
 
-  if (IsConst)
-    return;
-
-  // Symbolic region?  Mark that symbol touched by the invalidation.
+  // Symbolic region?
+  SymbolRef RegionSym = 0;
   if (const SymbolicRegion *SR = dyn_cast<SymbolicRegion>(baseR))
-    IS.insert(SR->getSymbol());
+    RegionSym = SR->getSymbol();
+
+  if (IsConst) {
+    // Mark that symbol touched by the invalidation.
+    ConstIS.insert(RegionSym);
+    return;
+  }
+  
+  // Mark that symbol touched by the invalidation.
+  IS.insert(RegionSym);
 
   // Otherwise, we have a normal data region. Record that we touched the region.
   if (Regions)
@@ -1050,9 +1070,10 @@ RegionStoreManager::invalidateRegions(Store store,
                                       InvalidatedSymbols &IS,
                                       const CallEvent *Call,
                                       ArrayRef<const MemRegion *> ConstRegions,
+                                      InvalidatedSymbols &ConstIS,
                                       InvalidatedRegions *Invalidated) {
   RegionBindingsRef B = RegionStoreManager::getRegionBindings(store);
-  invalidateRegionsWorker W(*this, StateMgr, B, Ex, Count, LCtx, IS,
+  invalidateRegionsWorker W(*this, StateMgr, B, Ex, Count, LCtx, IS, ConstIS,
                             Invalidated, false);
 
   // Scan the bindings and generate the clusters.
