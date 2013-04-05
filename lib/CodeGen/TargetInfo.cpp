@@ -421,6 +421,8 @@ class PNaClTargetCodeGenInfo : public TargetCodeGenInfo {
 void PNaClABIInfo::computeInfo(CGFunctionInfo &FI) const {
     FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
 
+    // Obtain the initial number of registers available for passing integers
+    // from the function's regparm attribute.
     unsigned FreeRegs = FI.getHasRegParm() ? FI.getRegParm() : 0;
 
     for (CGFunctionInfo::arg_iterator it = FI.arg_begin(), ie = FI.arg_end();
@@ -433,15 +435,18 @@ llvm::Value *PNaClABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
   return 0;
 }
 
+// \brief Classify argument of given type \p Ty. \p FreeRegs is the number of
+// registers available for passing arguments - it can be updated by this
+// method.
 ABIArgInfo PNaClABIInfo::classifyArgumentType(QualType Ty,
                                               unsigned &FreeRegs) const {
   if (isAggregateTypeForABI(Ty)) {
-    // Records with non trivial destructors/constructors should not be passed
-    // by value.
+    // In the PNaCl ABI we always pass records/structures on the stack. The
+    // byval attribute can be used if the record doesn't have non-trivial
+    // constructors/destructors.
     FreeRegs = 0;
     if (isRecordWithNonTrivialDestructorOrCopyConstructor(Ty))
       return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
-
     return ABIArgInfo::getIndirect(0);
   }
 
@@ -452,14 +457,17 @@ ABIArgInfo PNaClABIInfo::classifyArgumentType(QualType Ty,
   ABIArgInfo BaseInfo = (Ty->isPromotableIntegerType() ?
           ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
 
-  // Regparm regs hold 32 bits.
-  unsigned SizeInRegs = (getContext().getTypeSize(Ty) + 31) / 32;
-  if (SizeInRegs == 0) return BaseInfo;
-  if (SizeInRegs > FreeRegs) {
+  // Figure out how many of the free registers can be occupied by this type.
+  // regparm registers are 32-bit.
+  unsigned NumRegsRequired = (getContext().getTypeSize(Ty) + 31) / 32;
+  if (NumRegsRequired == 0) return BaseInfo;
+  if (NumRegsRequired > FreeRegs) {
+    // If this type needs more registers than we have available, no more
+    // passing in-registers can happen.
     FreeRegs = 0;
     return BaseInfo;
   }
-  FreeRegs -= SizeInRegs;
+  FreeRegs -= NumRegsRequired;
   return BaseInfo.isDirect() ?
       ABIArgInfo::getDirectInReg(BaseInfo.getCoerceToType()) :
       ABIArgInfo::getExtendInReg(BaseInfo.getCoerceToType());
@@ -469,6 +477,7 @@ ABIArgInfo PNaClABIInfo::classifyReturnType(QualType RetTy) const {
   if (RetTy->isVoidType())
     return ABIArgInfo::getIgnore();
 
+  // In the PNaCl ABI we always return records/structures on the stack.
   if (isAggregateTypeForABI(RetTy))
     return ABIArgInfo::getIndirect(0);
 
@@ -4017,7 +4026,7 @@ namespace {
 
 class NVPTXABIInfo : public ABIInfo {
 public:
-  NVPTXABIInfo(CodeGenTypes &CGT) : ABIInfo(CGT) { setRuntimeCC(); }
+  NVPTXABIInfo(CodeGenTypes &CGT) : ABIInfo(CGT) {}
 
   ABIArgInfo classifyReturnType(QualType RetTy) const;
   ABIArgInfo classifyArgumentType(QualType Ty) const;
@@ -4025,8 +4034,6 @@ public:
   virtual void computeInfo(CGFunctionInfo &FI) const;
   virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                  CodeGenFunction &CFG) const;
-private:
-  void setRuntimeCC();
 };
 
 class NVPTXTargetCodeGenInfo : public TargetCodeGenInfo {
@@ -4036,6 +4043,8 @@ public:
     
   virtual void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                                    CodeGen::CodeGenModule &M) const;
+private:
+  static void addKernelMetadata(llvm::Function *F);
 };
 
 ABIArgInfo NVPTXABIInfo::classifyReturnType(QualType RetTy) const {
@@ -4066,25 +4075,6 @@ void NVPTXABIInfo::computeInfo(CGFunctionInfo &FI) const {
   FI.setEffectiveCallingConvention(getRuntimeCC());
 }
 
-void NVPTXABIInfo::setRuntimeCC() {
-  // Calling convention as default by an ABI.
-  // We're still using the PTX_Kernel/PTX_Device calling conventions here,
-  // but we should switch to NVVM metadata later on.
-  const LangOptions &LangOpts = getContext().getLangOpts();
-  if (LangOpts.OpenCL || LangOpts.CUDA) {
-    // If we are in OpenCL or CUDA mode, then default to device functions
-    RuntimeCC = llvm::CallingConv::PTX_Device;
-  } else {
-    // If we are in standard C/C++ mode, use the triple to decide on the default
-    StringRef Env = 
-      getContext().getTargetInfo().getTriple().getEnvironmentName();
-    if (Env == "device")
-      RuntimeCC = llvm::CallingConv::PTX_Device;
-    else
-      RuntimeCC = llvm::CallingConv::PTX_Kernel;
-  }
-}
-
 llvm::Value *NVPTXABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                      CodeGenFunction &CFG) const {
   llvm_unreachable("NVPTX does not support varargs");
@@ -4100,11 +4090,11 @@ SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
 
   // Perform special handling in OpenCL mode
   if (M.getLangOpts().OpenCL) {
-    // Use OpenCL function attributes to set proper calling conventions
+    // Use OpenCL function attributes to check for kernel functions
     // By default, all functions are device functions
     if (FD->hasAttr<OpenCLKernelAttr>()) {
-      // OpenCL __kernel functions get a kernel calling convention
-      F->setCallingConv(llvm::CallingConv::PTX_Kernel);
+      // OpenCL __kernel functions get kernel metadata
+      addKernelMetadata(F);
       // And kernel functions are not subject to inlining
       F->addFnAttr(llvm::Attribute::NoInline);
     }
@@ -4112,12 +4102,29 @@ SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
 
   // Perform special handling in CUDA mode.
   if (M.getLangOpts().CUDA) {
-    // CUDA __global__ functions get a kernel calling convention.  Since
+    // CUDA __global__ functions get a kernel metadata entry.  Since
     // __global__ functions cannot be called from the device, we do not
     // need to set the noinline attribute.
     if (FD->getAttr<CUDAGlobalAttr>())
-      F->setCallingConv(llvm::CallingConv::PTX_Kernel);
+      addKernelMetadata(F);
   }
+}
+
+void NVPTXTargetCodeGenInfo::addKernelMetadata(llvm::Function *F) {
+  llvm::Module *M = F->getParent();
+  llvm::LLVMContext &Ctx = M->getContext();
+
+  // Get "nvvm.annotations" metadata node
+  llvm::NamedMDNode *MD = M->getOrInsertNamedMetadata("nvvm.annotations");
+
+  // Create !{<func-ref>, metadata !"kernel", i32 1} node
+  llvm::SmallVector<llvm::Value *, 3> MDVals;
+  MDVals.push_back(F);
+  MDVals.push_back(llvm::MDString::get(Ctx, "kernel"));
+  MDVals.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 1));
+
+  // Append metadata to nvvm.annotations
+  MD->addOperand(llvm::MDNode::get(Ctx, MDVals));
 }
 
 }

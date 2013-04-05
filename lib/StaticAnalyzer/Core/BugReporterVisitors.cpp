@@ -435,6 +435,16 @@ PathDiagnosticPiece *FindLastStoreBRVisitor::VisitNode(const ExplodedNode *Succ,
     }
   }
 
+  // If this is a post initializer expression, initializing the region, we
+  // should track the initializer expression.
+  if (Optional<PostInitializer> PIP = Pred->getLocationAs<PostInitializer>()) {
+    const MemRegion *FieldReg = (const MemRegion *)PIP->getLocationValue();
+    if (FieldReg && FieldReg == R) {
+      StoreSite = Pred;
+      InitE = PIP->getInitializer()->getInit();
+    }
+  }
+  
   // Otherwise, see if this is the store site:
   // (1) Succ has this binding and Pred does not, i.e. this is
   //     where the binding first occurred.
@@ -789,28 +799,37 @@ static const MemRegion *getLocationRegionIfReference(const Expr *E,
   return 0;
 }
 
-static const Expr *peelOffOuterExpr(const Stmt *S,
+static const Expr *peelOffOuterExpr(const Expr *Ex,
                                     const ExplodedNode *N) {
-  if (const Expr *Ex = dyn_cast<Expr>(S)) {
-    Ex = Ex->IgnoreParenCasts();
-    if (const ExprWithCleanups *EWC = dyn_cast<ExprWithCleanups>(Ex))
-      return EWC->getSubExpr();
-    if (const OpaqueValueExpr *OVE = dyn_cast<OpaqueValueExpr>(Ex))
-      return OVE->getSourceExpr();
+  Ex = Ex->IgnoreParenCasts();
+  if (const ExprWithCleanups *EWC = dyn_cast<ExprWithCleanups>(Ex))
+    return peelOffOuterExpr(EWC->getSubExpr(), N);
+  if (const OpaqueValueExpr *OVE = dyn_cast<OpaqueValueExpr>(Ex))
+    return peelOffOuterExpr(OVE->getSourceExpr(), N);
 
-    // Peel off the ternary operator.
-    if (const ConditionalOperator *CO = dyn_cast<ConditionalOperator>(Ex)) {
-      ProgramStateRef State = N->getState();
-      SVal CondVal = State->getSVal(CO->getCond(), N->getLocationContext());
-      if (State->isNull(CondVal).isConstrainedTrue()) {
-        return CO->getTrueExpr();
-      } else {
-        assert(State->isNull(CondVal).isConstrainedFalse());
-        return CO->getFalseExpr();
+  // Peel off the ternary operator.
+  if (const ConditionalOperator *CO = dyn_cast<ConditionalOperator>(Ex)) {
+    // Find a node where the branching occured and find out which branch
+    // we took (true/false) by looking at the ExplodedGraph.
+    const ExplodedNode *NI = N;
+    do {
+      ProgramPoint ProgPoint = NI->getLocation();
+      if (Optional<BlockEdge> BE = ProgPoint.getAs<BlockEdge>()) {
+        const CFGBlock *srcBlk = BE->getSrc();
+        if (const Stmt *term = srcBlk->getTerminator()) {
+          if (term == CO) {
+            bool TookTrueBranch = (*(srcBlk->succ_begin()) == BE->getDst());
+            if (TookTrueBranch)
+              return peelOffOuterExpr(CO->getTrueExpr(), N);
+            else
+              return peelOffOuterExpr(CO->getFalseExpr(), N);
+          }
+        }
       }
-    }
+      NI = NI->getFirstPred();
+    } while (NI);
   }
-  return 0;
+  return Ex;
 }
 
 bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
@@ -820,14 +839,11 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
   if (!S || !N)
     return false;
 
-  if (const Expr *Ex = peelOffOuterExpr(S, N)) {
-    S = Ex;
-  }
-
-  // The message send could be null if the receiver is null.
-  if (const Expr *Receiver = NilReceiverBRVisitor::getReceiver(S)) {
-    report.addVisitor(new NilReceiverBRVisitor(Receiver,
-                                               EnableNullFPSuppression));
+  if (const Expr *Ex = dyn_cast<Expr>(S)) {
+    Ex = Ex->IgnoreParenCasts();
+    const Expr *PeeledEx = peelOffOuterExpr(Ex, N);
+    if (Ex != PeeledEx)
+      S = PeeledEx;
   }
 
   const Expr *Inner = 0;
@@ -845,7 +861,7 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
     // gone too far (though we can likely track the lvalue better anyway).
     do {
       const ProgramPoint &pp = N->getLocation();
-      if (Optional<PostStmt> ps = pp.getAs<PostStmt>()) {
+      if (Optional<StmtPoint> ps = pp.getAs<StmtPoint>()) {
         if (ps->getStmt() == S || ps->getStmt() == Inner)
           break;
       } else if (Optional<CallExitEnd> CEE = pp.getAs<CallExitEnd>()) {
@@ -862,7 +878,14 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
   
   ProgramStateRef state = N->getState();
 
-  // See if the expression we're interested refers to a variable. 
+  // The message send could be nil due to the receiver being nil.
+  // At this point in the path, the receiver should be live since we are at the
+  // message send expr. If it is nil, start tracking it.
+  if (const Expr *Receiver = NilReceiverBRVisitor::getNilReceiver(S, N))
+    trackNullOrUndefValue(N, Receiver, report, IsArg, EnableNullFPSuppression);
+
+
+  // See if the expression we're interested refers to a variable.
   // If so, we can track both its contents and constraints on its value.
   if (Inner && ExplodedGraph::isInterestingLValueExpr(Inner)) {
     const MemRegion *R = 0;
@@ -985,11 +1008,18 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
   return true;
 }
 
-const Expr *NilReceiverBRVisitor::getReceiver(const Stmt *S) {
+const Expr *NilReceiverBRVisitor::getNilReceiver(const Stmt *S,
+                                                 const ExplodedNode *N) {
   const ObjCMessageExpr *ME = dyn_cast<ObjCMessageExpr>(S);
   if (!ME)
     return 0;
-  return ME->getInstanceReceiver();
+  if (const Expr *Receiver = ME->getInstanceReceiver()) {
+    ProgramStateRef state = N->getState();
+    SVal V = state->getSVal(Receiver, N->getLocationContext());
+    if (state->isNull(V).isConstrainedTrue())
+      return Receiver;
+  }
+  return 0;
 }
 
 PathDiagnosticPiece *NilReceiverBRVisitor::VisitNode(const ExplodedNode *N,
@@ -1000,24 +1030,15 @@ PathDiagnosticPiece *NilReceiverBRVisitor::VisitNode(const ExplodedNode *N,
   if (!P)
     return 0;
 
-  const Expr *Receiver = getReceiver(P->getStmt());
+  const Expr *Receiver = getNilReceiver(P->getStmt(), N);
   if (!Receiver)
-    return 0;
-
-  // Are we tracking a different reciever?
-  if (TrackedReceiver && TrackedReceiver != Receiver)
-    return 0;
-
-  ProgramStateRef state = N->getState();
-  SVal V = state->getSVal(Receiver, N->getLocationContext());
-  if (!state->isNull(V).isConstrainedTrue())
     return 0;
 
   // The receiver was nil, and hence the method was skipped.
   // Register a BugReporterVisitor to issue a message telling us how
   // the receiver was null.
   bugreporter::trackNullOrUndefValue(N, Receiver, BR, /*IsArg*/ false,
-                                    EnableNullFPSuppression);
+                                     /*EnableNullFPSuppression*/ false);
   // Issue a message saying that the method was skipped.
   PathDiagnosticLocation L(Receiver, BRC.getSourceManager(),
                                      N->getLocationContext());
@@ -1422,28 +1443,53 @@ ConditionBRVisitor::VisitTrueTest(const Expr *Cond,
   return event;
 }
 
+
+// FIXME: Copied from ExprEngineCallAndReturn.cpp.
+static bool isInStdNamespace(const Decl *D) {
+  const DeclContext *DC = D->getDeclContext()->getEnclosingNamespaceContext();
+  const NamespaceDecl *ND = dyn_cast<NamespaceDecl>(DC);
+  if (!ND)
+    return false;
+
+  while (const NamespaceDecl *Parent = dyn_cast<NamespaceDecl>(ND->getParent()))
+    ND = Parent;
+
+  return ND->getName() == "std";
+}
+
+
 PathDiagnosticPiece *
 LikelyFalsePositiveSuppressionBRVisitor::getEndPath(BugReporterContext &BRC,
                                                     const ExplodedNode *N,
                                                     BugReport &BR) {
-  const Stmt *S = BR.getStmt();
-  if (!S)
-    return 0;
-
-  // Here we suppress false positives coming from system macros. This list is
+  // Here we suppress false positives coming from system headers. This list is
   // based on known issues.
+
+  // Skip reports within the 'std' namespace. Although these can sometimes be
+  // the user's fault, we currently don't report them very well, and
+  // Note that this will not help for any other data structure libraries, like
+  // TR1, Boost, or llvm/ADT.
+  ExprEngine &Eng = BRC.getBugReporter().getEngine();
+  AnalyzerOptions &Options = Eng.getAnalysisManager().options;
+  if (Options.shouldSuppressFromCXXStandardLibrary()) {
+    const LocationContext *LCtx = N->getLocationContext();
+    if (isInStdNamespace(LCtx->getDecl())) {
+      BR.markInvalid(getTag(), 0);
+      return 0;
+    }
+  }
 
   // Skip reports within the sys/queue.h macros as we do not have the ability to
   // reason about data structure shapes.
   SourceManager &SM = BRC.getSourceManager();
-  SourceLocation Loc = S->getLocStart();
+  FullSourceLoc Loc = BR.getLocation(SM).asLocation();
   while (Loc.isMacroID()) {
     if (SM.isInSystemMacro(Loc) &&
        (SM.getFilename(SM.getSpellingLoc(Loc)).endswith("sys/queue.h"))) {
       BR.markInvalid(getTag(), 0);
       return 0;
     }
-    Loc = SM.getSpellingLoc(Loc);
+    Loc = Loc.getSpellingLoc();
   }
 
   return 0;

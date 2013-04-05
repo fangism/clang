@@ -167,11 +167,6 @@ def ReturnUndefChecker : Checker<"UndefReturn">,
 //===----------------------------------------------------------------------===//
 
 let ParentPackage = Cplusplus in {
-
-def NewDeleteChecker : Checker<"NewDelete">,
-  HelpText<"Check for memory leaks, double free, and use-after-free problems. Traces memory managed by new/delete.">, 
-  DescFile<"MallocChecker.cpp">;
-
 } // end: "cplusplus"
 
 let ParentPackage = CplusplusAlpha in {
@@ -179,6 +174,10 @@ let ParentPackage = CplusplusAlpha in {
 def VirtualCallChecker : Checker<"VirtualCall">,
   HelpText<"Check virtual function calls during construction or destruction">, 
   DescFile<"VirtualCallChecker.cpp">;
+
+def NewDeleteChecker : Checker<"NewDelete">,
+  HelpText<"Check for memory leaks, double free, and use-after-free problems. Traces memory managed by new/delete.">, 
+  DescFile<"MallocChecker.cpp">;
 
 } // end: "alpha.cplusplus"
 
@@ -355,7 +354,7 @@ let ParentPackage = OSX in {
 
 def MacOSXAPIChecker : Checker<"API">,
   InPackage<OSX>,
-  HelpText<"Check for proper uses of various Mac OS X APIs">,
+  HelpText<"Check for proper uses of various Apple APIs">,
   DescFile<"MacOSXAPIChecker.cpp">;
 
 def MacOSKeychainAPIChecker : Checker<"SecKeychainAPI">,

@@ -1029,8 +1029,8 @@ void PPCTargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
 bool PPCTargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
                                          StringRef Name,
                                          bool Enabled) const {
-  if (Name == "altivec" || Name == "mfocrf" || Name == "popcntd" ||
-      Name == "qpx") {
+  if (Name == "altivec" || Name == "fprnd" || Name == "mfocrf" ||
+      Name == "popcntd" || Name == "qpx") {
     Features[Name] = Enabled;
     return true;
   }
@@ -1302,7 +1302,14 @@ namespace {
       return TargetInfo::CharPtrBuiltinVaList;
     }
     virtual bool setCPU(const std::string &Name) {
-      return Name == "sm_10" || Name == "sm_13" || Name == "sm_20";
+      bool Valid = llvm::StringSwitch<bool>(Name)
+        .Case("sm_20", true)
+        .Case("sm_21", true)
+        .Case("sm_30", true)
+        .Case("sm_35", true)
+        .Default(false);
+
+      return Valid;
     }
     virtual bool setFeatureEnabled(llvm::StringMap<bool> &Features,
                                    StringRef Name,
@@ -1485,7 +1492,7 @@ public:
       .Case("caicos",   GK_NORTHERN_ISLANDS)
       .Case("cayman",   GK_CAYMAN)
       .Case("aruba",    GK_CAYMAN)
-      .Case("SI",       GK_SOUTHERN_ISLANDS)
+      .Case("tahiti",   GK_SOUTHERN_ISLANDS)
       .Case("pitcairn", GK_SOUTHERN_ISLANDS)
       .Case("verde",    GK_SOUTHERN_ISLANDS)
       .Case("oland",    GK_SOUTHERN_ISLANDS)
@@ -2723,6 +2730,14 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   case NoMMX3DNow:
     break;
   }
+
+  if (CPU >= CK_i486) {
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+  }
+  if (CPU >= CK_i586)
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
 }
 
 bool X86TargetInfo::hasFeature(StringRef Feature) const {

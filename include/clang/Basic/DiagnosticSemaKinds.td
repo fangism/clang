@@ -867,6 +867,8 @@ def err_friend_def_in_local_class : Error<
   "friend function cannot be defined in a local class">;
 def err_friend_not_first_in_declaration : Error<
   "'friend' must appear first in a non-function declaration">;
+def err_using_decl_friend : Error<
+  "cannot befriend target of using declaration">;
   
 def err_invalid_member_in_interface : Error<
   "%select{data member |non-public member function |static member function |"
@@ -3328,6 +3330,9 @@ def warn_internal_in_extern_inline : ExtWarn<
 def ext_internal_in_extern_inline : Extension<
   "static %select{function|variable}0 %1 is used in an inline function with "
   "external linkage">, InGroup<StaticInInline>;
+def warn_static_local_in_extern_inline : Warning<
+  "non-constant static local variable in inline function may be different "
+  "in different files">, InGroup<StaticLocalInInline>;
 def note_convert_inline_to_static : Note<
   "use 'static' to give inline function %0 internal linkage">;
 def note_internal_decl_declared_here : Note<
@@ -4032,6 +4037,10 @@ def note_string_plus_int_silence : Note<
 def warn_sizeof_array_param : Warning<
   "sizeof on array function parameter will return size of %0 instead of %1">,
   InGroup<SizeofArrayArgument>;
+
+def warn_sizeof_array_decay : Warning<
+  "sizeof on pointer operation will return size of %0 instead of %1">,
+  InGroup<SizeofArrayDecay>;
 
 def err_sizeof_nonfragile_interface : Error<
   "application of '%select{alignof|sizeof}1' to interface %0 is "
