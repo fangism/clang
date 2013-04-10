@@ -123,18 +123,29 @@ void NilArgChecker::WarnIfNilArg(CheckerContext &C,
       if (Class == FC_NSArray) {
         os << "Array element cannot be nil";
       } else if (Class == FC_NSDictionary) {
-        if (Arg == 0)
-          os << "Dictionary object cannot be nil";
-        else {
+        if (Arg == 0) {
+          os << "Value stored into '";
+          os << GetReceiverInterfaceName(msg) << "' cannot be nil";
+        } else {
           assert(Arg == 1);
-          os << "Dictionary key cannot be nil";
+          os << "'"<< GetReceiverInterfaceName(msg) << "' key cannot be nil";
         }
       } else
         llvm_unreachable("Missing foundation class for the subscript expr");
 
     } else {
-      os << "Argument to '" << GetReceiverInterfaceName(msg) << "' method '"
-      << msg.getSelector().getAsString() << "' cannot be nil";
+      if (Class == FC_NSDictionary) {
+        if (Arg == 0)
+          os << "Value argument ";
+        else {
+          assert(Arg == 1);
+          os << "Key argument ";
+        }
+        os << "to '" << msg.getSelector().getAsString() << "' cannot be nil";
+      } else {
+        os << "Argument to '" << GetReceiverInterfaceName(msg) << "' method '"
+        << msg.getSelector().getAsString() << "' cannot be nil";
+      }
     }
 
     BugReport *R = new BugReport(*BT, os.str(), N);
@@ -377,7 +388,7 @@ void CFNumberCreateChecker::checkPreStmt(const CallExpr *CE,
   // FIXME: If the pointee isn't an integer type, should we flag a warning?
   //  People can do weird stuff with pointers.
 
-  if (!T->isIntegerType())
+  if (!T->isIntegralOrEnumerationType())
     return;
 
   uint64_t SourceSize = Ctx.getTypeSize(T);

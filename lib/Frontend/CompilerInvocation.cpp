@@ -281,6 +281,7 @@ static bool ParseMigratorArgs(MigratorOptions &Opts, ArgList &Args) {
 
 static void ParseCommentArgs(CommentOptions &Opts, ArgList &Args) {
   Opts.BlockCommandNames = Args.getAllArgValues(OPT_fcomment_block_commands);
+  Opts.ParseAllComments = Args.hasArg(OPT_fparse_all_comments);
 }
 
 static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
@@ -1244,7 +1245,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.AccessControl = !Args.hasArg(OPT_fno_access_control);
   Opts.ElideConstructors = !Args.hasArg(OPT_fno_elide_constructors);
   Opts.MathErrno = Args.hasArg(OPT_fmath_errno);
-  Opts.InstantiationDepth = Args.getLastArgIntValue(OPT_ftemplate_depth, 512,
+  Opts.InstantiationDepth = Args.getLastArgIntValue(OPT_ftemplate_depth, 256,
                                                     Diags);
   Opts.ConstexprCallDepth = Args.getLastArgIntValue(OPT_fconstexpr_depth, 512,
                                                     Diags);

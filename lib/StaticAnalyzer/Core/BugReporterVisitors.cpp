@@ -926,32 +926,11 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
 
     if (R) {
       // Mark both the variable region and its contents as interesting.
-      SVal V = state->getRawSVal(loc::MemRegionVal(R));
-
-      // If the value matches the default for the variable region, that
-      // might mean that it's been cleared out of the state. Fall back to
-      // the full argument expression (with casts and such intact).
-      if (IsArg) {
-        bool UseArgValue = V.isUnknownOrUndef() || V.isZeroConstant();
-        if (!UseArgValue) {
-          const SymbolRegionValue *SRV =
-            dyn_cast_or_null<SymbolRegionValue>(V.getAsLocSymbol());
-          if (SRV)
-            UseArgValue = (SRV->getRegion() == R);
-        }
-        if (UseArgValue)
-          V = state->getSValAsScalarOrLoc(S, N->getLocationContext());
-      }
+      SVal V = LVState->getRawSVal(loc::MemRegionVal(R));
 
       report.markInteresting(R);
       report.markInteresting(V);
       report.addVisitor(new UndefOrNullArgVisitor(R));
-
-      if (isa<SymbolicRegion>(R)) {
-        TrackConstraintBRVisitor *VI =
-          new TrackConstraintBRVisitor(loc::MemRegionVal(R), false);
-        report.addVisitor(VI);
-      }
 
       // If the contents are symbolic, find out when they became null.
       if (V.getAsLocSymbol()) {
@@ -960,11 +939,11 @@ bool bugreporter::trackNullOrUndefValue(const ExplodedNode *N,
         report.addVisitor(ConstraintTracker);
 
         // Add visitor, which will suppress inline defensive checks.
-        if (N->getState()->isNull(V).isConstrainedTrue() &&
+        if (LVState->isNull(V).isConstrainedTrue() &&
             EnableNullFPSuppression) {
           BugReporterVisitor *IDCSuppressor =
             new SuppressInlineDefensiveChecksVisitor(V.castAs<DefinedSVal>(),
-                                                     N);
+                                                     LVNode);
           report.addVisitor(IDCSuppressor);
         }
       }
@@ -1372,7 +1351,7 @@ ConditionBRVisitor::VisitConditionVariable(StringRef LhsString,
     Out << (tookTrue ? "not nil" : "nil");
   else if (Ty->isBooleanType())
     Out << (tookTrue ? "true" : "false");
-  else if (Ty->isIntegerType())
+  else if (Ty->isIntegralOrEnumerationType())
     Out << (tookTrue ? "non-zero" : "zero");
   else
     return 0;

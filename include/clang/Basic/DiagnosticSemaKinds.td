@@ -2370,6 +2370,11 @@ def note_ovl_candidate_failed_overload_resolution : Note<
     "function %0">;
 def note_ovl_candidate_non_deduced_mismatch : Note<
     "candidate template ignored: could not match %diff{$ against $|types}0,1">;
+// This note is needed because the above note would sometimes print two
+// different types with the same name.  Remove this note when the above note
+// can handle that case properly.
+def note_ovl_candidate_non_deduced_mismatch_qualified : Note<
+    "candidate template ignored: could not match %q0 against %q1">;
     
 // Note that we don't treat templates differently for this diagnostic.
 def note_ovl_candidate_arity : Note<"candidate "
@@ -4686,7 +4691,16 @@ def warn_overloaded_virtual : Warning<
   "%q0 hides overloaded virtual %select{function|functions}1">,
   InGroup<OverloadedVirtual>, DefaultIgnore;
 def note_hidden_overloaded_virtual_declared_here : Note<
-  "hidden overloaded virtual function %q0 declared here">;
+  "hidden overloaded virtual function %q0 declared here"
+  "%select{|: different classes%diff{ ($ vs $)|}2,3"
+  "|: different number of parameters (%2 vs %3)"
+  "|: type mismatch at %ordinal2 parameter%diff{ ($ vs $)|}3,4"
+  "|: different return type%diff{ ($ vs $)|}2,3"
+  "|: different qualifiers ("
+  "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
+  "volatile and restrict|const, volatile, and restrict}2 vs "
+  "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
+  "volatile and restrict|const, volatile, and restrict}3)}1">;
 def warn_using_directive_in_header : Warning<
   "using namespace directive in global context in header">,
   InGroup<HeaderHygiene>, DefaultIgnore;
@@ -6020,8 +6034,10 @@ def ext_mixed_decls_code : Extension<
   "ISO C90 forbids mixing declarations and code">,
   InGroup<DiagGroup<"declaration-after-statement">>;
   
-def err_non_variable_decl_in_for : Error<
+def err_non_local_variable_decl_in_for : Error<
   "declaration of non-local variable in 'for' loop">;
+def err_non_variable_decl_in_for : Error<
+  "non-variable declaration in 'for' loop">;
 def err_toomany_element_decls : Error<
   "only one element declaration is allowed">;
 def err_selector_element_not_lvalue : Error<
@@ -6205,7 +6221,9 @@ def err_sampler_argument_required : Error<
   "sampler_t variable required - got %0">;
 def err_wrong_sampler_addressspace: Error<
   "sampler type cannot be used with the __local and __global address space qualifiers">;
-
+def err_opencl_global_invalid_addr_space : Error<
+  "global variables must have a constant address space qualifier">;
+  
 // OpenMP support.
 def err_omp_expected_var_arg_suggest : Error<
   "%0 is not a global variable, static local variable or static data member%select{|; did you mean %2?}1">;

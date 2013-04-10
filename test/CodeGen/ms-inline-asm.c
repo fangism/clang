@@ -169,36 +169,6 @@ void t17() {
 // CHECK:  call void asm sideeffect inteldialect ".byte 0x4B", "~{dirflag},~{fpsr},~{flags}"()
 }
 
-struct t18_type { int a, b; };
-
-int t18() {
-  struct t18_type foo;
-  foo.a = 1;
-  foo.b = 2;
-  __asm {
-     lea ebx, foo
-     mov eax, [ebx].0
-     mov [ebx].4, ecx
-  }
-  return foo.b;
-// CHECK: t18
-// CHECK: call void asm sideeffect inteldialect "lea ebx, qword ptr foo\0A\09mov eax, [ebx].0\0A\09mov [ebx].4, ecx", "~{eax},~{dirflag},~{fpsr},~{flags}"()
-}
-
-int t19() {
-  struct t18_type foo;
-  foo.a = 1;
-  foo.b = 2;
-  __asm {
-     lea ebx, foo
-     mov eax, [ebx].foo.a
-     mov [ebx].foo.b, ecx
-  }
-  return foo.b;
-// CHECK: t19
-// CHECK: call void asm sideeffect inteldialect "lea ebx, qword ptr foo\0A\09mov eax, [ebx].0\0A\09mov [ebx].4, ecx", "~{eax},~{dirflag},~{fpsr},~{flags}"()
-}
-
 void t20() {
   char bar;
   int foo;
@@ -310,7 +280,7 @@ void t26() {
 void t27() {
   __asm mov eax, fs:[0h]
 // CHECK: t27
-// CHECK: call void asm sideeffect inteldialect "mov eax, fs:[0h]", "~{eax},~{dirflag},~{fpsr},~{flags}"()
+// CHECK: call void asm sideeffect inteldialect "mov eax, fs:[$$0h]", "~{eax},~{dirflag},~{fpsr},~{flags}"()
 }
 
 void t28() {
@@ -389,4 +359,22 @@ void t34() {
 // CHECK: t34
 // CHECK: call void asm sideeffect inteldialect "prefetchnta $$64[eax]", "~{dirflag},~{fpsr},~{flags}"()
 // CHECK: call void asm sideeffect inteldialect "mov eax, dword ptr $$4[eax]", "~{eax},~{dirflag},~{fpsr},~{flags}"()
+}
+
+void t35() {
+  __asm prefetchnta [eax + (200*64)]
+  __asm mov eax, dword ptr [eax + (200*64)]
+// CHECK: t35
+// CHECK: call void asm sideeffect inteldialect "prefetchnta [eax + ($$200*$$64)]", "~{dirflag},~{fpsr},~{flags}"()
+// CHECK: call void asm sideeffect inteldialect "mov eax, dword ptr [eax + ($$200*$$64)]", "~{eax},~{dirflag},~{fpsr},~{flags}"()
+}
+
+void t36() {
+  int arr[4];
+  __asm mov eax, 4[arr]
+  __asm mov eax, [arr + 4]
+  __asm mov eax, [4 + arr]
+  __asm mov eax, [4 + arr + 4]
+// CHECK: t36
+// CHECK: call void asm sideeffect inteldialect "mov eax, dword ptr $$4$0", "*m,~{eax},~{dirflag},~{fpsr},~{flags}"([4 x i32]* %arr)
 }
