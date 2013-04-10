@@ -83,21 +83,21 @@ namespace clang {
 
     /// \brief A type index; the type ID with the qualifier bits removed.
     class TypeIdx {
-      uint32_t Idx;
+      TypeID Idx;
     public:
       TypeIdx() : Idx(0) { }
-      explicit TypeIdx(uint32_t index) : Idx(index) { }
+      explicit TypeIdx(TypeID index) : Idx(index) { }
 
-      uint32_t getIndex() const { return Idx; }
+      TypeID getIndex() const { return Idx; }
       TypeID asTypeID(unsigned FastQuals) const {
-        if (Idx == uint32_t(-1))
+        if (Idx == TypeID(-1))
           return TypeID(-1);
         
         return (Idx << Qualifiers::FastWidth) | FastQuals;
       }
       static TypeIdx fromTypeID(TypeID ID) {
         if (ID == TypeID(-1))
-          return TypeIdx(-1);
+          return TypeIdx(TypeID(-1));
         
         return TypeIdx(ID >> Qualifiers::FastWidth);
       }
