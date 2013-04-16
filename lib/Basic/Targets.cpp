@@ -4405,8 +4405,10 @@ class MipsTargetInfoBase : public TargetInfo {
   static const Builtin::Info BuiltinInfo[];
   std::string CPU;
   bool IsMips16;
+  bool IsMicromips;
+  bool IsSingleFloat;
   enum MipsFloatABI {
-    HardFloat, SingleFloat, SoftFloat
+    HardFloat, SoftFloat
   } FloatABI;
   enum DspRevEnum {
     NoDSP, DSP1, DSP2
@@ -4422,6 +4424,8 @@ public:
     : TargetInfo(triple),
       CPU(CPUStr),
       IsMips16(false),
+      IsMicromips(false),
+      IsSingleFloat(false),
       FloatABI(HardFloat),
       DspRev(NoDSP),
       ABI(ABIStr)
@@ -4448,17 +4452,19 @@ public:
     case HardFloat:
       Builder.defineMacro("__mips_hard_float", Twine(1));
       break;
-    case SingleFloat:
-      Builder.defineMacro("__mips_hard_float", Twine(1));
-      Builder.defineMacro("__mips_single_float", Twine(1));
-      break;
     case SoftFloat:
       Builder.defineMacro("__mips_soft_float", Twine(1));
       break;
     }
 
+    if (IsSingleFloat)
+      Builder.defineMacro("__mips_single_float", Twine(1));
+
     if (IsMips16)
       Builder.defineMacro("__mips16", Twine(1));
+
+    if (IsMicromips)
+      Builder.defineMacro("__mips_micromips", Twine(1));
 
     switch (DspRev) {
     default:
@@ -4549,7 +4555,8 @@ public:
         Name == "o32" || Name == "n32" || Name == "n64" || Name == "eabi" ||
         Name == "mips32" || Name == "mips32r2" ||
         Name == "mips64" || Name == "mips64r2" ||
-        Name == "mips16" || Name == "dsp" || Name == "dspr2") {
+        Name == "mips16" || Name == "micromips" ||
+        Name == "dsp" || Name == "dspr2") {
       Features[Name] = Enabled;
       return true;
     } else if (Name == "32") {
@@ -4564,17 +4571,21 @@ public:
 
   virtual void HandleTargetFeatures(std::vector<std::string> &Features) {
     IsMips16 = false;
+    IsMicromips = false;
+    IsSingleFloat = false;
     FloatABI = HardFloat;
     DspRev = NoDSP;
 
     for (std::vector<std::string>::iterator it = Features.begin(),
          ie = Features.end(); it != ie; ++it) {
       if (*it == "+single-float")
-        FloatABI = SingleFloat;
+        IsSingleFloat = true;
       else if (*it == "+soft-float")
         FloatABI = SoftFloat;
       else if (*it == "+mips16")
         IsMips16 = true;
+      else if (*it == "+micromips")
+        IsMicromips = true;
       else if (*it == "+dsp")
         DspRev = std::max(DspRev, DSP1);
       else if (*it == "+dspr2")

@@ -296,9 +296,9 @@ def warn_exit_time_destructor : Warning<
   InGroup<ExitTimeDestructors>, DefaultIgnore;
 
 def err_invalid_thread : Error<
-  "'__thread' is only allowed on variable declarations">;
+  "'%0' is only allowed on variable declarations">;
 def err_thread_non_global : Error<
-  "'__thread' variables must have global storage">;
+  "'%0' variables must have global storage">;
 def err_thread_unsupported : Error<
   "thread-local storage is unsupported for the current target">;
 
@@ -3369,6 +3369,9 @@ def err_non_thread_thread : Error<
   "non-thread-local declaration of %0 follows thread-local declaration">;
 def err_thread_non_thread : Error<
   "thread-local declaration of %0 follows non-thread-local declaration">;
+def err_thread_thread_different_kind : Error<
+  "thread-local declaration of %0 with %select{static|dynamic}1 initialization "
+  "follows declaration with %select{dynamic|static}1 initialization">;
 def err_redefinition_different_type : Error<
   "redefinition of %0 with a different type%diff{: $ vs $|}1,2">;
 def err_redefinition_different_kind : Error<
@@ -4473,8 +4476,7 @@ def err_catch_param_not_objc_type : Error<
 def err_illegal_qualifiers_on_catch_parm : Error<
   "illegal qualifiers on @catch parameter">;
 def err_storage_spec_on_catch_parm : Error<
-  "@catch parameter cannot have storage specifier %select{|'typedef'|'extern'|"
-  "'static'|'auto'|'register'|'__private_extern__'|'mutable'}0">;
+  "@catch parameter cannot have storage specifier '%0'">;
 def warn_register_objc_catch_parm : Warning<
   "'register' storage specifier on @catch parameter will be ignored">;
 def err_qualified_objc_catch_parm : Error<
@@ -5415,6 +5417,13 @@ def err_in_class_initializer_references_def_ctor : Error<
 def ext_in_class_initializer_non_constant : Extension<
   "in-class initializer for static data member is not a constant expression; "
   "folding it to a constant is a GNU extension">, InGroup<GNU>;
+
+def err_thread_dynamic_init : Error<
+  "initializer for thread-local variable must be a constant expression">;
+def err_thread_nontrivial_dtor : Error<
+  "type of thread-local variable has non-trivial destruction">;
+def note_use_thread_local : Note<
+  "use 'thread_local' to allow this">;
 
 // C++ anonymous unions and GNU anonymous structs/unions
 def ext_anonymous_union : Extension<
