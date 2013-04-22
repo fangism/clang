@@ -35,7 +35,6 @@
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/Basic/TargetOptions.h"
 #include "clang/Frontend/CodeGenOptions.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/Triple.h"
@@ -55,7 +54,7 @@ using namespace CodeGen;
 static const char AnnotationSection[] = "llvm.metadata";
 
 static CGCXXABI &createCXXABI(CodeGenModule &CGM) {
-  switch (CGM.getContext().getTargetInfo().getCXXABI().getKind()) {
+  switch (CGM.getTarget().getCXXABI().getKind()) {
   case TargetCXXABI::GenericAArch64:
   case TargetCXXABI::GenericARM:
   case TargetCXXABI::iOS:
@@ -70,19 +69,16 @@ static CGCXXABI &createCXXABI(CodeGenModule &CGM) {
 
 
 CodeGenModule::CodeGenModule(ASTContext &C, const CodeGenOptions &CGO,
-                             const TargetOptions &TO, llvm::Module &M,
-                             const llvm::DataLayout &TD,
+                             llvm::Module &M, const llvm::DataLayout &TD,
                              DiagnosticsEngine &diags)
-  : Context(C), LangOpts(C.getLangOpts()), CodeGenOpts(CGO), TargetOpts(TO),
-    TheModule(M), TheDataLayout(TD), TheTargetCodeGenInfo(0), Diags(diags),
-    ABI(createCXXABI(*this)), 
-    Types(*this),
-    TBAA(0),
-    VTables(*this), ObjCRuntime(0), OpenCLRuntime(0), CUDARuntime(0),
+  : Context(C), LangOpts(C.getLangOpts()), CodeGenOpts(CGO), TheModule(M),
+    Diags(diags), TheDataLayout(TD), Target(C.getTargetInfo()),
+    ABI(createCXXABI(*this)), VMContext(M.getContext()), TBAA(0),
+    TheTargetCodeGenInfo(0), Types(*this), VTables(*this),
+    ObjCRuntime(0), OpenCLRuntime(0), CUDARuntime(0),
     DebugInfo(0), ARCData(0), NoObjCARCExceptionsMetadata(0),
     RRData(0), CFConstantStringClassRef(0),
     ConstantStringClassRef(0), NSConstantStringType(0),
-    VMContext(M.getContext()),
     NSConcreteGlobalBlock(0), NSConcreteStackBlock(0),
     BlockObjectAssign(0), BlockObjectDispose(0),
     BlockDescriptorType(0), GenericBlockLiteralType(0),
@@ -180,6 +176,7 @@ void CodeGenModule::Release() {
   EmitDeferred();
   EmitCXXGlobalInitFunc();
   EmitCXXGlobalDtorFunc();
+  EmitCXXThreadLocalInitFunc();
   if (ObjCRuntime)
     if (llvm::Function *ObjCInitFunction = ObjCRuntime->ModuleInitFunction())
       AddGlobalCtor(ObjCInitFunction);
@@ -189,7 +186,7 @@ void CodeGenModule::Release() {
   EmitStaticExternCAliases();
   EmitLLVMUsed();
 
-  if (CodeGenOpts.ModulesAutolink) {
+  if (CodeGenOpts.Autolink && Context.getLangOpts().Modules) {
     EmitModuleLinkOptions();
   }
 
@@ -254,10 +251,6 @@ void CodeGenModule::DecorateInstruction(llvm::Instruction *Inst,
                       TBAA->getTBAAScalarTagInfo(TBAAInfo));
   else
     Inst->setMetadata(llvm::LLVMContext::MD_tbaa, TBAAInfo);
-}
-
-bool CodeGenModule::isTargetDarwin() const {
-  return getContext().getTargetInfo().getTriple().isOSDarwin();
 }
 
 void CodeGenModule::Error(SourceLocation loc, StringRef error) {
@@ -1485,8 +1478,11 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
         GV->setVisibility(GetLLVMVisibility(LV.getVisibility()));
     }
 
-    if (D->getTLSKind())
+    if (D->getTLSKind()) {
+      if (D->getTLSKind() == VarDecl::TLS_Dynamic)
+        CXXThreadLocals.push_back(std::make_pair(D, GV));
       setTLSMode(GV, *D);
+    }
   }
 
   if (AddrSpace != Ty->getAddressSpace())
@@ -2279,7 +2275,8 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
 
   llvm::Constant *Zero = llvm::Constant::getNullValue(Int32Ty);
   llvm::Constant *Zeros[] = { Zero, Zero };
-
+  llvm::Value *V;
+  
   // If we don't already have it, get __CFConstantStringClassReference.
   if (!CFConstantStringClassRef) {
     llvm::Type *Ty = getTypes().ConvertType(getContext().IntTy);
@@ -2287,9 +2284,11 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
     llvm::Constant *GV = CreateRuntimeVariable(Ty,
                                            "__CFConstantStringClassReference");
     // Decay array -> ptr
-    CFConstantStringClassRef =
-      llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
+    V = llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
+    CFConstantStringClassRef = V;
   }
+  else
+    V = CFConstantStringClassRef;
 
   QualType CFTy = getContext().getCFConstantStringType();
 
@@ -2299,7 +2298,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   llvm::Constant *Fields[4];
 
   // Class pointer.
-  Fields[0] = CFConstantStringClassRef;
+  Fields[0] = cast<llvm::ConstantExpr>(V);
 
   // Flags.
   llvm::Type *Ty = getTypes().ConvertType(getContext().UnsignedIntTy);
@@ -2358,7 +2357,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   GV = new llvm::GlobalVariable(getModule(), C->getType(), true,
                                 llvm::GlobalVariable::PrivateLinkage, C,
                                 "_unnamed_cfstring_");
-  if (const char *Sect = getContext().getTargetInfo().getCFStringSection())
+  if (const char *Sect = getTarget().getCFStringSection())
     GV->setSection(Sect);
   Entry.setValue(GV);
 
@@ -2386,7 +2385,7 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   
   llvm::Constant *Zero = llvm::Constant::getNullValue(Int32Ty);
   llvm::Constant *Zeros[] = { Zero, Zero };
-  
+  llvm::Value *V;
   // If we don't already have it, get _NSConstantStringClassReference.
   if (!ConstantStringClassRef) {
     std::string StringClass(getLangOpts().ObjCConstantStringClass);
@@ -2399,8 +2398,8 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
       GV = getObjCRuntime().GetClassGlobal(str);
       // Make sure the result is of the correct type.
       llvm::Type *PTy = llvm::PointerType::getUnqual(Ty);
-      ConstantStringClassRef =
-        llvm::ConstantExpr::getBitCast(GV, PTy);
+      V = llvm::ConstantExpr::getBitCast(GV, PTy);
+      ConstantStringClassRef = V;
     } else {
       std::string str =
         StringClass.empty() ? "_NSConstantStringClassReference"
@@ -2408,10 +2407,12 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
       llvm::Type *PTy = llvm::ArrayType::get(Ty, 0);
       GV = CreateRuntimeVariable(PTy, str);
       // Decay array -> ptr
-      ConstantStringClassRef = 
-        llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
+      V = llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
+      ConstantStringClassRef = V;
     }
   }
+  else
+    V = ConstantStringClassRef;
 
   if (!NSConstantStringType) {
     // Construct the type for a constant NSString.
@@ -2450,7 +2451,7 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   llvm::Constant *Fields[3];
   
   // Class pointer.
-  Fields[0] = ConstantStringClassRef;
+  Fields[0] = cast<llvm::ConstantExpr>(V);
   
   // String pointer.
   llvm::Constant *C =
@@ -2481,8 +2482,8 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   // FIXME. Fix section.
   if (const char *Sect = 
         LangOpts.ObjCRuntime.isNonFragile() 
-          ? getContext().getTargetInfo().getNSStringNonFragileABISection() 
-          : getContext().getTargetInfo().getNSStringSection())
+          ? getTarget().getNSStringNonFragileABISection() 
+          : getTarget().getNSStringSection())
     GV->setSection(Sect);
   Entry.setValue(GV);
   

@@ -853,8 +853,15 @@ static void getMipsCPUAndABI(const ArgList &Args,
       CPUName = A->getValue();
   }
 
-  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ))
+  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
     ABIName = A->getValue();
+    // Convert a GNU style Mips ABI name to the name
+    // accepted by LLVM Mips backend.
+    ABIName = llvm::StringSwitch<llvm::StringRef>(ABIName)
+      .Case("32", "o32")
+      .Case("64", "n64")
+      .Default(ABIName);
+  }
 
   // Setup default CPU and ABI names.
   if (CPUName.empty() && ABIName.empty()) {
@@ -1451,6 +1458,18 @@ static void addExceptionArgs(const ArgList &Args, types::ID InputType,
 
   if (ShouldUseExceptionTables)
     CmdArgs.push_back("-fexceptions");
+}
+
+static bool ShouldDisableAutolink(const ArgList &Args,
+                             const ToolChain &TC) {
+  bool Default = true;
+  if (TC.getTriple().isOSDarwin()) {
+    // The native darwin assembler doesn't support the linker_option directives,
+    // so we disable them if we think the .s file will be passed to it.
+    Default = TC.useIntegratedAs();
+  }
+  return !Args.hasFlag(options::OPT_fautolink, options::OPT_fno_autolink,
+                       Default);
 }
 
 static bool ShouldDisableCFI(const ArgList &Args,
@@ -2594,6 +2613,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (ShouldDisableDwarfDirectory(Args, getToolChain()))
     CmdArgs.push_back("-fno-dwarf-directory-asm");
 
+  if (ShouldDisableAutolink(Args, getToolChain()))
+    CmdArgs.push_back("-fno-autolink");
+
   // Add in -fdebug-compilation-dir if necessary.
   addDebugCompDirArg(Args, CmdArgs);
 
@@ -2888,16 +2910,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_fmodules_ignore_macro);
   Args.AddLastArg(CmdArgs, options::OPT_fmodules_prune_interval);
   Args.AddLastArg(CmdArgs, options::OPT_fmodules_prune_after);
-
-  // -fmodules-autolink (on by default when modules is enabled) automatically
-  // links against libraries for imported modules.  This requires the
-  // integrated assembler.
-  if (HaveModules && getToolChain().useIntegratedAs() &&
-      Args.hasFlag(options::OPT_fmodules_autolink,
-                   options::OPT_fno_modules_autolink,
-                   true)) {
-    CmdArgs.push_back("-fmodules-autolink");
-  }
 
   // -faccess-control is default.
   if (Args.hasFlag(options::OPT_fno_access_control,
@@ -3195,9 +3207,42 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Color diagnostics are the default, unless the terminal doesn't support
   // them.
-  if (Args.hasFlag(options::OPT_fcolor_diagnostics,
-                   options::OPT_fno_color_diagnostics,
-                   llvm::sys::Process::StandardErrHasColors()))
+  // Support both clang's -f[no-]color-diagnostics and gcc's
+  // -f[no-]diagnostics-colors[=never|always|auto].
+  enum { Colors_On, Colors_Off, Colors_Auto } ShowColors = Colors_Auto;
+  for (ArgList::const_iterator it = Args.begin(), ie = Args.end();
+       it != ie; ++it) {
+    const Option &O = (*it)->getOption();
+    if (!O.matches(options::OPT_fcolor_diagnostics) &&
+        !O.matches(options::OPT_fdiagnostics_color) &&
+        !O.matches(options::OPT_fno_color_diagnostics) &&
+        !O.matches(options::OPT_fno_diagnostics_color) &&
+        !O.matches(options::OPT_fdiagnostics_color_EQ))
+      continue;
+
+    (*it)->claim();
+    if (O.matches(options::OPT_fcolor_diagnostics) ||
+        O.matches(options::OPT_fdiagnostics_color)) {
+      ShowColors = Colors_On;
+    } else if (O.matches(options::OPT_fno_color_diagnostics) ||
+               O.matches(options::OPT_fno_diagnostics_color)) {
+      ShowColors = Colors_Off;
+    } else {
+      assert(O.matches(options::OPT_fdiagnostics_color_EQ));
+      StringRef value((*it)->getValue());
+      if (value == "always")
+        ShowColors = Colors_On;
+      else if (value == "never")
+        ShowColors = Colors_Off;
+      else if (value == "auto")
+        ShowColors = Colors_Auto;
+      else
+        getToolChain().getDriver().Diag(diag::err_drv_clang_unsupported)
+          << ("-fdiagnostics-color=" + value).str();
+    }
+  }
+  if (ShowColors == Colors_On ||
+      (ShowColors == Colors_Auto && llvm::sys::Process::StandardErrHasColors()))
     CmdArgs.push_back("-fcolor-diagnostics");
 
   if (!Args.hasFlag(options::OPT_fshow_source_location,
