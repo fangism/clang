@@ -303,7 +303,7 @@ void CodeGenModule::EmitCXXThreadLocalInitFunc() {
         llvm::ConstantInt::get(Int8Ty, 0), "__tls_guard");
     Guard->setThreadLocal(true);
     CodeGenFunction(*this).GenerateCXXGlobalInitFunc(
-        InitFn, CXXThreadLocalInits.data(), CXXThreadLocalInits.size(), Guard);
+        InitFn, &CXXThreadLocalInits.front(), CXXThreadLocalInits.size(), Guard);
   }
 
   getCXXABI().EmitThreadLocalInitFuncs(CXXThreadLocals, InitFn);
