@@ -451,6 +451,53 @@ comments::FullComment *ASTContext::getCommentForDecl(
           if (comments::FullComment *FC = getCommentForDecl(TD, PP))
             return cloneFullComment(FC, D);
     }
+    else if (const ObjCInterfaceDecl *IC = dyn_cast<ObjCInterfaceDecl>(D)) {
+      while (IC->getSuperClass()) {
+        IC = IC->getSuperClass();
+        if (comments::FullComment *FC = getCommentForDecl(IC, PP))
+          return cloneFullComment(FC, D);
+      }
+    }
+    else if (const ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(D)) {
+      if (const ObjCInterfaceDecl *IC = CD->getClassInterface())
+        if (comments::FullComment *FC = getCommentForDecl(IC, PP))
+          return cloneFullComment(FC, D);
+    }
+    else if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(D)) {
+      if (!(RD = RD->getDefinition()))
+        return NULL;
+      // Check non-virtual bases.
+      for (CXXRecordDecl::base_class_const_iterator I =
+           RD->bases_begin(), E = RD->bases_end(); I != E; ++I) {
+        if (I->isVirtual() || (I->getAccessSpecifier() != AS_public))
+          continue;
+        QualType Ty = I->getType();
+        if (Ty.isNull())
+          continue;
+        if (const CXXRecordDecl *NonVirtualBase = Ty->getAsCXXRecordDecl()) {
+          if (!(NonVirtualBase= NonVirtualBase->getDefinition()))
+            continue;
+        
+          if (comments::FullComment *FC = getCommentForDecl((NonVirtualBase), PP))
+            return cloneFullComment(FC, D);
+        }
+      }
+      // Check virtual bases.
+      for (CXXRecordDecl::base_class_const_iterator I =
+           RD->vbases_begin(), E = RD->vbases_end(); I != E; ++I) {
+        if (I->getAccessSpecifier() != AS_public)
+          continue;
+        QualType Ty = I->getType();
+        if (Ty.isNull())
+          continue;
+        if (const CXXRecordDecl *VirtualBase = Ty->getAsCXXRecordDecl()) {
+          if (!(VirtualBase= VirtualBase->getDefinition()))
+            continue;
+          if (comments::FullComment *FC = getCommentForDecl((VirtualBase), PP))
+            return cloneFullComment(FC, D);
+        }
+      }
+    }
     return NULL;
   }
   
@@ -3516,17 +3563,19 @@ QualType ASTContext::getUnaryTransformType(QualType BaseType,
 }
 
 /// getAutoType - We only unique auto types after they've been deduced.
-QualType ASTContext::getAutoType(QualType DeducedType) const {
+QualType ASTContext::getAutoType(QualType DeducedType,
+                                 bool IsDecltypeAuto) const {
   void *InsertPos = 0;
   if (!DeducedType.isNull()) {
     // Look in the folding set for an existing type.
     llvm::FoldingSetNodeID ID;
-    AutoType::Profile(ID, DeducedType);
+    AutoType::Profile(ID, DeducedType, IsDecltypeAuto);
     if (AutoType *AT = AutoTypes.FindNodeOrInsertPos(ID, InsertPos))
       return QualType(AT, 0);
   }
 
-  AutoType *AT = new (*this, TypeAlignment) AutoType(DeducedType);
+  AutoType *AT = new (*this, TypeAlignment) AutoType(DeducedType,
+                                                     IsDecltypeAuto);
   Types.push_back(AT);
   if (InsertPos)
     AutoTypes.InsertNode(AT, InsertPos);
@@ -3564,7 +3613,7 @@ QualType ASTContext::getAtomicType(QualType T) const {
 /// getAutoDeductType - Get type pattern for deducing against 'auto'.
 QualType ASTContext::getAutoDeductType() const {
   if (AutoDeductTy.isNull())
-    AutoDeductTy = getAutoType(QualType());
+    AutoDeductTy = getAutoType(QualType(), false);
   assert(!AutoDeductTy.isNull() && "can't build 'auto' pattern");
   return AutoDeductTy;
 }

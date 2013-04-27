@@ -642,6 +642,10 @@ def warn_objc_isa_use : Warning<
 def warn_objc_isa_assign : Warning<
   "assignment to Objective-C's isa is deprecated in favor of "
   "object_setClass()">, InGroup<DeprecatedObjCIsaUsage>;
+def warn_objc_pointer_masking : Warning<
+  "bitmasking for introspection of Objective-C object pointers is strongly "
+  "discouraged">,
+  InGroup<DiagGroup<"deprecated-objc-pointer-introspection">>;
 def warn_objc_property_default_assign_on_object : Warning<
   "default property attribute 'assign' not appropriate for non-GC object">,
   InGroup<ObjCPropertyNoAttribute>;
@@ -1460,6 +1464,17 @@ def warn_dangling_std_initializer_list : Warning<
   "array backing the initializer list will be destroyed at the end of "
   "%select{the full-expression|the constructor}0">,
   InGroup<DiagGroup<"dangling-initializer-list">>;
+
+// C++1y decltype(auto) type
+def err_decltype_auto_cannot_be_combined : Error<
+  "'decltype(auto)' cannot be combined with other type specifiers">;
+def err_decltype_auto_function_declarator_not_declaration : Error<
+  "'decltype(auto)' can only be used as a return type "
+  "in a function declaration">;
+def err_decltype_auto_compound_type : Error<
+  "cannot form %select{pointer to|reference to|array of}0 'decltype(auto)'">;
+def err_decltype_auto_initializer_list : Error<
+  "cannot deduce 'decltype(auto)' from initializer list">;
 
 // C++11 override control
 def override_keyword_only_allowed_on_virtual_member_functions : Error<
@@ -3785,8 +3800,10 @@ def err_arc_unsupported_weak_class : Error<
 def err_arc_weak_unavailable_assign : Error<
   "assignment of a weak-unavailable object to a __weak object">;
 def err_arc_weak_unavailable_property : Error<
-  "synthesis of a weak-unavailable property is disallowed "
-  "because it requires synthesis of an instance variable of the __weak object">;
+  "synthesizing __weak instance variable of type %0, which does not "
+  "support weak references">;
+def note_implemented_by_class : Note<
+  "when implemented by class %0">;
 def err_arc_convesion_of_weak_unavailable : Error<
   "%select{implicit conversion|cast}0 of weak-unavailable object of type %1 to"
   " a __weak object of type %2">;

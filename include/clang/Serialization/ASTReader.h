@@ -1118,6 +1118,8 @@ private:
 
   void finishPendingActions();
 
+  void pushExternalDeclIntoScope(NamedDecl *D, DeclarationName Name);
+
   void addPendingDeclContextInfo(Decl *D,
                                  serialization::GlobalDeclID SemaDC,
                                  serialization::GlobalDeclID LexicalDC) {
