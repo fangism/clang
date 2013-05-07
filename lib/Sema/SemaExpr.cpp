@@ -1916,15 +1916,17 @@ ExprResult Sema::ActOnIdExpression(Scope *S,
     // If this name wasn't predeclared and if this is not a function
     // call, diagnose the problem.
     if (R.empty()) {
-
       // In Microsoft mode, if we are inside a template class member function
-      // and we can't resolve an identifier then assume the identifier is type
-      // dependent. The goal is to postpone name lookup to instantiation time 
-      // to be able to search into type dependent base classes.
-      if (getLangOpts().MicrosoftMode && CurContext->isDependentContext() &&
-          isa<CXXMethodDecl>(CurContext))
-        return ActOnDependentIdExpression(SS, TemplateKWLoc, NameInfo,
-                                          IsAddressOfOperand, TemplateArgs);
+      // whose parent class has dependent base classes, and we can't resolve
+      // an identifier, then assume the identifier is type dependent.  The
+      // goal is to postpone name lookup to instantiation time to be able to
+      // search into the type dependent base classes.
+      if (getLangOpts().MicrosoftMode) {
+        CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(CurContext);
+        if (MD && MD->getParent()->hasAnyDependentBases())
+          return ActOnDependentIdExpression(SS, TemplateKWLoc, NameInfo,
+                                            IsAddressOfOperand, TemplateArgs);
+      }
 
       CorrectionCandidateCallback DefaultValidator;
       if (DiagnoseEmptyLookup(S, SS, R, CCC ? *CCC : DefaultValidator))
@@ -8304,6 +8306,9 @@ static QualType CheckAddressOfOperand(Sema &S, ExprResult &OrigOp,
       << op->getType() << op->getSourceRange();
     if (sfinae)
       return QualType();
+    // Materialize the temporary as an lvalue so that we can take its address.
+    OrigOp = op = new (S.Context)
+        MaterializeTemporaryExpr(op->getType(), OrigOp.take(), true);
   } else if (isa<ObjCSelectorExpr>(op)) {
     return S.Context.getPointerType(op->getType());
   } else if (lval == Expr::LV_MemberFunction) {
@@ -10167,6 +10172,10 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
       SrcType->isObjCObjectPointerType();
     if (Hint.isNull() && !CheckInferredResultType) {
       ConvHints.tryToFixConversion(SrcExpr, SrcType, DstType, *this);
+    }
+    else if (CheckInferredResultType) {
+      SrcType = SrcType.getUnqualifiedType();
+      DstType = DstType.getUnqualifiedType();
     }
     MayHaveConvFixit = true;
     break;

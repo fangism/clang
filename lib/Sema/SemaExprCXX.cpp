@@ -728,6 +728,18 @@ Sema::CXXThisScopeRAII::~CXXThisScopeRAII() {
   }
 }
 
+static Expr *captureThis(ASTContext &Context, RecordDecl *RD,
+                         QualType ThisTy, SourceLocation Loc) {
+  FieldDecl *Field
+    = FieldDecl::Create(Context, RD, Loc, Loc, 0, ThisTy,
+                        Context.getTrivialTypeSourceInfo(ThisTy, Loc),
+                        0, false, ICIS_NoInit);
+  Field->setImplicit(true);
+  Field->setAccess(AS_private);
+  RD->addDecl(Field);
+  return new (Context) CXXThisExpr(Loc, ThisTy, /*isImplicit*/true);
+}
+
 void Sema::CheckCXXThisCapture(SourceLocation Loc, bool Explicit) {
   // We don't need to capture this in an unevaluated context.
   if (ExprEvalContexts.back().Context == Unevaluated && !Explicit)
@@ -768,29 +780,12 @@ void Sema::CheckCXXThisCapture(SourceLocation Loc, bool Explicit) {
     CapturingScopeInfo *CSI = cast<CapturingScopeInfo>(FunctionScopes[idx]);
     Expr *ThisExpr = 0;
     QualType ThisTy = getCurrentThisType();
-    if (LambdaScopeInfo *LSI = dyn_cast<LambdaScopeInfo>(CSI)) {
+    if (LambdaScopeInfo *LSI = dyn_cast<LambdaScopeInfo>(CSI))
       // For lambda expressions, build a field and an initializing expression.
-      CXXRecordDecl *Lambda = LSI->Lambda;
-      FieldDecl *Field
-        = FieldDecl::Create(Context, Lambda, Loc, Loc, 0, ThisTy,
-                            Context.getTrivialTypeSourceInfo(ThisTy, Loc),
-                            0, false, ICIS_NoInit);
-      Field->setImplicit(true);
-      Field->setAccess(AS_private);
-      Lambda->addDecl(Field);
-      ThisExpr = new (Context) CXXThisExpr(Loc, ThisTy, /*isImplicit=*/true);
-    } else if (CapturedRegionScopeInfo *RSI =
-                   dyn_cast<CapturedRegionScopeInfo>(FunctionScopes[idx])) {
-      RecordDecl *RD = RSI->TheRecordDecl;
-      FieldDecl *Field
-        = FieldDecl::Create(Context, RD, Loc, Loc, 0, ThisTy,
-                            Context.getTrivialTypeSourceInfo(ThisTy, Loc),
-                            0, false, ICIS_NoInit);
-      Field->setImplicit(true);
-      Field->setAccess(AS_private);
-      RD->addDecl(Field);
-      ThisExpr = new (Context) CXXThisExpr(Loc, ThisTy, /*isImplicit*/true);
-    }
+      ThisExpr = captureThis(Context, LSI->Lambda, ThisTy, Loc);
+    else if (CapturedRegionScopeInfo *RSI
+        = dyn_cast<CapturedRegionScopeInfo>(FunctionScopes[idx]))
+      ThisExpr = captureThis(Context, RSI->TheRecordDecl, ThisTy, Loc);
 
     bool isNested = NumClosures > 1;
     CSI->addThisCapture(isNested, Loc, ThisTy, ThisExpr);
@@ -1123,9 +1118,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
     HaveCompleteInit = true;
 
   // C++11 [decl.spec.auto]p6. Deduce the type which 'auto' stands in for.
-  AutoType *AT = 0;
-  if (TypeMayContainAuto &&
-      (AT = AllocType->getContainedAutoType()) && !AT->isDeduced()) {
+  if (TypeMayContainAuto && AllocType->isUndeducedType()) {
     if (initStyle == CXXNewExpr::NoInit || NumInits == 0)
       return ExprError(Diag(StartLoc, diag::err_auto_new_requires_ctor_arg)
                        << AllocType << TypeRange);
@@ -1140,16 +1133,14 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
                        << AllocType << TypeRange);
     }
     Expr *Deduce = Inits[0];
-    TypeSourceInfo *DeducedType = 0;
+    QualType DeducedType;
     if (DeduceAutoType(AllocTypeInfo, Deduce, DeducedType) == DAR_Failed)
       return ExprError(Diag(StartLoc, diag::err_auto_new_deduction_failure)
                        << AllocType << Deduce->getType()
                        << TypeRange << Deduce->getSourceRange());
-    if (!DeducedType)
+    if (DeducedType.isNull())
       return ExprError();
-
-    AllocTypeInfo = DeducedType;
-    AllocType = AllocTypeInfo->getType();
+    AllocType = DeducedType;
   }
 
   // Per C++0x [expr.new]p5, the type being constructed may be a
@@ -2284,6 +2275,9 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
 ExprResult Sema::CheckConditionVariable(VarDecl *ConditionVar,
                                         SourceLocation StmtLoc,
                                         bool ConvertToBoolean) {
+  if (ConditionVar->isInvalidDecl())
+    return ExprError();
+
   QualType T = ConditionVar->getType();
 
   // C++ [stmt.select]p2:

@@ -927,7 +927,7 @@ public:
   void PushLambdaScope(CXXRecordDecl *Lambda, CXXMethodDecl *CallOperator);
   void PushCapturedRegionScope(Scope *RegionScope, CapturedDecl *CD,
                                RecordDecl *RD,
-                               sema::CapturedRegionScopeInfo::CapturedRegionKind K);
+                               CapturedRegionKind K);
   void PopFunctionScopeInfo(const sema::AnalysisBasedWarnings::Policy *WP =0,
                             const Decl *D = 0, const BlockExpr *blkExpr = 0);
 
@@ -1400,6 +1400,7 @@ public:
                                      MultiTemplateParamsArg TemplateParamLists);
   // Returns true if the variable declaration is a redeclaration
   bool CheckVariableDeclaration(VarDecl *NewVD, LookupResult &Previous);
+  void CheckVariableDeclarationType(VarDecl *NewVD);
   void CheckCompleteVariableDeclaration(VarDecl *var);
   void MaybeSuggestAddingStaticToDecl(const FunctionDecl *D);
   void ActOnStartFunctionDeclarator();
@@ -1681,7 +1682,7 @@ public:
                           SourceLocation EqualLoc, Expr *Val);
   void ActOnEnumBody(SourceLocation EnumLoc, SourceLocation LBraceLoc,
                      SourceLocation RBraceLoc, Decl *EnumDecl,
-                     Decl **Elements, unsigned NumElements,
+                     ArrayRef<Decl *> Elements,
                      Scope *S, AttributeList *Attr);
 
   DeclContext *getContainingDC(DeclContext *DC);
@@ -2011,7 +2012,7 @@ public:
   void AddMethodCandidate(DeclAccessPair FoundDecl,
                           QualType ObjectType,
                           Expr::Classification ObjectClassification,
-                          Expr **Args, unsigned NumArgs,
+                          ArrayRef<Expr *> Args,
                           OverloadCandidateSet& CandidateSet,
                           bool SuppressUserConversion = false);
   void AddMethodCandidate(CXXMethodDecl *Method,
@@ -2782,7 +2783,7 @@ public:
   StmtResult ActOnBreakStmt(SourceLocation BreakLoc, Scope *CurScope);
 
   void ActOnCapturedRegionStart(SourceLocation Loc, Scope *CurScope,
-                                sema::CapturedRegionScopeInfo::CapturedRegionKind Kind);
+                                CapturedRegionKind Kind);
   StmtResult ActOnCapturedRegionEnd(Stmt *S);
   void ActOnCapturedRegionError(bool IsInstantiation = false);
   RecordDecl *CreateCapturedStmtRecordDecl(CapturedDecl *&CD,
@@ -5642,7 +5643,8 @@ public:
   };
 
   DeduceAutoResult DeduceAutoType(TypeSourceInfo *AutoType, Expr *&Initializer,
-                                  TypeSourceInfo *&Result);
+                                  QualType &Result);
+  QualType SubstAutoType(QualType TypeWithAuto, QualType Replacement);
   void DiagnoseAutoDeductionFailure(VarDecl *VDecl, Expr *Init);
 
   FunctionTemplateDecl *getMoreSpecializedTemplate(FunctionTemplateDecl *FT1,

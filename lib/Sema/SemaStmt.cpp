@@ -368,7 +368,7 @@ Sema::ActOnCaseStmt(SourceLocation CaseLoc, Expr *LHSVal,
       // Recover from an error by just forgetting about it.
     }
   }
-  
+
   LHSVal = ActOnFinishFullExpr(LHSVal, LHSVal->getExprLoc(), false,
                                getLangOpts().CPlusPlus11).take();
   if (RHSVal)
@@ -1590,25 +1590,22 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
 
       // If the type contained 'auto', deduce the 'auto' to 'id'.
       if (FirstType->getContainedAutoType()) {
-        TypeSourceInfo *DeducedType = 0;
         OpaqueValueExpr OpaqueId(D->getLocation(), Context.getObjCIdType(),
                                  VK_RValue);
         Expr *DeducedInit = &OpaqueId;
-        if (DeduceAutoType(D->getTypeSourceInfo(), DeducedInit, DeducedType)
-              == DAR_Failed) {
+        if (DeduceAutoType(D->getTypeSourceInfo(), DeducedInit, FirstType) ==
+                DAR_Failed)
           DiagnoseAutoDeductionFailure(D, DeducedInit);
-        }
-        if (!DeducedType) {
+        if (FirstType.isNull()) {
           D->setInvalidDecl();
           return StmtError();
         }
 
-        D->setTypeSourceInfo(DeducedType);
-        D->setType(DeducedType->getType());
-        FirstType = DeducedType->getType();
+        D->setType(FirstType);
 
         if (ActiveTemplateInstantiations.empty()) {
-          SourceLocation Loc = DeducedType->getTypeLoc().getBeginLoc();
+          SourceLocation Loc =
+              D->getTypeSourceInfo()->getTypeLoc().getBeginLoc();
           Diag(Loc, diag::warn_auto_var_is_id)
             << D->getDeclName();
         }
@@ -1645,20 +1642,19 @@ Sema::ActOnObjCForCollectionStmt(SourceLocation ForLoc,
 /// Finish building a variable declaration for a for-range statement.
 /// \return true if an error occurs.
 static bool FinishForRangeVarDecl(Sema &SemaRef, VarDecl *Decl, Expr *Init,
-                                  SourceLocation Loc, int diag) {
+                                  SourceLocation Loc, int DiagID) {
   // Deduce the type for the iterator variable now rather than leaving it to
   // AddInitializerToDecl, so we can produce a more suitable diagnostic.
-  TypeSourceInfo *InitTSI = 0;
+  QualType InitType;
   if ((!isa<InitListExpr>(Init) && Init->getType()->isVoidType()) ||
-      SemaRef.DeduceAutoType(Decl->getTypeSourceInfo(), Init, InitTSI) ==
+      SemaRef.DeduceAutoType(Decl->getTypeSourceInfo(), Init, InitType) ==
           Sema::DAR_Failed)
-    SemaRef.Diag(Loc, diag) << Init->getType();
-  if (!InitTSI) {
+    SemaRef.Diag(Loc, DiagID) << Init->getType();
+  if (InitType.isNull()) {
     Decl->setInvalidDecl();
     return true;
   }
-  Decl->setTypeSourceInfo(InitTSI);
-  Decl->setType(InitTSI->getType());
+  Decl->setType(InitType);
 
   // In ARC, infer lifetime.
   // FIXME: ARC may want to turn this into 'const __unsafe_unretained' if
@@ -1923,7 +1919,15 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation ColonLoc,
   StmtResult BeginEndDecl = BeginEnd;
   ExprResult NotEqExpr = Cond, IncrExpr = Inc;
 
-  if (!BeginEndDecl.get() && !RangeVarType->isDependentType()) {
+  if (RangeVarType->isDependentType()) {
+    // The range is implicitly used as a placeholder when it is dependent.
+    RangeVar->setUsed();
+
+    // Deduce any 'auto's in the loop variable as 'DependentTy'. We'll fill
+    // them in properly when we instantiate the loop.
+    if (!LoopVar->isInvalidDecl() && Kind != BFRK_Check)
+      LoopVar->setType(SubstAutoType(LoopVar->getType(), Context.DependentTy));
+  } else if (!BeginEndDecl.get()) {
     SourceLocation RangeLoc = RangeVar->getLocation();
 
     const QualType RangeVarNonRefType = RangeVarType.getNonReferenceType();
@@ -2110,9 +2114,6 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation ColonLoc,
       if (LoopVar->isInvalidDecl())
         NoteForRangeBeginEndFunction(*this, BeginExpr.get(), BEF_begin);
     }
-  } else {
-    // The range is implicitly used as a placeholder when it is dependent.
-    RangeVar->setUsed();
   }
 
   // Don't bother to actually allocate the result if we're just trying to
@@ -2970,7 +2971,7 @@ static void buildCapturedStmtCaptureList(
 }
 
 void Sema::ActOnCapturedRegionStart(SourceLocation Loc, Scope *CurScope,
-                                    CapturedRegionScopeInfo::CapturedRegionKind Kind) {
+                                    CapturedRegionKind Kind) {
   CapturedDecl *CD = 0;
   RecordDecl *RD = CreateCapturedStmtRecordDecl(CD, Loc);
 

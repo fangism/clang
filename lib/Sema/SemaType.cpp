@@ -793,9 +793,7 @@ static QualType ConvertDeclSpecToType(TypeProcessingState &state) {
       // "At least one type specifier shall be given in the declaration
       // specifiers in each declaration, and in the specifier-qualifier list in
       // each struct declaration and type name."
-      // FIXME: Does Microsoft really have the implicit int extension in C++?
-      if (S.getLangOpts().CPlusPlus &&
-          !S.getLangOpts().MicrosoftExt) {
+      if (S.getLangOpts().CPlusPlus) {
         S.Diag(DeclLoc, diag::err_missing_type_specifier)
           << DS.getSourceRange();
 
@@ -2569,11 +2567,11 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
       if (const AutoType *AT = T->getContainedAutoType()) {
         // We've already diagnosed this for decltype(auto).
-        if (!AT->isDecltypeAuto()) {
+        if (!AT->isDecltypeAuto())
           S.Diag(DeclType.Loc, diag::err_illegal_decl_array_of_auto)
             << getPrintableNameForEntity(Name) << T;
-          D.setInvalidType(true);
-        }
+        T = QualType();
+        break;
       }
 
       T = S.BuildArrayType(T, ASM, ArraySize, ATI.TypeQuals,
@@ -3831,7 +3829,7 @@ static bool handleObjCOwnershipTypeAttr(TypeProcessingState &state,
                                        QualType &type) {
   bool NonObjCPointer = false;
 
-  if (!type->isDependentType()) {
+  if (!type->isDependentType() && !type->isUndeducedType()) {
     if (const PointerType *ptr = type->getAs<PointerType>()) {
       QualType pointee = ptr->getPointeeType();
       if (pointee->isObjCRetainableType() || pointee->isPointerType())
