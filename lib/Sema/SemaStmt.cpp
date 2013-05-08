@@ -75,7 +75,7 @@ StmtResult Sema::ActOnDeclStmt(DeclGroupPtrTy dg, SourceLocation StartLoc,
 
 void Sema::ActOnForEachDeclStmt(DeclGroupPtrTy dg) {
   DeclGroupRef DG = dg.getAsVal<DeclGroupRef>();
-  
+
   // If we don't have a declaration, or we have an invalid declaration,
   // just return.
   if (DG.isNull() || !DG.isSingleDecl())
@@ -2309,7 +2309,7 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
     InitializationKind Kind
       = InitializationKind::CreateCopy(Value->getLocStart(),
                                        Value->getLocStart());
-    InitializationSequence Seq(*this, Entity, Kind, &InitExpr, 1);
+    InitializationSequence Seq(*this, Entity, Kind, InitExpr);
 
     //   [...] If overload resolution fails, or if the type of the first
     //   parameter of the selected constructor is not an rvalue reference
@@ -2342,7 +2342,7 @@ Sema::PerformMoveOrCopyInitialization(const InitializedEntity &Entity,
 
         // Complete type-checking the initialization of the return type
         // using the constructor we found.
-        Res = Seq.Perform(*this, Entity, Kind, MultiExprArg(&Value, 1));
+        Res = Seq.Perform(*this, Entity, Kind, Value);
       }
     }
   }
@@ -2482,12 +2482,80 @@ Sema::ActOnCapScopeReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
   return Owned(Result);
 }
 
+/// Deduce the return type for a function from a returned expression, per
+/// C++1y [dcl.spec.auto]p6.
+bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
+                                            SourceLocation ReturnLoc,
+                                            Expr *&RetExpr,
+                                            AutoType *AT) {
+  TypeLoc OrigResultType = FD->getTypeSourceInfo()->getTypeLoc().
+    IgnoreParens().castAs<FunctionProtoTypeLoc>().getResultLoc();
+  QualType Deduced;
+
+  if (RetExpr) {
+    //  If the deduction is for a return statement and the initializer is
+    //  a braced-init-list, the program is ill-formed.
+    if (isa<InitListExpr>(RetExpr)) {
+      Diag(RetExpr->getExprLoc(), diag::err_auto_fn_return_init_list);
+      return true;
+    }
+
+    //  Otherwise, [...] deduce a value for U using the rules of template
+    //  argument deduction.
+    DeduceAutoResult DAR = DeduceAutoType(OrigResultType, RetExpr, Deduced);
+
+    if (DAR == DAR_Failed && !FD->isInvalidDecl())
+      Diag(RetExpr->getExprLoc(), diag::err_auto_fn_deduction_failure)
+        << OrigResultType.getType() << RetExpr->getType();
+
+    if (DAR != DAR_Succeeded)
+      return true;
+  } else {
+    //  In the case of a return with no operand, the initializer is considered
+    //  to be void().
+    //
+    // Deduction here can only succeed if the return type is exactly 'cv auto'
+    // or 'decltype(auto)', so just check for that case directly.
+    if (!OrigResultType.getType()->getAs<AutoType>()) {
+      Diag(ReturnLoc, diag::err_auto_fn_return_void_but_not_auto)
+        << OrigResultType.getType();
+      return true;
+    }
+    // We always deduce U = void in this case.
+    Deduced = SubstAutoType(OrigResultType.getType(), Context.VoidTy);
+    if (Deduced.isNull())
+      return true;
+  }
+
+  //  If a function with a declared return type that contains a placeholder type
+  //  has multiple return statements, the return type is deduced for each return
+  //  statement. [...] if the type deduced is not the same in each deduction,
+  //  the program is ill-formed.
+  if (AT->isDeduced() && !FD->isInvalidDecl()) {
+    AutoType *NewAT = Deduced->getContainedAutoType();
+    if (!Context.hasSameType(AT->getDeducedType(), NewAT->getDeducedType())) {
+      Diag(ReturnLoc, diag::err_auto_fn_different_deductions)
+        << (AT->isDecltypeAuto() ? 1 : 0)
+        << NewAT->getDeducedType() << AT->getDeducedType();
+      return true;
+    }
+  } else if (!FD->isInvalidDecl()) {
+    // Update all declarations of the function to have the deduced return type.
+    Context.adjustDeducedFunctionResultType(FD, Deduced);
+  }
+
+  return false;
+}
+
 StmtResult
 Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
   // Check for unexpanded parameter packs.
   if (RetValExp && DiagnoseUnexpandedParameterPack(RetValExp))
     return StmtError();
 
+  // FIXME: Unify this and C++1y auto function handling. In particular, we
+  // should allow 'return { 1, 2, 3 };' in a lambda to deduce
+  // 'std::initializer_list<int>'.
   if (isa<CapturingScopeInfo>(getCurFunction()))
     return ActOnCapScopeReturnStmt(ReturnLoc, RetValExp);
 
@@ -2509,6 +2577,23 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
     }
   } else // If we don't have a function/method context, bail.
     return StmtError();
+
+  // FIXME: Add a flag to the ScopeInfo to indicate whether we're performing
+  // deduction.
+  bool HasDependentReturnType = FnRetType->isDependentType();
+  if (getLangOpts().CPlusPlus1y) {
+    if (AutoType *AT = FnRetType->getContainedAutoType()) {
+      FunctionDecl *FD = cast<FunctionDecl>(CurContext);
+      if (CurContext->isDependentContext())
+        HasDependentReturnType = true;
+      else if (DeduceFunctionTypeFromReturnExpr(FD, ReturnLoc, RetValExp, AT)) {
+        FD->setInvalidDecl();
+        return StmtError();
+      } else {
+        FnRetType = FD->getResultType();
+      }
+    }
+  }
 
   ReturnStmt *Result = 0;
   if (FnRetType->isVoidType()) {
@@ -2575,7 +2660,7 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
     }
 
     Result = new (Context) ReturnStmt(ReturnLoc, RetValExp, 0);
-  } else if (!RetValExp && !FnRetType->isDependentType()) {
+  } else if (!RetValExp && !HasDependentReturnType) {
     unsigned DiagID = diag::warn_return_missing_expr;  // C90 6.6.6.4p4
     // C99 6.8.6.4p1 (ext_ since GCC warns)
     if (getLangOpts().C99) DiagID = diag::ext_return_missing_expr;
@@ -2586,9 +2671,9 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
       Diag(ReturnLoc, DiagID) << getCurMethodDecl()->getDeclName() << 1/*meth*/;
     Result = new (Context) ReturnStmt(ReturnLoc);
   } else {
-    assert(RetValExp || FnRetType->isDependentType());
+    assert(RetValExp || HasDependentReturnType);
     const VarDecl *NRVOCandidate = 0;
-    if (!FnRetType->isDependentType() && !RetValExp->isTypeDependent()) {
+    if (!HasDependentReturnType && !RetValExp->isTypeDependent()) {
       // we have a non-void function with an expression, continue checking
 
       QualType RetType = (RelatedRetType.isNull() ? FnRetType : RelatedRetType);
@@ -2922,8 +3007,8 @@ StmtResult Sema::ActOnMSDependentExistsStmt(SourceLocation KeywordLoc,
 }
 
 RecordDecl*
-Sema::CreateCapturedStmtRecordDecl(CapturedDecl *&CD, SourceLocation Loc)
-{
+Sema::CreateCapturedStmtRecordDecl(CapturedDecl *&CD, SourceLocation Loc,
+                                   unsigned NumParams) {
   DeclContext *DC = CurContext;
   while (!(DC->isFunctionOrMethod() || DC->isRecord() || DC->isFileContext()))
     DC = DC->getParent();
@@ -2938,8 +3023,19 @@ Sema::CreateCapturedStmtRecordDecl(CapturedDecl *&CD, SourceLocation Loc)
   RD->setImplicit();
   RD->startDefinition();
 
-  CD = CapturedDecl::Create(Context, CurContext);
+  CD = CapturedDecl::Create(Context, CurContext, NumParams);
   DC->addDecl(CD);
+
+  // Build the context parameter
+  assert(NumParams > 0 && "CapturedStmt requires context parameter");
+  DC = CapturedDecl::castToDeclContext(CD);
+  IdentifierInfo *VarName = &Context.Idents.get("__context");
+  QualType ParamType = Context.getPointerType(Context.getTagDeclType(RD));
+  ImplicitParamDecl *Param
+    = ImplicitParamDecl::Create(Context, DC, Loc, VarName, ParamType);
+  DC->addDecl(Param);
+
+  CD->setContextParam(Param);
 
   return RD;
 }
@@ -2970,9 +3066,10 @@ static void buildCapturedStmtCaptureList(
 }
 
 void Sema::ActOnCapturedRegionStart(SourceLocation Loc, Scope *CurScope,
-                                    CapturedRegionKind Kind) {
+                                    CapturedRegionKind Kind,
+                                    unsigned NumParams) {
   CapturedDecl *CD = 0;
-  RecordDecl *RD = CreateCapturedStmtRecordDecl(CD, Loc);
+  RecordDecl *RD = CreateCapturedStmtRecordDecl(CD, Loc, NumParams);
 
   // Enter the capturing scope for this captured region.
   PushCapturedRegionScope(CurScope, CD, RD, Kind);
@@ -2985,12 +3082,9 @@ void Sema::ActOnCapturedRegionStart(SourceLocation Loc, Scope *CurScope,
   PushExpressionEvaluationContext(PotentiallyEvaluated);
 }
 
-void Sema::ActOnCapturedRegionError(bool IsInstantiation) {
+void Sema::ActOnCapturedRegionError() {
   DiscardCleanupsInEvaluationContext();
   PopExpressionEvaluationContext();
-
-  if (!IsInstantiation)
-    PopDeclContext();
 
   CapturedRegionScopeInfo *RSI = getCurCapturedRegion();
   RecordDecl *Record = RSI->TheRecordDecl;
@@ -3003,6 +3097,7 @@ void Sema::ActOnCapturedRegionError(bool IsInstantiation) {
   ActOnFields(/*Scope=*/0, Record->getLocation(), Record, Fields,
               SourceLocation(), SourceLocation(), /*AttributeList=*/0);
 
+  PopDeclContext();
   PopFunctionScopeInfo();
 }
 
@@ -3016,11 +3111,15 @@ StmtResult Sema::ActOnCapturedRegionEnd(Stmt *S) {
   CapturedDecl *CD = RSI->TheCapturedDecl;
   RecordDecl *RD = RSI->TheRecordDecl;
 
-  CapturedStmt *Res = CapturedStmt::Create(getASTContext(), S, Captures,
+  CapturedStmt *Res = CapturedStmt::Create(getASTContext(), S,
+                                           RSI->CapRegionKind, Captures,
                                            CaptureInits, CD, RD);
 
   CD->setBody(Res->getCapturedStmt());
   RD->completeDefinition();
+
+  DiscardCleanupsInEvaluationContext();
+  PopExpressionEvaluationContext();
 
   PopDeclContext();
   PopFunctionScopeInfo();

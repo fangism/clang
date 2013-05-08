@@ -684,7 +684,8 @@ ExprResult Sema::CheckCXXThrowOperand(SourceLocation ThrowLoc, Expr *E,
   MarkFunctionReferenced(E->getExprLoc(), Destructor);
   CheckDestructorAccess(E->getExprLoc(), Destructor,
                         PDiag(diag::err_access_dtor_exception) << Ty);
-  DiagnoseUseOfDecl(Destructor, E->getExprLoc());
+  if (DiagnoseUseOfDecl(Destructor, E->getExprLoc()))
+    return ExprError();
   return Owned(E);
 }
 
@@ -839,23 +840,20 @@ Sema::ActOnCXXTypeConstructExpr(ParsedType TypeRep,
 ExprResult
 Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
                                 SourceLocation LParenLoc,
-                                MultiExprArg exprs,
+                                MultiExprArg Exprs,
                                 SourceLocation RParenLoc) {
   QualType Ty = TInfo->getType();
   SourceLocation TyBeginLoc = TInfo->getTypeLoc().getBeginLoc();
 
-  if (Ty->isDependentType() || CallExpr::hasAnyTypeDependentArguments(exprs)) {
+  if (Ty->isDependentType() || CallExpr::hasAnyTypeDependentArguments(Exprs)) {
     return Owned(CXXUnresolvedConstructExpr::Create(Context, TInfo,
                                                     LParenLoc,
-                                                    exprs,
+                                                    Exprs,
                                                     RParenLoc));
   }
 
-  unsigned NumExprs = exprs.size();
-  Expr **Exprs = exprs.data();
-
   bool ListInitialization = LParenLoc.isInvalid();
-  assert((!ListInitialization || (NumExprs == 1 && isa<InitListExpr>(Exprs[0])))
+  assert((!ListInitialization || (Exprs.size() == 1 && isa<InitListExpr>(Exprs[0])))
          && "List initialization must have initializer list as expression.");
   SourceRange FullRange = SourceRange(TyBeginLoc,
       ListInitialization ? Exprs[0]->getSourceRange().getEnd() : RParenLoc);
@@ -864,7 +862,7 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
   // If the expression list is a single expression, the type conversion
   // expression is equivalent (in definedness, and if defined in meaning) to the
   // corresponding cast expression.
-  if (NumExprs == 1 && !ListInitialization) {
+  if (Exprs.size() == 1 && !ListInitialization) {
     Expr *Arg = Exprs[0];
     return BuildCXXFunctionalCastExpr(TInfo, LParenLoc, Arg, RParenLoc);
   }
@@ -887,15 +885,13 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
     return ExprError();
 
   InitializedEntity Entity = InitializedEntity::InitializeTemporary(TInfo);
-  InitializationKind Kind
-    = NumExprs ? ListInitialization
-                    ? InitializationKind::CreateDirectList(TyBeginLoc)
-                    : InitializationKind::CreateDirect(TyBeginLoc,
-                                                       LParenLoc, RParenLoc)
-               : InitializationKind::CreateValue(TyBeginLoc,
-                                                 LParenLoc, RParenLoc);
-  InitializationSequence InitSeq(*this, Entity, Kind, Exprs, NumExprs);
-  ExprResult Result = InitSeq.Perform(*this, Entity, Kind, exprs);
+  InitializationKind Kind =
+      Exprs.size() ? ListInitialization
+      ? InitializationKind::CreateDirectList(TyBeginLoc)
+      : InitializationKind::CreateDirect(TyBeginLoc, LParenLoc, RParenLoc)
+      : InitializationKind::CreateValue(TyBeginLoc, LParenLoc, RParenLoc);
+  InitializationSequence InitSeq(*this, Entity, Kind, Exprs);
+  ExprResult Result = InitSeq.Perform(*this, Entity, Kind, Exprs);
 
   if (!Result.isInvalid() && ListInitialization &&
       isa<InitListExpr>(Result.get())) {
@@ -1414,7 +1410,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
 
     InitializedEntity Entity
       = InitializedEntity::InitializeNew(StartLoc, InitType);
-    InitializationSequence InitSeq(*this, Entity, Kind, Inits, NumInits);
+    InitializationSequence InitSeq(*this, Entity, Kind, MultiExprArg(Inits, NumInits));
     ExprResult FullInit = InitSeq.Perform(*this, Entity, Kind,
                                           MultiExprArg(Inits, NumInits));
     if (FullInit.isInvalid())
@@ -1431,11 +1427,13 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
 
   // Mark the new and delete operators as referenced.
   if (OperatorNew) {
-    DiagnoseUseOfDecl(OperatorNew, StartLoc);
+    if (DiagnoseUseOfDecl(OperatorNew, StartLoc))
+      return ExprError();
     MarkFunctionReferenced(StartLoc, OperatorNew);
   }
   if (OperatorDelete) {
-    DiagnoseUseOfDecl(OperatorDelete, StartLoc);
+    if (DiagnoseUseOfDecl(OperatorDelete, StartLoc))
+      return ExprError();
     MarkFunctionReferenced(StartLoc, OperatorDelete);
   }
 
@@ -1451,7 +1449,8 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
         CheckDestructorAccess(StartLoc, dtor, 
                               PDiag(diag::err_access_dtor)
                                 << BaseAllocType);
-        DiagnoseUseOfDecl(dtor, StartLoc);
+        if (DiagnoseUseOfDecl(dtor, StartLoc))
+          return ExprError();
       }
     }
   }
@@ -2209,7 +2208,8 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
         if (CXXDestructorDecl *Dtor = LookupDestructor(PointeeRD)) {
           MarkFunctionReferenced(StartLoc,
                                     const_cast<CXXDestructorDecl*>(Dtor));
-          DiagnoseUseOfDecl(Dtor, StartLoc);
+          if (DiagnoseUseOfDecl(Dtor, StartLoc))
+            return ExprError();
         }
 
       // C++ [expr.delete]p3:
@@ -3498,8 +3498,7 @@ static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
     InitializedEntity To(InitializedEntity::InitializeTemporary(Args[0]));
     InitializationKind InitKind(InitializationKind::CreateDirect(KWLoc, KWLoc,
                                                                  RParenLoc));
-    InitializationSequence Init(S, To, InitKind, 
-                                ArgExprs.begin(), ArgExprs.size());
+    InitializationSequence Init(S, To, InitKind, ArgExprs);
     if (Init.Failed())
       return false;
     
@@ -3657,7 +3656,7 @@ static bool EvaluateBinaryTypeTrait(Sema &Self, BinaryTypeTrait BTT,
     EnterExpressionEvaluationContext Unevaluated(Self, Sema::Unevaluated);
     Sema::SFINAETrap SFINAE(Self, /*AccessCheckingSFINAE=*/true);
     Sema::ContextRAII TUContext(Self, Self.Context.getTranslationUnitDecl());
-    InitializationSequence Init(Self, To, Kind, &FromPtr, 1);
+    InitializationSequence Init(Self, To, Kind, FromPtr);
     if (Init.Failed())
       return false;
 
@@ -4057,7 +4056,7 @@ static bool TryClassUnification(Sema &Self, Expr *From, Expr *To,
     QualType T = Self.Context.getLValueReferenceType(ToType);
     InitializedEntity Entity = InitializedEntity::InitializeTemporary(T);
 
-    InitializationSequence InitSeq(Self, Entity, Kind, &From, 1);
+    InitializationSequence InitSeq(Self, Entity, Kind, From);
     if (InitSeq.isDirectReferenceBinding()) {
       ToType = T;
       HaveConversion = true;
@@ -4065,7 +4064,7 @@ static bool TryClassUnification(Sema &Self, Expr *From, Expr *To,
     }
 
     if (InitSeq.isAmbiguous())
-      return InitSeq.Diagnose(Self, Entity, Kind, &From, 1);
+      return InitSeq.Diagnose(Self, Entity, Kind, From);
   }
 
   //   -- If E2 is an rvalue, or if the conversion above cannot be done:
@@ -4085,14 +4084,14 @@ static bool TryClassUnification(Sema &Self, Expr *From, Expr *To,
     if (FRec == TRec || FDerivedFromT) {
       if (TTy.isAtLeastAsQualifiedAs(FTy)) {
         InitializedEntity Entity = InitializedEntity::InitializeTemporary(TTy);
-        InitializationSequence InitSeq(Self, Entity, Kind, &From, 1);
+        InitializationSequence InitSeq(Self, Entity, Kind, From);
         if (InitSeq) {
           HaveConversion = true;
           return false;
         }
 
         if (InitSeq.isAmbiguous())
-          return InitSeq.Diagnose(Self, Entity, Kind, &From, 1);
+          return InitSeq.Diagnose(Self, Entity, Kind, From);
       }
     }
 
@@ -4110,11 +4109,11 @@ static bool TryClassUnification(Sema &Self, Expr *From, Expr *To,
     TTy = TTy.getUnqualifiedType();
 
   InitializedEntity Entity = InitializedEntity::InitializeTemporary(TTy);
-  InitializationSequence InitSeq(Self, Entity, Kind, &From, 1);
+  InitializationSequence InitSeq(Self, Entity, Kind, From);
   HaveConversion = !InitSeq.Failed();
   ToType = TTy;
   if (InitSeq.isAmbiguous())
-    return InitSeq.Diagnose(Self, Entity, Kind, &From, 1);
+    return InitSeq.Diagnose(Self, Entity, Kind, From);
 
   return false;
 }
@@ -4128,7 +4127,7 @@ static bool FindConditionalOverload(Sema &Self, ExprResult &LHS, ExprResult &RHS
                                     SourceLocation QuestionLoc) {
   Expr *Args[2] = { LHS.get(), RHS.get() };
   OverloadCandidateSet CandidateSet(QuestionLoc);
-  Self.AddBuiltinOperatorCandidates(OO_Conditional, QuestionLoc, Args, 2,
+  Self.AddBuiltinOperatorCandidates(OO_Conditional, QuestionLoc, Args,
                                     CandidateSet);
 
   OverloadCandidateSet::iterator Best;
@@ -4187,7 +4186,7 @@ static bool ConvertForConditional(Sema &Self, ExprResult &E, QualType T) {
   InitializationKind Kind = InitializationKind::CreateCopy(E.get()->getLocStart(),
                                                            SourceLocation());
   Expr *Arg = E.take();
-  InitializationSequence InitSeq(Self, Entity, Kind, &Arg, 1);
+  InitializationSequence InitSeq(Self, Entity, Kind, Arg);
   ExprResult Result = InitSeq.Perform(Self, Entity, Kind, Arg);
   if (Result.isInvalid())
     return true;
@@ -4636,8 +4635,8 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
     = InitializedEntity::InitializeTemporary(Composite1);
   InitializationKind Kind
     = InitializationKind::CreateCopy(Loc, SourceLocation());
-  InitializationSequence E1ToC1(*this, Entity1, Kind, &E1, 1);
-  InitializationSequence E2ToC1(*this, Entity1, Kind, &E2, 1);
+  InitializationSequence E1ToC1(*this, Entity1, Kind, E1);
+  InitializationSequence E2ToC1(*this, Entity1, Kind, E2);
 
   if (E1ToC1 && E2ToC1) {
     // Conversion to Composite1 is viable.
@@ -4646,8 +4645,8 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
       // Composite2 is also viable.
       InitializedEntity Entity2
         = InitializedEntity::InitializeTemporary(Composite2);
-      InitializationSequence E1ToC2(*this, Entity2, Kind, &E1, 1);
-      InitializationSequence E2ToC2(*this, Entity2, Kind, &E2, 1);
+      InitializationSequence E1ToC2(*this, Entity2, Kind, E1);
+      InitializationSequence E2ToC2(*this, Entity2, Kind, E2);
       if (E1ToC2 && E2ToC2) {
         // Both Composite1 and Composite2 are viable and are different;
         // this is an ambiguity.
@@ -4675,8 +4674,8 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
   // Check whether Composite2 is viable.
   InitializedEntity Entity2
     = InitializedEntity::InitializeTemporary(Composite2);
-  InitializationSequence E1ToC2(*this, Entity2, Kind, &E1, 1);
-  InitializationSequence E2ToC2(*this, Entity2, Kind, &E2, 1);
+  InitializationSequence E1ToC2(*this, Entity2, Kind, E1);
+  InitializationSequence E2ToC2(*this, Entity2, Kind, E2);
   if (!E1ToC2 || !E2ToC2)
     return QualType();
 
@@ -4825,7 +4824,8 @@ ExprResult Sema::MaybeBindToTemporary(Expr *E) {
     CheckDestructorAccess(E->getExprLoc(), Destructor,
                           PDiag(diag::err_access_dtor_temp)
                             << E->getType());
-    DiagnoseUseOfDecl(Destructor, E->getExprLoc());
+    if (DiagnoseUseOfDecl(Destructor, E->getExprLoc()))
+      return ExprError();
 
     // If destructor is trivial, we can avoid the extra copy.
     if (Destructor->isTrivial())
@@ -4980,7 +4980,8 @@ ExprResult Sema::ActOnDecltypeExpression(Expr *E) {
     CheckDestructorAccess(Bind->getExprLoc(), Destructor,
                           PDiag(diag::err_access_dtor_temp)
                             << Bind->getType());
-    DiagnoseUseOfDecl(Destructor, Bind->getExprLoc());
+    if (DiagnoseUseOfDecl(Destructor, Bind->getExprLoc()))
+      return ExprError();
 
     // We need a cleanup, but we don't need to remember the temporary.
     ExprNeedsCleanups = true;
@@ -5098,7 +5099,7 @@ ExprResult Sema::DiagnoseDtorReference(SourceLocation NameLoc,
   return ActOnCallExpr(/*Scope*/ 0,
                        MemExpr,
                        /*LPLoc*/ ExpectedLParenLoc,
-                       MultiExprArg(),
+                       None,
                        /*RPLoc*/ ExpectedLParenLoc);
 }
 
@@ -5446,7 +5447,7 @@ ExprResult Sema::BuildCXXMemberCallExpr(Expr *E, NamedDecl *FoundDecl,
   ResultType = ResultType.getNonLValueExprType(Context);
 
   CXXMemberCallExpr *CE =
-    new (Context) CXXMemberCallExpr(Context, ME, MultiExprArg(), ResultType, VK,
+    new (Context) CXXMemberCallExpr(Context, ME, None, ResultType, VK,
                                     Exp.get()->getLocEnd());
   return CE;
 }

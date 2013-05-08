@@ -2013,7 +2013,7 @@ public:
                                            SourceLocation LParenLoc,
                                            SourceLocation RParenLoc) {
     return getSema().BuildCXXTypeConstructExpr(TSInfo, LParenLoc,
-                                               MultiExprArg(), RParenLoc);
+                                               None, RParenLoc);
   }
 
   /// \brief Build a new C++ "new" expression.
@@ -2648,13 +2648,13 @@ ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
   // Revert value-initialization back to empty parens.
   if (CXXScalarValueInitExpr *VIE = dyn_cast<CXXScalarValueInitExpr>(Init)) {
     SourceRange Parens = VIE->getSourceRange();
-    return getDerived().RebuildParenListExpr(Parens.getBegin(), MultiExprArg(),
+    return getDerived().RebuildParenListExpr(Parens.getBegin(), None,
                                              Parens.getEnd());
   }
 
   // FIXME: We shouldn't build ImplicitValueInitExprs for direct-initialization.
   if (isa<ImplicitValueInitExpr>(Init))
-    return getDerived().RebuildParenListExpr(SourceLocation(), MultiExprArg(),
+    return getDerived().RebuildParenListExpr(SourceLocation(), None,
                                              SourceLocation());
 
   // Revert initialization by constructor back to a parenthesized or braced list
@@ -9449,7 +9449,18 @@ TreeTransform<Derived>::RebuildCXXPseudoDestructorExpr(Expr *Base,
 template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformCapturedStmt(CapturedStmt *S) {
-  llvm_unreachable("not implement yet");
+  SourceLocation Loc = S->getLocStart();
+  unsigned NumParams = S->getCapturedDecl()->getNumParams();
+  getSema().ActOnCapturedRegionStart(Loc, /*CurScope*/0,
+                                     S->getCapturedRegionKind(), NumParams);
+  StmtResult Body = getDerived().TransformStmt(S->getCapturedStmt());
+
+  if (Body.isInvalid()) {
+    getSema().ActOnCapturedRegionError();
+    return StmtError();
+  }
+
+  return getSema().ActOnCapturedRegionEnd(Body.take());
 }
 
 } // end namespace clang

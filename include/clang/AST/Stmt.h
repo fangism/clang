@@ -16,6 +16,7 @@
 
 #include "clang/AST/DeclGroup.h"
 #include "clang/AST/StmtIterator.h"
+#include "clang/Basic/CapturedStmt.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
@@ -1975,22 +1976,23 @@ public:
       assert(!capturesThis() && "No variable available for 'this' capture");
       return VarAndKind.getPointer();
     }
+    friend class ASTStmtReader;
   };
 
 private:
   /// \brief The number of variable captured, including 'this'.
   unsigned NumCaptures;
 
-  /// \brief The implicit outlined function.
-  CapturedDecl *TheCapturedDecl;
+  /// \brief The pointer part is the implicit the outlined function and the 
+  /// int part is the captured region kind, 'CR_Default' etc.
+  llvm::PointerIntPair<CapturedDecl *, 1, CapturedRegionKind> CapDeclAndKind;
 
   /// \brief The record for captured variables, a RecordDecl or CXXRecordDecl.
   RecordDecl *TheRecordDecl;
 
   /// \brief Construct a captured statement.
-  CapturedStmt(Stmt *S, ArrayRef<Capture> Captures,
-               ArrayRef<Expr *> CaptureInits,
-               CapturedDecl *CD, RecordDecl *RD);
+  CapturedStmt(Stmt *S, CapturedRegionKind Kind, ArrayRef<Capture> Captures,
+               ArrayRef<Expr *> CaptureInits, CapturedDecl *CD, RecordDecl *RD);
 
   /// \brief Construct an empty captured statement.
   CapturedStmt(EmptyShell Empty, unsigned NumCaptures);
@@ -2001,8 +2003,11 @@ private:
 
   Capture *getStoredCaptures() const;
 
+  void setCapturedStmt(Stmt *S) { getStoredStmts()[NumCaptures] = S; }
+
 public:
   static CapturedStmt *Create(ASTContext &Context, Stmt *S,
+                              CapturedRegionKind Kind,
                               ArrayRef<Capture> Captures,
                               ArrayRef<Expr *> CaptureInits,
                               CapturedDecl *CD, RecordDecl *RD);
@@ -2017,19 +2022,46 @@ public:
   }
 
   /// \brief Retrieve the outlined function declaration.
-  CapturedDecl *getCapturedDecl() const { return TheCapturedDecl; }
+  CapturedDecl *getCapturedDecl() { return CapDeclAndKind.getPointer(); }
+  const CapturedDecl *getCapturedDecl() const {
+    return const_cast<CapturedStmt *>(this)->getCapturedDecl();
+  }
+
+  /// \brief Set the outlined function declaration.
+  void setCapturedDecl(CapturedDecl *D) {
+    assert(D && "null CapturedDecl");
+    CapDeclAndKind.setPointer(D);
+  }
+
+  /// \brief Retrieve the captured region kind.
+  CapturedRegionKind getCapturedRegionKind() const {
+    return CapDeclAndKind.getInt();
+  }
+
+  /// \brief Set the captured region kind.
+  void setCapturedRegionKind(CapturedRegionKind Kind) {
+    CapDeclAndKind.setInt(Kind);
+  }
 
   /// \brief Retrieve the record declaration for captured variables.
   const RecordDecl *getCapturedRecordDecl() const { return TheRecordDecl; }
+
+  /// \brief Set the record declaration for captured variables.
+  void setCapturedRecordDecl(RecordDecl *D) {
+    assert(D && "null RecordDecl");
+    TheRecordDecl = D;
+  }
 
   /// \brief True if this variable has been captured.
   bool capturesVariable(const VarDecl *Var) const;
 
   /// \brief An iterator that walks over the captures.
-  typedef const Capture *capture_iterator;
+  typedef Capture *capture_iterator;
+  typedef const Capture *const_capture_iterator;
 
   /// \brief Retrieve an iterator pointing to the first capture.
-  capture_iterator capture_begin() const { return getStoredCaptures(); }
+  capture_iterator capture_begin() { return getStoredCaptures(); }
+  const_capture_iterator capture_begin() const { return getStoredCaptures(); }
 
   /// \brief Retrieve an iterator pointing past the end of the sequence of
   /// captures.
@@ -2069,6 +2101,8 @@ public:
   }
 
   child_range children();
+
+  friend class ASTStmtReader;
 };
 
 }  // end namespace clang

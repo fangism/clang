@@ -239,7 +239,7 @@ static ObjCMethodDecl *getNSNumberFactoryMethod(Sema &S, SourceLocation Loc,
                                              &CX.Idents.get("value"),
                                              NumberType, /*TInfo=*/0, SC_None,
                                              0);
-    Method->setMethodParams(S.Context, value, ArrayRef<SourceLocation>());
+    Method->setMethodParams(S.Context, value, None);
   }
 
   if (!validateBoxingMethod(S, Loc, S.NSNumberDecl, Sel, Method))
@@ -343,7 +343,7 @@ static ExprResult CheckObjCCollectionLiteralElement(Sema &S, Expr *Element,
     InitializationKind Kind
       = InitializationKind::CreateCopy(Element->getLocStart(),
                                        SourceLocation());
-    InitializationSequence Seq(S, Entity, Kind, &Element, 1);
+    InitializationSequence Seq(S, Entity, Kind, Element);
     if (!Seq.Failed())
       return Seq.Perform(S, Entity, Kind, Element);
   }
@@ -490,7 +490,7 @@ ExprResult Sema::BuildObjCBoxedExpr(SourceRange SR, Expr *ValueExpr) {
                                 Context.getPointerType(ConstCharType),
                                 /*TInfo=*/0,
                                 SC_None, 0);
-          M->setMethodParams(Context, value, ArrayRef<SourceLocation>());
+          M->setMethodParams(Context, value, None);
           BoxingMethod = M;
         }
 
@@ -665,7 +665,7 @@ ExprResult Sema::BuildObjCArrayLiteral(SourceRange SR, MultiExprArg Elements) {
                                              Context.UnsignedLongTy,
                                              /*TInfo=*/0, SC_None, 0);
       Params.push_back(cnt);
-      Method->setMethodParams(Context, Params, ArrayRef<SourceLocation>());
+      Method->setMethodParams(Context, Params, None);
     }
 
     if (!validateBoxingMethod(*this, SR.getBegin(), NSArrayDecl, Sel, Method))
@@ -788,7 +788,7 @@ ExprResult Sema::BuildObjCDictionaryLiteral(SourceRange SR,
                                              Context.UnsignedLongTy,
                                              /*TInfo=*/0, SC_None, 0);
       Params.push_back(cnt);
-      Method->setMethodParams(Context, Params, ArrayRef<SourceLocation>());
+      Method->setMethodParams(Context, Params, None);
     }
 
     if (!validateBoxingMethod(*this, SR.getBegin(), NSDictionaryDecl, Sel,
@@ -1326,7 +1326,8 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
   DiagnoseSentinelCalls(Method, SelLoc, Args, NumArgs);
 
   // Do additional checkings on method.
-  IsError |= CheckObjCMethodCall(Method, SelLoc, Args, NumArgs);
+  IsError |= CheckObjCMethodCall(Method, SelLoc,
+                               llvm::makeArrayRef<const Expr *>(Args, NumArgs));
 
   return IsError;
 }
@@ -1334,7 +1335,7 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
 bool Sema::isSelfExpr(Expr *receiver) {
   // 'self' is objc 'self' in an objc method only.
   ObjCMethodDecl *method =
-    dyn_cast<ObjCMethodDecl>(CurContext->getNonClosureAncestor());
+    dyn_cast_or_null<ObjCMethodDecl>(CurContext->getNonClosureAncestor());
   if (!method) return false;
 
   receiver = receiver->IgnoreParenLValueCasts();

@@ -1623,7 +1623,7 @@ CodeGenModule::MaybeEmitGlobalStdInitializerListInitializer(const VarDecl *D,
                                           D->getLocStart(), D->getLocation(),
                                           name, arrayType, sourceInfo,
                                           SC_Static);
-  backingArray->setTLSKind(D->getTLSKind());
+  backingArray->setTSCSpec(D->getTSCSpec());
 
   // Now clone the InitListExpr to initialize the array instead.
   // Incredible hack: we want to use the existing InitListExpr here, so we need
@@ -1731,8 +1731,8 @@ void CodeGenModule::MaybeHandleStaticInExternC(const SomeDecl *D,
 
   // Must be in an extern "C" context. Entities declared directly within
   // a record are not extern "C" even if the record is in such a context.
-  const DeclContext *DC = D->getFirstDeclaration()->getDeclContext();
-  if (DC->isRecord() || !DC->isExternCContext())
+  const SomeDecl *First = D->getFirstDeclaration();
+  if (First->getDeclContext()->isRecord() || !First->isInExternCContext())
     return;
 
   // OK, this is an internal linkage entity inside an extern "C" linkage
@@ -2339,6 +2339,8 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
     new llvm::GlobalVariable(getModule(), C->getType(), /*isConstant=*/true,
                              Linkage, C, ".str");
   GV->setUnnamedAddr(true);
+  // Don't enforce the target's minimum global alignment, since the only use
+  // of the string is via this class initializer.
   if (isUTF16) {
     CharUnits Align = getContext().getTypeAlignInChars(getContext().ShortTy);
     GV->setAlignment(Align.getQuantity());
@@ -2472,6 +2474,8 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   new llvm::GlobalVariable(getModule(), C->getType(), isConstant, Linkage, C,
                            ".str");
   GV->setUnnamedAddr(true);
+  // Don't enforce the target's minimum global alignment, since the only use
+  // of the string is via this class initializer.
   CharUnits Align = getContext().getTypeAlignInChars(getContext().CharTy);
   GV->setAlignment(Align.getQuantity());
   Fields[1] = llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
@@ -2576,7 +2580,7 @@ CodeGenModule::GetConstantArrayFromStringLiteral(const StringLiteral *E) {
 /// constant array for the given string literal.
 llvm::Constant *
 CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S) {
-  CharUnits Align = getContext().getTypeAlignInChars(S->getType());
+  CharUnits Align = getContext().getAlignOfGlobalVarInChars(S->getType());
   if (S->isAscii() || S->isUTF8()) {
     SmallString<64> Str(S->getString());
     
@@ -2644,6 +2648,10 @@ llvm::Constant *CodeGenModule::GetAddrOfConstantString(StringRef Str,
   // Get the default prefix if a name wasn't specified.
   if (!GlobalName)
     GlobalName = ".str";
+
+  if (Alignment == 0)
+    Alignment = getContext().getAlignOfGlobalVarInChars(getContext().CharTy)
+      .getQuantity();
 
   // Don't share any string literals if strings aren't constant.
   if (LangOpts.WritableStrings)

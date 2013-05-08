@@ -867,6 +867,9 @@ public:
   const FunctionType *adjustFunctionType(const FunctionType *Fn,
                                          FunctionType::ExtInfo EInfo);
 
+  /// \brief Change the result type of a function type once it is deduced.
+  void adjustDeducedFunctionResultType(FunctionDecl *FD, QualType ResultType);
+
   /// \brief Return the uniqued reference to the type for a complex
   /// number with the specified element type.
   QualType getComplexType(QualType T) const;
@@ -1589,6 +1592,14 @@ public:
   /// This can be different than the ABI alignment in cases where it is
   /// beneficial for performance to overalign a data type.
   unsigned getPreferredTypeAlign(const Type *T) const;
+
+  /// \brief Return the alignment in bits that should be given to a
+  /// global variable with type \p T.
+  unsigned getAlignOfGlobalVar(QualType T) const;
+
+  /// \brief Return the alignment in characters that should be given to a
+  /// global variable with type \p T.
+  CharUnits getAlignOfGlobalVarInChars(QualType T) const;
 
   /// \brief Return a conservative estimate of the alignment of the specified
   /// decl \p D.

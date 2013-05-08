@@ -1283,6 +1283,10 @@ CharUnits ASTContext::getDeclAlign(const Decl *D, bool RefAsPointee) const {
         T = getBaseElementType(arrayType);
       }
       Align = std::max(Align, getPreferredTypeAlign(T.getTypePtr()));
+      if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
+        if (VD->hasGlobalStorage())
+          Align = std::max(Align, getTargetInfo().getMinGlobalAlign());
+      }
     }
 
     // Fields can be subject to extra alignment constraints, like if
@@ -1725,6 +1729,18 @@ unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
   return ABIAlign;
 }
 
+/// getAlignOfGlobalVar - Return the alignment in bits that should be given
+/// to a global variable of the specified type.
+unsigned ASTContext::getAlignOfGlobalVar(QualType T) const {
+  return std::max(getTypeAlign(T), getTargetInfo().getMinGlobalAlign());
+}
+
+/// getAlignOfGlobalVarInChars - Return the alignment in characters that
+/// should be given to a global variable of the specified type.
+CharUnits ASTContext::getAlignOfGlobalVarInChars(QualType T) const {
+  return toCharUnitsFromBits(getAlignOfGlobalVar(T));
+}
+
 /// DeepCollectObjCIvars -
 /// This routine first collects all declared, but not synthesized, ivars in
 /// super class and then collects all ivars, including those synthesized for
@@ -2033,6 +2049,16 @@ const FunctionType *ASTContext::adjustFunctionType(const FunctionType *T,
   }
 
   return cast<FunctionType>(Result.getTypePtr());
+}
+
+void ASTContext::adjustDeducedFunctionResultType(FunctionDecl *FD,
+                                                 QualType ResultType) {
+  // FIXME: Need to inform serialization code about this!
+  for (FD = FD->getMostRecentDecl(); FD; FD = FD->getPreviousDecl()) {
+    const FunctionProtoType *FPT = FD->getType()->castAs<FunctionProtoType>();
+    FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
+    FD->setType(getFunctionType(ResultType, FPT->getArgTypes(), EPI));
+  }
 }
 
 /// getComplexType - Return the uniqued reference to the type for a complex
@@ -3563,18 +3589,20 @@ QualType ASTContext::getUnaryTransformType(QualType BaseType,
   return QualType(Ty, 0);
 }
 
-/// getAutoType - We only unique auto types after they've been deduced.
-QualType ASTContext::getAutoType(QualType DeducedType,
-                                 bool IsDecltypeAuto,
+/// getAutoType - Return the uniqued reference to the 'auto' type which has been
+/// deduced to the given type, or to the canonical undeduced 'auto' type, or the
+/// canonical deduced-but-dependent 'auto' type.
+QualType ASTContext::getAutoType(QualType DeducedType, bool IsDecltypeAuto,
                                  bool IsDependent) const {
+  if (DeducedType.isNull() && !IsDecltypeAuto && !IsDependent)
+    return getAutoDeductType();
+
+  // Look in the folding set for an existing type.
   void *InsertPos = 0;
-  if (!DeducedType.isNull()) {
-    // Look in the folding set for an existing type.
-    llvm::FoldingSetNodeID ID;
-    AutoType::Profile(ID, DeducedType, IsDecltypeAuto, IsDependent);
-    if (AutoType *AT = AutoTypes.FindNodeOrInsertPos(ID, InsertPos))
-      return QualType(AT, 0);
-  }
+  llvm::FoldingSetNodeID ID;
+  AutoType::Profile(ID, DeducedType, IsDecltypeAuto, IsDependent);
+  if (AutoType *AT = AutoTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(AT, 0);
 
   AutoType *AT = new (*this, TypeAlignment) AutoType(DeducedType,
                                                      IsDecltypeAuto,
@@ -3616,8 +3644,10 @@ QualType ASTContext::getAtomicType(QualType T) const {
 /// getAutoDeductType - Get type pattern for deducing against 'auto'.
 QualType ASTContext::getAutoDeductType() const {
   if (AutoDeductTy.isNull())
-    AutoDeductTy = getAutoType(QualType(), false);
-  assert(!AutoDeductTy.isNull() && "can't build 'auto' pattern");
+    AutoDeductTy = QualType(
+      new (*this, TypeAlignment) AutoType(QualType(), /*decltype(auto)*/false,
+                                          /*dependent*/false),
+      0);
   return AutoDeductTy;
 }
 
@@ -4247,7 +4277,7 @@ QualType ASTContext::isPromotableBitField(Expr *E) const {
   if (E->isTypeDependent() || E->isValueDependent())
     return QualType();
   
-  FieldDecl *Field = E->getBitField();
+  FieldDecl *Field = E->getSourceBitField(); // FIXME: conditional bit-fields?
   if (!Field)
     return QualType();
 
@@ -5951,6 +5981,80 @@ CreateAAPCSABIBuiltinVaListDecl(const ASTContext *Context) {
   return VaListTypeDecl;
 }
 
+static TypedefDecl *
+CreateSystemZBuiltinVaListDecl(const ASTContext *Context) {
+  // typedef struct __va_list_tag {
+  RecordDecl *VaListTagDecl;
+  VaListTagDecl = CreateRecordDecl(*Context, TTK_Struct,
+                                   Context->getTranslationUnitDecl(),
+                                   &Context->Idents.get("__va_list_tag"));
+  VaListTagDecl->startDefinition();
+
+  const size_t NumFields = 4;
+  QualType FieldTypes[NumFields];
+  const char *FieldNames[NumFields];
+
+  //   long __gpr;
+  FieldTypes[0] = Context->LongTy;
+  FieldNames[0] = "__gpr";
+
+  //   long __fpr;
+  FieldTypes[1] = Context->LongTy;
+  FieldNames[1] = "__fpr";
+
+  //   void *__overflow_arg_area;
+  FieldTypes[2] = Context->getPointerType(Context->VoidTy);
+  FieldNames[2] = "__overflow_arg_area";
+
+  //   void *__reg_save_area;
+  FieldTypes[3] = Context->getPointerType(Context->VoidTy);
+  FieldNames[3] = "__reg_save_area";
+
+  // Create fields
+  for (unsigned i = 0; i < NumFields; ++i) {
+    FieldDecl *Field = FieldDecl::Create(const_cast<ASTContext &>(*Context),
+                                         VaListTagDecl,
+                                         SourceLocation(),
+                                         SourceLocation(),
+                                         &Context->Idents.get(FieldNames[i]),
+                                         FieldTypes[i], /*TInfo=*/0,
+                                         /*BitWidth=*/0,
+                                         /*Mutable=*/false,
+                                         ICIS_NoInit);
+    Field->setAccess(AS_public);
+    VaListTagDecl->addDecl(Field);
+  }
+  VaListTagDecl->completeDefinition();
+  QualType VaListTagType = Context->getRecordType(VaListTagDecl);
+  Context->VaListTagTy = VaListTagType;
+
+  // } __va_list_tag;
+  TypedefDecl *VaListTagTypedefDecl
+    = TypedefDecl::Create(const_cast<ASTContext &>(*Context),
+                          Context->getTranslationUnitDecl(),
+                          SourceLocation(), SourceLocation(),
+                          &Context->Idents.get("__va_list_tag"),
+                          Context->getTrivialTypeSourceInfo(VaListTagType));
+  QualType VaListTagTypedefType =
+    Context->getTypedefType(VaListTagTypedefDecl);
+
+  // typedef __va_list_tag __builtin_va_list[1];
+  llvm::APInt Size(Context->getTypeSize(Context->getSizeType()), 1);
+  QualType VaListTagArrayType
+    = Context->getConstantArrayType(VaListTagTypedefType,
+                                      Size, ArrayType::Normal,0);
+  TypeSourceInfo *TInfo
+    = Context->getTrivialTypeSourceInfo(VaListTagArrayType);
+  TypedefDecl *VaListTypedefDecl
+    = TypedefDecl::Create(const_cast<ASTContext &>(*Context),
+                          Context->getTranslationUnitDecl(),
+                          SourceLocation(), SourceLocation(),
+                          &Context->Idents.get("__builtin_va_list"),
+                          TInfo);
+
+  return VaListTypedefDecl;
+}
+
 static TypedefDecl *CreateVaListDecl(const ASTContext *Context,
                                      TargetInfo::BuiltinVaListKind Kind) {
   switch (Kind) {
@@ -5968,6 +6072,8 @@ static TypedefDecl *CreateVaListDecl(const ASTContext *Context,
     return CreatePNaClABIBuiltinVaListDecl(Context);
   case TargetInfo::AAPCSABIBuiltinVaList:
     return CreateAAPCSABIBuiltinVaListDecl(Context);
+  case TargetInfo::SystemZBuiltinVaList:
+    return CreateSystemZBuiltinVaListDecl(Context);
   }
 
   llvm_unreachable("Unhandled __builtin_va_list type kind");

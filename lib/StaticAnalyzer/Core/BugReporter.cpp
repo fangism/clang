@@ -145,7 +145,7 @@ static void removeRedundantMsgs(PathPieces &path) {
 
 /// A map from PathDiagnosticPiece to the LocationContext of the inlined
 /// function call it represents.
-typedef llvm::DenseMap<const PathDiagnosticCallPiece*, const LocationContext*>
+typedef llvm::DenseMap<const PathPieces *, const LocationContext *>
         LocationContextMap;
 
 /// Recursively scan through a path and prune out calls and macros pieces
@@ -173,8 +173,8 @@ static bool removeUnneededCalls(PathPieces &pieces, BugReport *R,
       case PathDiagnosticPiece::Call: {
         PathDiagnosticCallPiece *call = cast<PathDiagnosticCallPiece>(piece);
         // Check if the location context is interesting.
-        assert(LCM.count(call));
-        if (R->isInteresting(LCM[call])) {
+        assert(LCM.count(&call->path));
+        if (R->isInteresting(LCM[&call->path])) {
           containsSomethingInteresting = true;
           break;
         }
@@ -539,7 +539,7 @@ static bool GenerateMinimalPathDiagnostic(PathDiagnostic& PD,
         PathDiagnosticCallPiece *C =
             PathDiagnosticCallPiece::construct(N, *CE, SMgr);
         // Record the mapping from call piece to LocationContext.
-        LCM[C] = CE->getCalleeContext();
+        LCM[&C->path] = CE->getCalleeContext();
         PD.getActivePath().push_front(C);
         PD.pushActivePath(&C->path);
         CallStack.push_back(StackDiagPair(C, N));
@@ -563,7 +563,7 @@ static bool GenerateMinimalPathDiagnostic(PathDiagnostic& PD,
           const Decl *Caller = CE->getLocationContext()->getDecl();
           C = PathDiagnosticCallPiece::construct(PD.getActivePath(), Caller);
           // Record the mapping from call piece to LocationContext.
-          LCM[C] = CE->getCalleeContext();
+          LCM[&C->path] = CE->getCalleeContext();
         }
 
         C->setCallee(*CE, SMgr);
@@ -1365,7 +1365,7 @@ static bool GenerateExtensivePathDiagnostic(PathDiagnostic& PD,
         
         PathDiagnosticCallPiece *C =
           PathDiagnosticCallPiece::construct(N, *CE, SM);
-        LCM[C] = CE->getCalleeContext();
+        LCM[&C->path] = CE->getCalleeContext();
 
         EB.addEdge(C->callReturn, /*AlwaysAdd=*/true, /*IsPostJump=*/true);
         EB.flushLocations();
@@ -1402,7 +1402,7 @@ static bool GenerateExtensivePathDiagnostic(PathDiagnostic& PD,
         } else {
           const Decl *Caller = CE->getLocationContext()->getDecl();
           C = PathDiagnosticCallPiece::construct(PD.getActivePath(), Caller);
-          LCM[C] = CE->getCalleeContext();
+          LCM[&C->path] = CE->getCalleeContext();
         }
 
         C->setCallee(*CE, SM);
@@ -1528,6 +1528,458 @@ static bool GenerateExtensivePathDiagnostic(PathDiagnostic& PD,
   }
 
   return PDB.getBugReport()->isValid();
+}
+
+/// \brief Adds a sanitized control-flow diagnostic edge to a path.
+static void addEdgeToPath(PathPieces &path,
+                          PathDiagnosticLocation &PrevLoc,
+                          PathDiagnosticLocation NewLoc,
+                          const LocationContext *LC) {
+  if (!NewLoc.isValid())
+    return;
+
+  SourceLocation NewLocL = NewLoc.asLocation();
+  if (NewLocL.isInvalid() || NewLocL.isMacroID())
+    return;
+
+  if (!PrevLoc.isValid()) {
+    PrevLoc = NewLoc;
+    return;
+  }
+
+  // FIXME: ignore intra-macro edges for now.
+  if (NewLoc.asLocation().getExpansionLoc() ==
+      PrevLoc.asLocation().getExpansionLoc())
+    return;
+
+  path.push_front(new PathDiagnosticControlFlowPiece(NewLoc,
+                                                     PrevLoc));
+  PrevLoc = NewLoc;
+}
+
+static bool
+GenerateAlternateExtensivePathDiagnostic(PathDiagnostic& PD,
+                                         PathDiagnosticBuilder &PDB,
+                                         const ExplodedNode *N,
+                                         LocationContextMap &LCM,
+                                      ArrayRef<BugReporterVisitor *> visitors) {
+
+  BugReport *report = PDB.getBugReport();
+  const SourceManager& SM = PDB.getSourceManager();
+  StackDiagVector CallStack;
+  InterestingExprs IE;
+
+  // Record the last location for a given visited stack frame.
+  llvm::DenseMap<const StackFrameContext *, PathDiagnosticLocation>
+    PrevLocMap;
+
+  const ExplodedNode *NextNode = N->getFirstPred();
+  while (NextNode) {
+    N = NextNode;
+    NextNode = N->getFirstPred();
+    ProgramPoint P = N->getLocation();
+    const LocationContext *LC = N->getLocationContext();
+    assert(!LCM[&PD.getActivePath()] || LCM[&PD.getActivePath()] == LC);
+    LCM[&PD.getActivePath()] = LC;
+    PathDiagnosticLocation &PrevLoc = PrevLocMap[LC->getCurrentStackFrame()];
+
+    do {
+      if (Optional<PostStmt> PS = P.getAs<PostStmt>()) {
+        // For expressions, make sure we propagate the
+        // interesting symbols correctly.
+        if (const Expr *Ex = PS->getStmtAs<Expr>())
+          reversePropagateIntererstingSymbols(*PDB.getBugReport(), IE,
+                                              N->getState().getPtr(), Ex,
+                                              N->getLocationContext());
+
+        PathDiagnosticLocation L =
+          PathDiagnosticLocation(PS->getStmt(), SM, LC);
+        addEdgeToPath(PD.getActivePath(), PrevLoc, L, LC);
+        break;
+      }
+
+      // Have we encountered an exit from a function call?
+      if (Optional<CallExitEnd> CE = P.getAs<CallExitEnd>()) {
+        const Stmt *S = CE->getCalleeContext()->getCallSite();
+        // Propagate the interesting symbols accordingly.
+        if (const Expr *Ex = dyn_cast_or_null<Expr>(S)) {
+          reversePropagateIntererstingSymbols(*PDB.getBugReport(), IE,
+                                              N->getState().getPtr(), Ex,
+                                              N->getLocationContext());
+        }
+
+        // We are descending into a call (backwards).  Construct
+        // a new call piece to contain the path pieces for that call.
+        PathDiagnosticCallPiece *C =
+          PathDiagnosticCallPiece::construct(N, *CE, SM);
+
+        // Record the location context for this call piece.
+        LCM[&C->path] = CE->getCalleeContext();
+
+        // Add the edge to the return site.
+        addEdgeToPath(PD.getActivePath(), PrevLoc, C->callReturn, LC);
+
+        // Make the contents of the call the active path for now.
+        PD.pushActivePath(&C->path);
+        CallStack.push_back(StackDiagPair(C, N));
+        break;
+      }
+
+      // Have we encountered an entrance to a call?  It may be
+      // the case that we have not encountered a matching
+      // call exit before this point.  This means that the path
+      // terminated within the call itself.
+      if (Optional<CallEnter> CE = P.getAs<CallEnter>()) {
+        // Add an edge to the start of the function.
+        const Decl *D = CE->getCalleeContext()->getDecl();
+        addEdgeToPath(PD.getActivePath(), PrevLoc,
+                      PathDiagnosticLocation::createBegin(D, SM), LC);
+
+        // Did we visit an entire call?
+        bool VisitedEntireCall = PD.isWithinCall();
+        PD.popActivePath();
+
+        PathDiagnosticCallPiece *C;
+        if (VisitedEntireCall) {
+          C = cast<PathDiagnosticCallPiece>(PD.getActivePath().front());
+        } else {
+          const Decl *Caller = CE->getLocationContext()->getDecl();
+          C = PathDiagnosticCallPiece::construct(PD.getActivePath(), Caller);
+          LCM[&C->path] = CE->getCalleeContext();
+        }
+        C->setCallee(*CE, SM);
+
+        if (!CallStack.empty()) {
+          assert(CallStack.back().first == C);
+          CallStack.pop_back();
+        }
+        break;
+      }
+
+      // Block edges.
+      if (Optional<BlockEdge> BE = P.getAs<BlockEdge>()) {
+        // Does this represent entering a call?  If so, look at propagating
+        // interesting symbols across call boundaries.
+        if (NextNode) {
+          const LocationContext *CallerCtx = NextNode->getLocationContext();
+          const LocationContext *CalleeCtx = PDB.LC;
+          if (CallerCtx != CalleeCtx) {
+            reversePropagateInterestingSymbols(*PDB.getBugReport(), IE,
+                                               N->getState().getPtr(),
+                                               CalleeCtx, CallerCtx);
+          }
+        }
+
+        // Are we jumping to the head of a loop?  Add a special diagnostic.
+        if (const Stmt *Loop = BE->getSrc()->getLoopTarget()) {
+          PathDiagnosticLocation L(Loop, SM, PDB.LC);
+          const CompoundStmt *CS = NULL;
+
+          if (const ForStmt *FS = dyn_cast<ForStmt>(Loop))
+            CS = dyn_cast<CompoundStmt>(FS->getBody());
+          else if (const WhileStmt *WS = dyn_cast<WhileStmt>(Loop))
+            CS = dyn_cast<CompoundStmt>(WS->getBody());
+
+          PathDiagnosticEventPiece *p =
+            new PathDiagnosticEventPiece(L, "Looping back to the head "
+                                            "of the loop");
+          p->setPrunable(true);
+
+          addEdgeToPath(PD.getActivePath(), PrevLoc, p->getLocation(), LC);
+          PD.getActivePath().push_front(p);
+
+          if (CS) {
+            addEdgeToPath(PD.getActivePath(), PrevLoc,
+                          PathDiagnosticLocation::createEndBrace(CS, SM), LC);
+          }
+        }
+        
+        const CFGBlock *BSrc = BE->getSrc();
+        ParentMap &PM = PDB.getParentMap();
+
+        if (const Stmt *Term = BSrc->getTerminator()) {
+          // Are we jumping past the loop body without ever executing the
+          // loop (because the condition was false)?
+          if (isLoopJumpPastBody(Term, &*BE) &&
+              !isInLoopBody(PM,
+                            getStmtBeforeCond(PM,
+                                              BSrc->getTerminatorCondition(),
+                                              N),
+                            Term))
+          {
+            PathDiagnosticLocation L(Term, SM, PDB.LC);
+            PathDiagnosticEventPiece *PE =
+              new PathDiagnosticEventPiece(L, "Loop body executed 0 times");
+            PE->setPrunable(true);
+            addEdgeToPath(PD.getActivePath(), PrevLoc,
+                          PE->getLocation(), LC);
+            PD.getActivePath().push_front(PE);
+          }
+        }
+        break;
+      }
+    } while (0);
+
+    if (!NextNode)
+      continue;
+
+    // Add pieces from custom visitors.
+    for (ArrayRef<BugReporterVisitor *>::iterator I = visitors.begin(),
+         E = visitors.end();
+         I != E; ++I) {
+      if (PathDiagnosticPiece *p = (*I)->VisitNode(N, NextNode, PDB, *report)) {
+        addEdgeToPath(PD.getActivePath(), PrevLoc, p->getLocation(), LC);
+        PD.getActivePath().push_front(p);
+        updateStackPiecesWithMessage(p, CallStack);
+      }
+    }
+  }
+
+  return report->isValid();
+}
+
+const Stmt *getLocStmt(PathDiagnosticLocation L) {
+  if (!L.isValid())
+    return 0;
+  return L.asStmt();
+}
+
+const Stmt *getStmtParent(const Stmt *S, ParentMap &PM) {
+  if (!S)
+    return 0;
+  return PM.getParentIgnoreParens(S);
+}
+
+#if 0
+static bool isConditionForTerminator(const Stmt *S, const Stmt *Cond) {
+  // Note that we intentionally to do not handle || and && here.
+  switch (S->getStmtClass()) {
+    case Stmt::ForStmtClass:
+      return cast<ForStmt>(S)->getCond() == Cond;
+    case Stmt::WhileStmtClass:
+      return cast<WhileStmt>(S)->getCond() == Cond;
+    case Stmt::DoStmtClass:
+      return cast<DoStmt>(S)->getCond() == Cond;
+    case Stmt::ChooseExprClass:
+      return cast<ChooseExpr>(S)->getCond() == Cond;
+    case Stmt::IndirectGotoStmtClass:
+      return cast<IndirectGotoStmt>(S)->getTarget() == Cond;
+    case Stmt::SwitchStmtClass:
+      return cast<SwitchStmt>(S)->getCond() == Cond;
+    case Stmt::BinaryConditionalOperatorClass:
+      return cast<BinaryConditionalOperator>(S)->getCond() == Cond;
+    case Stmt::ConditionalOperatorClass:
+      return cast<ConditionalOperator>(S)->getCond() == Cond;
+    case Stmt::ObjCForCollectionStmtClass:
+      return cast<ObjCForCollectionStmt>(S)->getElement() == Cond;
+    default:
+      return false;
+  }
+}
+#endif
+
+typedef llvm::DenseSet<const PathDiagnosticControlFlowPiece *>
+        ControlFlowBarrierSet;
+
+typedef llvm::DenseSet<const PathDiagnosticCallPiece *>
+        OptimizedCallsSet;
+
+static bool isBarrier(ControlFlowBarrierSet &CFBS,
+                      const PathDiagnosticControlFlowPiece *P) {
+  return CFBS.count(P);
+}
+
+static bool optimizeEdges(PathPieces &path, SourceManager &SM,
+                          ControlFlowBarrierSet &CFBS,
+                          OptimizedCallsSet &OCS,
+                          LocationContextMap &LCM) {
+  bool hasChanges = false;
+  const LocationContext *LC = LCM[&path];
+  assert(LC);
+  bool isFirst = true;
+
+  for (PathPieces::iterator I = path.begin(), E = path.end(); I != E; ) {
+    bool wasFirst = isFirst;
+    isFirst = false;
+
+    // Optimize subpaths.
+    if (PathDiagnosticCallPiece *CallI = dyn_cast<PathDiagnosticCallPiece>(*I)){
+      // Record the fact that a call has been optimized so we only do the
+      // effort once.
+      if (!OCS.count(CallI)) {
+        while (optimizeEdges(CallI->path, SM, CFBS, OCS, LCM)) {}
+        OCS.insert(CallI);
+      }
+      ++I;
+      continue;
+    }
+
+    // Pattern match the current piece and its successor.
+    PathDiagnosticControlFlowPiece *PieceI =
+      dyn_cast<PathDiagnosticControlFlowPiece>(*I);
+
+    if (!PieceI) {
+      ++I;
+      continue;
+    }
+
+    ParentMap &PM = LC->getParentMap();
+    const Stmt *s1Start = getLocStmt(PieceI->getStartLocation());
+    const Stmt *s1End   = getLocStmt(PieceI->getEndLocation());
+    const Stmt *level1 = getStmtParent(s1Start, PM);
+    const Stmt *level2 = getStmtParent(s1End, PM);
+
+    if (wasFirst) {
+#if 0
+      // Apply the "first edge" case for Rule V. here.
+      if (s1Start && level1 && isConditionForTerminator(level1, s1Start)) {
+        PathDiagnosticLocation NewLoc(level2, SM, LC);
+        PieceI->setStartLocation(NewLoc);
+        CFBS.insert(PieceI);
+        return true;
+      }
+#endif
+      // Apply the "first edge" case for Rule III. here.
+      if (!isBarrier(CFBS, PieceI) &&
+          level1 && level2 && level2 == PM.getParent(level1)) {
+        path.erase(I);
+        // Since we are erasing the current edge at the start of the
+        // path, just return now so we start analyzing the start of the path
+        // again.
+        return true;
+      }
+    }
+
+    PathPieces::iterator NextI = I; ++NextI;
+    if (NextI == E)
+      break;
+
+    PathDiagnosticControlFlowPiece *PieceNextI =
+      dyn_cast<PathDiagnosticControlFlowPiece>(*NextI);
+
+    if (!PieceNextI) {
+      ++I;
+      continue;
+    }
+
+    const Stmt *s2Start = getLocStmt(PieceNextI->getStartLocation());
+    const Stmt *s2End   = getLocStmt(PieceNextI->getEndLocation());
+    const Stmt *level3 = getStmtParent(s2Start, PM);
+    const Stmt *level4 = getStmtParent(s2End, PM);
+
+    // Rule I.
+    //
+    // If we have two consecutive control edges whose end/begin locations
+    // are at the same level (e.g. statements or top-level expressions within
+    // a compound statement, or siblings share a single ancestor expression),
+    // then merge them if they have no interesting intermediate event.
+    //
+    // For example:
+    //
+    // (1.1 -> 1.2) -> (1.2 -> 1.3) becomes (1.1 -> 1.3) because the common
+    // parent is '1'.  Here 'x.y.z' represents the hierarchy of statements.
+    //
+    // NOTE: this will be limited later in cases where we add barriers
+    // to prevent this optimization.
+    //
+    if (level1 && level1 == level2 && level1 == level3 && level1 == level4) {
+      PieceI->setEndLocation(PieceNextI->getEndLocation());
+      path.erase(NextI);
+      hasChanges = true;
+      continue;
+    }
+
+    // Rule II.
+    //
+    // If we have two consecutive control edges where we decend to a
+    // subexpression and then pop out merge them.
+    //
+    // NOTE: this will be limited later in cases where we add barriers
+    // to prevent this optimization.
+    //
+    // For example:
+    //
+    // (1.1 -> 1.1.1) -> (1.1.1 -> 1.2) becomes (1.1 -> 1.2).
+    if (level1 && level2 &&
+        level1 == level4 &&
+        level2 == level3 && PM.getParentIgnoreParens(level2) == level1) {
+      PieceI->setEndLocation(PieceNextI->getEndLocation());
+      path.erase(NextI);
+      hasChanges = true;
+      continue;
+    }
+
+    // Rule III.
+    //
+    // Eliminate unnecessary edges where we descend to a subexpression from
+    // a statement at the same level as our parent.
+    //
+    // NOTE: this will be limited later in cases where we add barriers
+    // to prevent this optimization.
+    //
+    // For example:
+    //
+    // (1.1 -> 1.1.1) -> (1.1.1 -> X) becomes (1.1 -> X).
+    //
+    if (level1 && level2 && level1 == PM.getParentIgnoreParens(level2)) {
+      PieceI->setEndLocation(PieceNextI->getEndLocation());
+      path.erase(NextI);
+      hasChanges = true;
+      continue;
+    }
+
+    // Rule IV.
+    //
+    // Eliminate unnecessary edges where we ascend from a subexpression to
+    // a statement at the same level as our parent.
+    //
+    // NOTE: this will be limited later in cases where we add barriers
+    // to prevent this optimization.
+    //
+    // For example:
+    //
+    // (X -> 1.1.1) -> (1.1.1 -> 1.1) becomes (X -> 1.1).
+    // [first edge] (1.1.1 -> 1.1) -> eliminate
+    //
+    if (level2 && level4 && level2 == level3 && level4 == PM.getParent(level2)){
+      PieceI->setEndLocation(PieceNextI->getEndLocation());
+      path.erase(NextI);
+      hasChanges = true;
+      continue;
+    }
+#if 0
+    // Rule V.
+    //
+    // Replace terminator conditions with terminators when the condition
+    // itself has no control-flow.
+    //
+    // For example:
+    //
+    // (X -> condition) -> (condition -> Y) becomes (X -> term) -> (term -> Y)
+    // [first edge] (condition -> Y) becomes (term -> Y)
+    //
+    // This applies to 'if', 'for', 'while', 'do .. while', 'switch'...
+    //
+    if (!isBarrier(CFBS, PieceNextI) &&
+        s1End && s1End == s2Start && level2) {
+      if (isConditionForTerminator(level2, s1End)) {
+        PathDiagnosticLocation NewLoc(level2, SM, LC);
+        PieceI->setEndLocation(NewLoc);
+        PieceNextI->setStartLocation(NewLoc);
+        CFBS.insert(PieceI);
+        hasChanges = true;
+        continue;
+      }
+
+    }
+#endif
+
+    // No changes at this index?  Move to the next one.
+    ++I;
+  }
+
+  // No changes.
+  return hasChanges;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2108,6 +2560,13 @@ bool GRBugReporter::generatePathDiagnostic(PathDiagnostic& PD,
   typedef PathDiagnosticConsumer::PathGenerationScheme PathGenerationScheme;
   PathGenerationScheme ActiveScheme = PC.getGenerationScheme();
 
+  if (ActiveScheme == PathDiagnosticConsumer::Extensive) {
+    AnalyzerOptions &options = getEngine().getAnalysisManager().options;
+    if (options.getBooleanOption("path-diagnostics-alternate", false)) {
+      ActiveScheme = PathDiagnosticConsumer::AlternateExtensive;
+    }
+  }
+
   TrimmedGraph TrimG(&getGraph(), errorNodes);
   ReportGraph ErrorGraph;
 
@@ -2169,6 +2628,9 @@ bool GRBugReporter::generatePathDiagnostic(PathDiagnostic& PD,
       LCM.clear();
 
       switch (ActiveScheme) {
+      case PathDiagnosticConsumer::AlternateExtensive:
+        GenerateAlternateExtensivePathDiagnostic(PD, PDB, N, LCM, visitors);
+        break;
       case PathDiagnosticConsumer::Extensive:
         GenerateExtensivePathDiagnostic(PD, PDB, N, LCM, visitors);
         break;
@@ -2203,6 +2665,13 @@ bool GRBugReporter::generatePathDiagnostic(PathDiagnostic& PD,
       }
 
       adjustCallLocations(PD.getMutablePieces());
+
+      if (ActiveScheme == PathDiagnosticConsumer::AlternateExtensive) {
+        ControlFlowBarrierSet CFBS;
+        OptimizedCallsSet OCS;
+        while (optimizeEdges(PD.getMutablePieces(), getSourceManager(), CFBS,
+                             OCS, LCM)) {}
+      }
     }
 
     // We found a report and didn't suppress it.
