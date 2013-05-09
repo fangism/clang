@@ -23,8 +23,8 @@
 //    where it is possible to determine the evaluated result regardless.
 //
 //  * A set of notes indicating why the evaluation was not a constant expression
-//    (under the C++11 rules only, at the moment), or, if folding failed too,
-//    why the expression could not be folded.
+//    (under the C++11 / C++1y rules only, at the moment), or, if folding failed
+//    too, why the expression could not be folded.
 //
 // If we are checking for a potential constant expression, failure to constant
 // fold a potential constant sub-expression will be indicated by a 'false'
@@ -380,6 +380,11 @@ namespace {
     /// NextCallIndex - The next call index to assign.
     unsigned NextCallIndex;
 
+    /// StepsLeft - The remaining number of evaluation steps we're permitted
+    /// to perform. This is essentially a limit for the number of statements
+    /// we will evaluate.
+    unsigned StepsLeft;
+
     /// BottomFrame - The frame in which evaluation started. This must be
     /// initialized after CurrentCall and CallStackDepth.
     CallStackFrame BottomFrame;
@@ -404,9 +409,10 @@ namespace {
     bool IntOverflowCheckMode;
 
     EvalInfo(const ASTContext &C, Expr::EvalStatus &S,
-             bool OverflowCheckMode=false)
+             bool OverflowCheckMode = false)
       : Ctx(const_cast<ASTContext&>(C)), EvalStatus(S), CurrentCall(0),
         CallStackDepth(0), NextCallIndex(1),
+        StepsLeft(getLangOpts().ConstexprStepLimit),
         BottomFrame(*this, SourceLocation(), 0, 0, 0),
         EvaluatingDecl(0), EvaluatingDeclValue(0), HasActiveDiagnostic(false),
         CheckingPotentialConstantExpression(false),
@@ -444,6 +450,15 @@ namespace {
       while (Frame->Index > CallIndex)
         Frame = Frame->Caller;
       return (Frame->Index == CallIndex) ? Frame : 0;
+    }
+
+    bool nextStep(const Stmt *S) {
+      if (!StepsLeft) {
+        Diag(S->getLocStart(), diag::note_constexpr_step_limit_exceeded);
+        return false;
+      }
+      --StepsLeft;
+      return true;
     }
 
   private:
@@ -530,9 +545,9 @@ namespace {
     bool keepEvaluatingAfterFailure() {
       // Should return true in IntOverflowCheckMode, so that we check for
       // overflow even if some subexpressions can't be evaluated as constants.
-      return IntOverflowCheckMode ||
-             (CheckingPotentialConstantExpression &&
-              EvalStatus.Diag && EvalStatus.Diag->empty());
+      return StepsLeft && (IntOverflowCheckMode ||
+                           (CheckingPotentialConstantExpression &&
+                            EvalStatus.Diag && EvalStatus.Diag->empty()));
     }
   };
 
@@ -925,6 +940,13 @@ static bool EvaluateIgnoredValue(EvalInfo &Info, const Expr *E) {
   return true;
 }
 
+/// Sign- or zero-extend a value to 64 bits. If it's already 64 bits, just
+/// return its existing value.
+static int64_t getExtValue(const APSInt &Value) {
+  return Value.isSigned() ? Value.getSExtValue()
+                          : static_cast<int64_t>(Value.getZExtValue());
+}
+
 /// Should this call expression be treated as a string literal?
 static bool IsStringLiteralCall(const CallExpr *E) {
   unsigned Builtin = E->isBuiltinCall();
@@ -1299,6 +1321,155 @@ static bool EvalAndBitcastToAPInt(EvalInfo &Info, const Expr *E,
   return false;
 }
 
+/// Perform the given integer operation, which is known to need at most BitWidth
+/// bits, and check for overflow in the original type (if that type was not an
+/// unsigned type).
+template<typename Operation>
+static APSInt CheckedIntArithmetic(EvalInfo &Info, const Expr *E,
+                                   const APSInt &LHS, const APSInt &RHS,
+                                   unsigned BitWidth, Operation Op) {
+  if (LHS.isUnsigned())
+    return Op(LHS, RHS);
+
+  APSInt Value(Op(LHS.extend(BitWidth), RHS.extend(BitWidth)), false);
+  APSInt Result = Value.trunc(LHS.getBitWidth());
+  if (Result.extend(BitWidth) != Value) {
+    if (Info.getIntOverflowCheckMode())
+      Info.Ctx.getDiagnostics().Report(E->getExprLoc(),
+        diag::warn_integer_constant_overflow)
+          << Result.toString(10) << E->getType();
+    else
+      HandleOverflow(Info, E, Value, E->getType());
+  }
+  return Result;
+}
+
+/// Perform the given binary integer operation.
+static bool handleIntIntBinOp(EvalInfo &Info, const Expr *E, const APSInt &LHS,
+                              BinaryOperatorKind Opcode, APSInt RHS,
+                              APSInt &Result) {
+  switch (Opcode) {
+  default:
+    Info.Diag(E);
+    return false;
+  case BO_Mul:
+    Result = CheckedIntArithmetic(Info, E, LHS, RHS, LHS.getBitWidth() * 2,
+                                  std::multiplies<APSInt>());
+    return true;
+  case BO_Add:
+    Result = CheckedIntArithmetic(Info, E, LHS, RHS, LHS.getBitWidth() + 1,
+                                  std::plus<APSInt>());
+    return true;
+  case BO_Sub:
+    Result = CheckedIntArithmetic(Info, E, LHS, RHS, LHS.getBitWidth() + 1,
+                                  std::minus<APSInt>());
+    return true;
+  case BO_And: Result = LHS & RHS; return true;
+  case BO_Xor: Result = LHS ^ RHS; return true;
+  case BO_Or:  Result = LHS | RHS; return true;
+  case BO_Div:
+  case BO_Rem:
+    if (RHS == 0) {
+      Info.Diag(E, diag::note_expr_divide_by_zero);
+      return false;
+    }
+    // Check for overflow case: INT_MIN / -1 or INT_MIN % -1.
+    if (RHS.isNegative() && RHS.isAllOnesValue() &&
+        LHS.isSigned() && LHS.isMinSignedValue())
+      HandleOverflow(Info, E, -LHS.extend(LHS.getBitWidth() + 1), E->getType());
+    Result = (Opcode == BO_Rem ? LHS % RHS : LHS / RHS);
+    return true;
+  case BO_Shl: {
+    if (Info.getLangOpts().OpenCL)
+      // OpenCL 6.3j: shift values are effectively % word size of LHS.
+      RHS &= APSInt(llvm::APInt(RHS.getBitWidth(),
+                    static_cast<uint64_t>(LHS.getBitWidth() - 1)),
+                    RHS.isUnsigned());
+    else if (RHS.isSigned() && RHS.isNegative()) {
+      // During constant-folding, a negative shift is an opposite shift. Such
+      // a shift is not a constant expression.
+      Info.CCEDiag(E, diag::note_constexpr_negative_shift) << RHS;
+      RHS = -RHS;
+      goto shift_right;
+    }
+  shift_left:
+    // C++11 [expr.shift]p1: Shift width must be less than the bit width of
+    // the shifted type.
+    unsigned SA = (unsigned) RHS.getLimitedValue(LHS.getBitWidth()-1);
+    if (SA != RHS) {
+      Info.CCEDiag(E, diag::note_constexpr_large_shift)
+        << RHS << E->getType() << LHS.getBitWidth();
+    } else if (LHS.isSigned()) {
+      // C++11 [expr.shift]p2: A signed left shift must have a non-negative
+      // operand, and must not overflow the corresponding unsigned type.
+      if (LHS.isNegative())
+        Info.CCEDiag(E, diag::note_constexpr_lshift_of_negative) << LHS;
+      else if (LHS.countLeadingZeros() < SA)
+        Info.CCEDiag(E, diag::note_constexpr_lshift_discards);
+    }
+    Result = LHS << SA;
+    return true;
+  }
+  case BO_Shr: {
+    if (Info.getLangOpts().OpenCL)
+      // OpenCL 6.3j: shift values are effectively % word size of LHS.
+      RHS &= APSInt(llvm::APInt(RHS.getBitWidth(),
+                    static_cast<uint64_t>(LHS.getBitWidth() - 1)),
+                    RHS.isUnsigned());
+    else if (RHS.isSigned() && RHS.isNegative()) {
+      // During constant-folding, a negative shift is an opposite shift. Such a
+      // shift is not a constant expression.
+      Info.CCEDiag(E, diag::note_constexpr_negative_shift) << RHS;
+      RHS = -RHS;
+      goto shift_left;
+    }
+  shift_right:
+    // C++11 [expr.shift]p1: Shift width must be less than the bit width of the
+    // shifted type.
+    unsigned SA = (unsigned) RHS.getLimitedValue(LHS.getBitWidth()-1);
+    if (SA != RHS)
+      Info.CCEDiag(E, diag::note_constexpr_large_shift)
+        << RHS << E->getType() << LHS.getBitWidth();
+    Result = LHS >> SA;
+    return true;
+  }
+
+  case BO_LT: Result = LHS < RHS; return true;
+  case BO_GT: Result = LHS > RHS; return true;
+  case BO_LE: Result = LHS <= RHS; return true;
+  case BO_GE: Result = LHS >= RHS; return true;
+  case BO_EQ: Result = LHS == RHS; return true;
+  case BO_NE: Result = LHS != RHS; return true;
+  }
+}
+
+/// Perform the given binary floating-point operation, in-place, on LHS.
+static bool handleFloatFloatBinOp(EvalInfo &Info, const Expr *E,
+                                  APFloat &LHS, BinaryOperatorKind Opcode,
+                                  const APFloat &RHS) {
+  switch (Opcode) {
+  default:
+    Info.Diag(E);
+    return false;
+  case BO_Mul:
+    LHS.multiply(RHS, APFloat::rmNearestTiesToEven);
+    break;
+  case BO_Add:
+    LHS.add(RHS, APFloat::rmNearestTiesToEven);
+    break;
+  case BO_Sub:
+    LHS.subtract(RHS, APFloat::rmNearestTiesToEven);
+    break;
+  case BO_Div:
+    LHS.divide(RHS, APFloat::rmNearestTiesToEven);
+    break;
+  }
+
+  if (LHS.isInfinity() || LHS.isNaN())
+    Info.CCEDiag(E, diag::note_constexpr_float_arithmetic) << LHS.isNaN();
+  return true;
+}
+
 /// Cast an lvalue referring to a base subobject to a derived class, by
 /// truncating the lvalue's path to the given length.
 static bool CastToDerivedClass(EvalInfo &Info, const Expr *E, LValue &Result,
@@ -1615,7 +1786,7 @@ static void expandArray(APValue &Array, unsigned Index) {
   Array.swap(NewValue);
 }
 
-/// Kinds of access we can perform on an object.
+/// Kinds of access we can perform on an object, for diagnostics.
 enum AccessKinds {
   AK_Read,
   AK_Assign,
@@ -2159,6 +2330,124 @@ static bool isOverflowingIntegerType(ASTContext &Ctx, QualType T) {
 }
 
 namespace {
+struct CompoundAssignSubobjectHandler {
+  EvalInfo &Info;
+  const Expr *E;
+  QualType PromotedLHSType;
+  BinaryOperatorKind Opcode;
+  const APValue &RHS;
+
+  static const AccessKinds AccessKind = AK_Assign;
+
+  typedef bool result_type;
+
+  bool checkConst(QualType QT) {
+    // Assigning to a const object has undefined behavior.
+    if (QT.isConstQualified()) {
+      Info.Diag(E, diag::note_constexpr_modify_const_type) << QT;
+      return false;
+    }
+    return true;
+  }
+
+  bool failed() { return false; }
+  bool found(APValue &Subobj, QualType SubobjType) {
+    switch (Subobj.getKind()) {
+    case APValue::Int:
+      return found(Subobj.getInt(), SubobjType);
+    case APValue::Float:
+      return found(Subobj.getFloat(), SubobjType);
+    case APValue::ComplexInt:
+    case APValue::ComplexFloat:
+      // FIXME: Implement complex compound assignment.
+      Info.Diag(E);
+      return false;
+    case APValue::LValue:
+      return foundPointer(Subobj, SubobjType);
+    default:
+      // FIXME: can this happen?
+      Info.Diag(E);
+      return false;
+    }
+  }
+  bool found(APSInt &Value, QualType SubobjType) {
+    if (!checkConst(SubobjType))
+      return false;
+
+    if (!SubobjType->isIntegerType() || !RHS.isInt()) {
+      // We don't support compound assignment on integer-cast-to-pointer
+      // values.
+      Info.Diag(E);
+      return false;
+    }
+
+    APSInt LHS = HandleIntToIntCast(Info, E, PromotedLHSType,
+                                    SubobjType, Value);
+    if (!handleIntIntBinOp(Info, E, LHS, Opcode, RHS.getInt(), LHS))
+      return false;
+    Value = HandleIntToIntCast(Info, E, SubobjType, PromotedLHSType, LHS);
+    return true;
+  }
+  bool found(APFloat &Value, QualType SubobjType) {
+    return checkConst(SubobjType) &&
+           HandleFloatToFloatCast(Info, E, SubobjType, PromotedLHSType,
+                                  Value) &&
+           handleFloatFloatBinOp(Info, E, Value, Opcode, RHS.getFloat()) &&
+           HandleFloatToFloatCast(Info, E, PromotedLHSType, SubobjType, Value);
+  }
+  bool foundPointer(APValue &Subobj, QualType SubobjType) {
+    if (!checkConst(SubobjType))
+      return false;
+
+    QualType PointeeType;
+    if (const PointerType *PT = SubobjType->getAs<PointerType>())
+      PointeeType = PT->getPointeeType();
+
+    if (PointeeType.isNull() || !RHS.isInt() ||
+        (Opcode != BO_Add && Opcode != BO_Sub)) {
+      Info.Diag(E);
+      return false;
+    }
+
+    int64_t Offset = getExtValue(RHS.getInt());
+    if (Opcode == BO_Sub)
+      Offset = -Offset;
+
+    LValue LVal;
+    LVal.setFrom(Info.Ctx, Subobj);
+    if (!HandleLValueArrayAdjustment(Info, E, LVal, PointeeType, Offset))
+      return false;
+    LVal.moveInto(Subobj);
+    return true;
+  }
+  bool foundString(APValue &Subobj, QualType SubobjType, uint64_t Character) {
+    llvm_unreachable("shouldn't encounter string elements here");
+  }
+};
+} // end anonymous namespace
+
+const AccessKinds CompoundAssignSubobjectHandler::AccessKind;
+
+/// Perform a compound assignment of LVal <op>= RVal.
+static bool handleCompoundAssignment(
+    EvalInfo &Info, const Expr *E,
+    const LValue &LVal, QualType LValType, QualType PromotedLValType,
+    BinaryOperatorKind Opcode, const APValue &RVal) {
+  if (LVal.Designator.Invalid)
+    return false;
+
+  if (!Info.getLangOpts().CPlusPlus1y) {
+    Info.Diag(E);
+    return false;
+  }
+
+  CompleteObject Obj = findCompleteObject(Info, E, AK_Assign, LVal, LValType);
+  CompoundAssignSubobjectHandler Handler = { Info, E, PromotedLValType, Opcode,
+                                             RVal };
+  return Obj && findSubobject(Info, E, Obj, LVal.Designator, Handler);
+}
+
+namespace {
 struct IncDecSubobjectHandler {
   EvalInfo &Info;
   const Expr *E;
@@ -2520,6 +2809,9 @@ static EvalStmtResult EvaluateLoopBody(APValue &Result, EvalInfo &Info,
 // Evaluate a statement.
 static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
                                    const Stmt *S) {
+  if (!Info.nextStep(S))
+    return ESR_Failed;
+
   // FIXME: Mark all temporaries in the current frame as destroyed at
   // the end of each full-expression.
   switch (S->getStmtClass()) {
@@ -2774,6 +3066,27 @@ static bool HandleFunctionCall(SourceLocation CallLoc,
     return false;
 
   CallStackFrame Frame(Info, CallLoc, Callee, This, ArgValues.data());
+
+  // For a trivial copy or move assignment, perform an APValue copy. This is
+  // essential for unions, where the operations performed by the assignment
+  // operator cannot be represented as statements.
+  const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Callee);
+  if (MD && MD->isDefaulted() && MD->isTrivial()) {
+    assert(This &&
+           (MD->isCopyAssignmentOperator() || MD->isMoveAssignmentOperator()));
+    LValue RHS;
+    RHS.setFrom(Info.Ctx, ArgValues[0]);
+    APValue RHSValue;
+    if (!handleLValueToRValueConversion(Info, Args[0], Args[0]->getType(),
+                                        RHS, RHSValue))
+      return false;
+    if (!handleAssignment(Info, Args[0], *This, MD->getThisType(Info.Ctx),
+                          RHSValue))
+      return false;
+    This->moveInto(Result);
+    return true;
+  }
+
   EvalStmtResult ESR = EvaluateStmt(Result, Info, Body);
   if (ESR == ESR_Succeeded) {
     if (Callee->getResultType()->isVoidType())
@@ -3577,11 +3890,9 @@ bool LValueExprEvaluator::VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
   APSInt Index;
   if (!EvaluateInteger(E->getIdx(), Index, Info))
     return false;
-  int64_t IndexValue
-    = Index.isSigned() ? Index.getSExtValue()
-                       : static_cast<int64_t>(Index.getZExtValue());
 
-  return HandleLValueArrayAdjustment(Info, E, Result, E->getType(), IndexValue);
+  return HandleLValueArrayAdjustment(Info, E, Result, E->getType(),
+                                     getExtValue(Index));
 }
 
 bool LValueExprEvaluator::VisitUnaryDeref(const UnaryOperator *E) {
@@ -3635,14 +3946,10 @@ bool LValueExprEvaluator::VisitCompoundAssignOperator(
   if (!Evaluate(RHS, this->Info, CAO->getRHS()))
     return false;
 
-  // FIXME:
-  //return handleCompoundAssignment(
-  //    this->Info, CAO,
-  //    Result, CAO->getLHS()->getType(), CAO->getComputationLHSType(),
-  //    RHS, CAO->getRHS()->getType(),
-  //    CAO->getOpForCompoundAssignment(CAO->getOpcode()),
-  //    CAO->getComputationResultType());
-  return Error(CAO);
+  return handleCompoundAssignment(
+      this->Info, CAO,
+      Result, CAO->getLHS()->getType(), CAO->getComputationLHSType(),
+      CAO->getOpForCompoundAssignment(CAO->getOpcode()), RHS);
 }
 
 bool LValueExprEvaluator::VisitBinAssign(const BinaryOperator *E) {
@@ -3738,9 +4045,8 @@ bool PointerExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   llvm::APSInt Offset;
   if (!EvaluateInteger(IExp, Offset, Info) || !EvalPtrOK)
     return false;
-  int64_t AdditionalOffset
-    = Offset.isSigned() ? Offset.getSExtValue()
-                        : static_cast<int64_t>(Offset.getZExtValue());
+
+  int64_t AdditionalOffset = getExtValue(Offset);
   if (E->getOpcode() == BO_Sub)
     AdditionalOffset = -AdditionalOffset;
 
@@ -5150,29 +5456,6 @@ static bool HasSameBase(const LValue &A, const LValue &B) {
          A.getLValueCallIndex() == B.getLValueCallIndex();
 }
 
-/// Perform the given integer operation, which is known to need at most BitWidth
-/// bits, and check for overflow in the original type (if that type was not an
-/// unsigned type).
-template<typename Operation>
-static APSInt CheckedIntArithmetic(EvalInfo &Info, const Expr *E,
-                                   const APSInt &LHS, const APSInt &RHS,
-                                   unsigned BitWidth, Operation Op) {
-  if (LHS.isUnsigned())
-    return Op(LHS, RHS);
-
-  APSInt Value(Op(LHS.extend(BitWidth), RHS.extend(BitWidth)), false);
-  APSInt Result = Value.trunc(LHS.getBitWidth());
-  if (Result.extend(BitWidth) != Value) {
-    if (Info.getIntOverflowCheckMode())
-      Info.Ctx.getDiagnostics().Report(E->getExprLoc(),
-        diag::warn_integer_constant_overflow)
-          << Result.toString(10) << E->getType();
-    else
-      HandleOverflow(Info, E, Value, E->getType());
-  }
-  return Result;
-}
-
 namespace {
 
 /// \brief Data recursive integer evaluator of certain binary operators.
@@ -5417,108 +5700,20 @@ bool DataRecursiveIntBinOpEvaluator::
     Result = APValue(LHSAddrExpr, RHSAddrExpr);
     return true;
   }
-  
-  // All the following cases expect both operands to be an integer
+
+  // All the remaining cases expect both operands to be an integer
   if (!LHSVal.isInt() || !RHSVal.isInt())
     return Error(E);
-  
-  const APSInt &LHS = LHSVal.getInt();
-  APSInt RHS = RHSVal.getInt();
-  
-  switch (E->getOpcode()) {
-    default:
-      return Error(E);
-    case BO_Mul:
-      return Success(CheckedIntArithmetic(Info, E, LHS, RHS,
-                                          LHS.getBitWidth() * 2,
-                                          std::multiplies<APSInt>()), E,
-                     Result);
-    case BO_Add:
-      return Success(CheckedIntArithmetic(Info, E, LHS, RHS,
-                                          LHS.getBitWidth() + 1,
-                                          std::plus<APSInt>()), E, Result);
-    case BO_Sub:
-      return Success(CheckedIntArithmetic(Info, E, LHS, RHS,
-                                          LHS.getBitWidth() + 1,
-                                          std::minus<APSInt>()), E, Result);
-    case BO_And: return Success(LHS & RHS, E, Result);
-    case BO_Xor: return Success(LHS ^ RHS, E, Result);
-    case BO_Or:  return Success(LHS | RHS, E, Result);
-    case BO_Div:
-    case BO_Rem:
-      if (RHS == 0)
-        return Error(E, diag::note_expr_divide_by_zero);
-      // Check for overflow case: INT_MIN / -1 or INT_MIN % -1. The latter is
-      // not actually undefined behavior in C++11 due to a language defect.
-      if (RHS.isNegative() && RHS.isAllOnesValue() &&
-          LHS.isSigned() && LHS.isMinSignedValue())
-        HandleOverflow(Info, E, -LHS.extend(LHS.getBitWidth() + 1), E->getType());
-      return Success(E->getOpcode() == BO_Rem ? LHS % RHS : LHS / RHS, E,
-                     Result);
-    case BO_Shl: {
-      if (Info.getLangOpts().OpenCL)
-        // OpenCL 6.3j: shift values are effectively % word size of LHS.
-        RHS &= APSInt(llvm::APInt(RHS.getBitWidth(),
-                      static_cast<uint64_t>(LHS.getBitWidth() - 1)),
-                      RHS.isUnsigned());
-      else if (RHS.isSigned() && RHS.isNegative()) {
-        // During constant-folding, a negative shift is an opposite shift. Such
-        // a shift is not a constant expression.
-        CCEDiag(E, diag::note_constexpr_negative_shift) << RHS;
-        RHS = -RHS;
-        goto shift_right;
-      }
-      
-    shift_left:
-      // C++11 [expr.shift]p1: Shift width must be less than the bit width of
-      // the shifted type.
-      unsigned SA = (unsigned) RHS.getLimitedValue(LHS.getBitWidth()-1);
-      if (SA != RHS) {
-        CCEDiag(E, diag::note_constexpr_large_shift)
-        << RHS << E->getType() << LHS.getBitWidth();
-      } else if (LHS.isSigned()) {
-        // C++11 [expr.shift]p2: A signed left shift must have a non-negative
-        // operand, and must not overflow the corresponding unsigned type.
-        if (LHS.isNegative())
-          CCEDiag(E, diag::note_constexpr_lshift_of_negative) << LHS;
-        else if (LHS.countLeadingZeros() < SA)
-          CCEDiag(E, diag::note_constexpr_lshift_discards);
-      }
-      
-      return Success(LHS << SA, E, Result);
-    }
-    case BO_Shr: {
-      if (Info.getLangOpts().OpenCL)
-        // OpenCL 6.3j: shift values are effectively % word size of LHS.
-        RHS &= APSInt(llvm::APInt(RHS.getBitWidth(),
-                      static_cast<uint64_t>(LHS.getBitWidth() - 1)),
-                      RHS.isUnsigned());
-      else if (RHS.isSigned() && RHS.isNegative()) {
-        // During constant-folding, a negative shift is an opposite shift. Such a
-        // shift is not a constant expression.
-        CCEDiag(E, diag::note_constexpr_negative_shift) << RHS;
-        RHS = -RHS;
-        goto shift_left;
-      }
-      
-    shift_right:
-      // C++11 [expr.shift]p1: Shift width must be less than the bit width of the
-      // shifted type.
-      unsigned SA = (unsigned) RHS.getLimitedValue(LHS.getBitWidth()-1);
-      if (SA != RHS)
-        CCEDiag(E, diag::note_constexpr_large_shift)
-        << RHS << E->getType() << LHS.getBitWidth();
-      
-      return Success(LHS >> SA, E, Result);
-    }
-      
-    case BO_LT: return Success(LHS < RHS, E, Result);
-    case BO_GT: return Success(LHS > RHS, E, Result);
-    case BO_LE: return Success(LHS <= RHS, E, Result);
-    case BO_GE: return Success(LHS >= RHS, E, Result);
-    case BO_EQ: return Success(LHS == RHS, E, Result);
-    case BO_NE: return Success(LHS != RHS, E, Result);
-  }
+
+  // Set up the width and signedness manually, in case it can't be deduced
+  // from the operation we're performing.
+  // FIXME: Don't do this in the cases where we can deduce it.
+  APSInt Value(Info.Ctx.getIntWidth(E->getType()),
+               E->getType()->isUnsignedIntegerOrEnumerationType());
+  if (!handleIntIntBinOp(Info, E, LHSVal.getInt(), E->getOpcode(),
+                         RHSVal.getInt(), Value))
+    return false;
+  return Success(Value, E, Result);
 }
 
 void DataRecursiveIntBinOpEvaluator::process(EvalResult &Result) {
@@ -6000,7 +6195,7 @@ bool IntExprEvaluator::VisitOffsetOfExpr(const OffsetOfExpr *OOE) {
       CurrentType = AT->getElementType();
       CharUnits ElementSize = Info.Ctx.getTypeSizeInChars(CurrentType);
       Result += IdxResult.getSExtValue() * ElementSize;
-        break;
+      break;
     }
 
     case OffsetOfExpr::OffsetOfNode::Field: {
@@ -6431,28 +6626,8 @@ bool FloatExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   bool LHSOK = EvaluateFloat(E->getLHS(), Result, Info);
   if (!LHSOK && !Info.keepEvaluatingAfterFailure())
     return false;
-  if (!EvaluateFloat(E->getRHS(), RHS, Info) || !LHSOK)
-    return false;
-
-  switch (E->getOpcode()) {
-  default: return Error(E);
-  case BO_Mul:
-    Result.multiply(RHS, APFloat::rmNearestTiesToEven);
-    break;
-  case BO_Add:
-    Result.add(RHS, APFloat::rmNearestTiesToEven);
-    break;
-  case BO_Sub:
-    Result.subtract(RHS, APFloat::rmNearestTiesToEven);
-    break;
-  case BO_Div:
-    Result.divide(RHS, APFloat::rmNearestTiesToEven);
-    break;
-  }
-
-  if (Result.isInfinity() || Result.isNaN())
-    CCEDiag(E, diag::note_constexpr_float_arithmetic) << Result.isNaN();
-  return true;
+  return EvaluateFloat(E->getRHS(), RHS, Info) && LHSOK &&
+         handleFloatFloatBinOp(Info, E, Result, E->getOpcode(), RHS);
 }
 
 bool FloatExprEvaluator::VisitFloatingLiteral(const FloatingLiteral *E) {

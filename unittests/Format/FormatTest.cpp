@@ -1606,6 +1606,24 @@ TEST_F(FormatTest, PreventConfusingIndents) {
                "                           ddd);");
 }
 
+TEST_F(FormatTest, LineBreakingInBinaryExpressions) {
+  verifyFormat(
+      "bool aaaaaaa =\n"
+      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(aaa).aaaaaaaaaaaaaaaaaaa() ||\n"
+      "    bbbbbbbb();");
+  verifyFormat("bool aaaaaaaaaaaaaaaaaaaaa =\n"
+               "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa != bbbbbbbbbbbbbbbbbb &&\n"
+               "    ccccccccc == ddddddddddd;");
+
+  verifyFormat("aaaaaa = aaaaaaa(aaaaaaa, // break\n"
+               "                 aaaaaa) &&\n"
+               "         bbbbbb && cccccc;");
+  verifyFormat("Whitespaces.addUntouchableComment(\n"
+               "    SourceMgr.getSpellingColumnNumber(\n"
+               "        TheLine.Last->FormatTok.Tok.getLocation()) -\n"
+               "    1);");
+}
+
 TEST_F(FormatTest, ExpressionIndentation) {
   verifyFormat("bool value = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +\n"
                "                     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +\n"
@@ -2338,11 +2356,11 @@ TEST_F(FormatTest, WrapsAtNestedNameSpecifiers) {
       "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
       "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa());");
 
-  // FIXME: Should we have an extra indent after the second break?
+  // FIXME: Should we have the extra indent after the second break?
   verifyFormat(
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::\n"
       "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::\n"
-      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
+      "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
 
   // FIXME: Look into whether we should indent 4 from the start or 4 from
   // "bbbbb..." here instead of what we are doing now.
@@ -2399,14 +2417,18 @@ TEST_F(FormatTest, UnderstandsBinaryOperators) {
 
 TEST_F(FormatTest, UnderstandsPointersToMembers) {
   verifyFormat("int A::*x;");
-  // FIXME: Recognize pointers to member functions.
-  //verifyFormat("int (S::*func)(void *);");
-  verifyFormat("int(S::*func)(void *);");
-  verifyFormat("(a->*f)();");
-  verifyFormat("a->*x;");
-  verifyFormat("(a.*f)();");
-  verifyFormat("((*a).*f)();");
-  verifyFormat("a.*x;");
+  verifyFormat("int (S::*func)(void *);");
+  verifyFormat("typedef bool *(Class::*Member)() const;");
+  verifyFormat("void f() {\n"
+               "  (a->*f)();\n"
+               "  a->*x;\n"
+               "  (a.*f)();\n"
+               "  ((*a).*f)();\n"
+               "  a.*x;\n"
+               "}");
+  FormatStyle Style = getLLVMStyle();
+  Style.PointerBindsToType = true;
+  verifyFormat("typedef bool* (Class::*Member)() const;", Style);
 }
 
 TEST_F(FormatTest, UnderstandsUnaryOperators) {
@@ -2598,6 +2620,9 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyIndependentOfContext("A = new SomeType *[Length]();");
   verifyGoogleFormat("A = new SomeType* [Length]();");
   verifyGoogleFormat("A = new SomeType* [Length];");
+  FormatStyle PointerLeft = getLLVMStyle();
+  PointerLeft.PointerBindsToType = true;
+  verifyFormat("delete *x;", PointerLeft);
 }
 
 TEST_F(FormatTest, UnderstandsEllipsis) {
@@ -3904,6 +3929,114 @@ TEST_F(FormatTest, DoNotCreateUnreasonableUnwrappedLines) {
                "  f();\n"
                "  g();\n"
                "}");
+}
+
+bool operator==(const FormatStyle &L, const FormatStyle &R) {
+  return L.AccessModifierOffset == R.AccessModifierOffset &&
+         L.AlignEscapedNewlinesLeft == R.AlignEscapedNewlinesLeft &&
+         L.AllowAllParametersOfDeclarationOnNextLine ==
+             R.AllowAllParametersOfDeclarationOnNextLine &&
+         L.AllowShortIfStatementsOnASingleLine ==
+             R.AllowShortIfStatementsOnASingleLine &&
+         L.BinPackParameters == R.BinPackParameters &&
+         L.ColumnLimit == R.ColumnLimit &&
+         L.ConstructorInitializerAllOnOneLineOrOnePerLine ==
+             R.ConstructorInitializerAllOnOneLineOrOnePerLine &&
+         L.DerivePointerBinding == R.DerivePointerBinding &&
+         L.IndentCaseLabels == R.IndentCaseLabels &&
+         L.MaxEmptyLinesToKeep == R.MaxEmptyLinesToKeep &&
+         L.ObjCSpaceBeforeProtocolList == R.ObjCSpaceBeforeProtocolList &&
+         L.PenaltyExcessCharacter == R.PenaltyExcessCharacter &&
+         L.PenaltyReturnTypeOnItsOwnLine == R.PenaltyReturnTypeOnItsOwnLine &&
+         L.PointerBindsToType == R.PointerBindsToType &&
+         L.SpacesBeforeTrailingComments == R.SpacesBeforeTrailingComments &&
+         L.Standard == R.Standard;
+}
+
+bool allStylesEqual(ArrayRef<FormatStyle> Styles) {
+  for (size_t i = 1; i < Styles.size(); ++i)
+    if (!(Styles[0] == Styles[i]))
+      return false;
+  return true;
+}
+
+TEST_F(FormatTest, GetsPredefinedStyleByName) {
+  FormatStyle LLVMStyles[] = { getLLVMStyle(), getPredefinedStyle("LLVM"),
+                               getPredefinedStyle("llvm"),
+                               getPredefinedStyle("lLvM") };
+  EXPECT_TRUE(allStylesEqual(LLVMStyles));
+
+  FormatStyle GoogleStyles[] = { getGoogleStyle(), getPredefinedStyle("Google"),
+                                 getPredefinedStyle("google"),
+                                 getPredefinedStyle("gOOgle") };
+  EXPECT_TRUE(allStylesEqual(GoogleStyles));
+
+  FormatStyle ChromiumStyles[] = { getChromiumStyle(),
+                                   getPredefinedStyle("Chromium"),
+                                   getPredefinedStyle("chromium"),
+                                   getPredefinedStyle("chROmiUM") };
+  EXPECT_TRUE(allStylesEqual(ChromiumStyles));
+
+  FormatStyle MozillaStyles[] = { getMozillaStyle(),
+                                  getPredefinedStyle("Mozilla"),
+                                  getPredefinedStyle("mozilla"),
+                                  getPredefinedStyle("moZilla") };
+  EXPECT_TRUE(allStylesEqual(MozillaStyles));
+}
+
+TEST_F(FormatTest, ParsesConfiguration) {
+  FormatStyle Style = {};
+#define CHECK_PARSE(TEXT, FIELD, VALUE)                                        \
+  EXPECT_NE(VALUE, Style.FIELD);                                               \
+  EXPECT_EQ(0, parseConfiguration(TEXT, &Style).value());                      \
+  EXPECT_EQ(VALUE, Style.FIELD)
+
+#define CHECK_PARSE_BOOL(FIELD)                                                \
+  Style.FIELD = false;                                                         \
+  EXPECT_EQ(0, parseConfiguration(#FIELD ": true", &Style).value());           \
+  EXPECT_EQ(true, Style.FIELD);                                                \
+  EXPECT_EQ(0, parseConfiguration(#FIELD ": false", &Style).value());          \
+  EXPECT_EQ(false, Style.FIELD);
+
+  CHECK_PARSE_BOOL(AlignEscapedNewlinesLeft);
+  CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
+  CHECK_PARSE_BOOL(AllowShortIfStatementsOnASingleLine);
+  CHECK_PARSE_BOOL(BinPackParameters);
+  CHECK_PARSE_BOOL(ConstructorInitializerAllOnOneLineOrOnePerLine);
+  CHECK_PARSE_BOOL(DerivePointerBinding);
+  CHECK_PARSE_BOOL(IndentCaseLabels);
+  CHECK_PARSE_BOOL(ObjCSpaceBeforeProtocolList);
+  CHECK_PARSE_BOOL(PointerBindsToType);
+
+  CHECK_PARSE("AccessModifierOffset: -1234", AccessModifierOffset, -1234);
+  CHECK_PARSE("ColumnLimit: 1234", ColumnLimit, 1234u);
+  CHECK_PARSE("MaxEmptyLinesToKeep: 1234", MaxEmptyLinesToKeep, 1234u);
+  CHECK_PARSE("PenaltyExcessCharacter: 1234", PenaltyExcessCharacter, 1234u);
+  CHECK_PARSE("PenaltyReturnTypeOnItsOwnLine: 1234",
+              PenaltyReturnTypeOnItsOwnLine, 1234u);
+  CHECK_PARSE("SpacesBeforeTrailingComments: 1234",
+              SpacesBeforeTrailingComments, 1234u);
+
+  Style.Standard = FormatStyle::LS_Auto;
+  CHECK_PARSE("Standard: C++03", Standard, FormatStyle::LS_Cpp03);
+  CHECK_PARSE("Standard: C++11", Standard, FormatStyle::LS_Cpp11);
+  CHECK_PARSE("Standard: Auto", Standard, FormatStyle::LS_Auto);
+
+  Style.ColumnLimit = 123;
+  FormatStyle BaseStyle = getLLVMStyle();
+  CHECK_PARSE("BasedOnStyle: LLVM", ColumnLimit, BaseStyle.ColumnLimit);
+  CHECK_PARSE("BasedOnStyle: LLVM\nColumnLimit: 1234", ColumnLimit, 1234u);
+
+#undef CHECK_PARSE
+#undef CHECK_PARSE_BOOL
+}
+
+TEST_F(FormatTest, ConfigurationRoundTripTest) {
+  FormatStyle Style = getLLVMStyle();
+  std::string YAML = configurationAsText(Style);
+  FormatStyle ParsedStyle = {};
+  EXPECT_EQ(0, parseConfiguration(YAML, &ParsedStyle).value());
+  EXPECT_EQ(Style, ParsedStyle);
 }
 
 } // end namespace tooling
