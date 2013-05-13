@@ -58,6 +58,7 @@ enum FoundationClass {
   FC_NSArray,
   FC_NSDictionary,
   FC_NSEnumerator,
+  FC_NSNull,
   FC_NSOrderedSet,
   FC_NSSet,
   FC_NSString
@@ -69,6 +70,7 @@ static FoundationClass findKnownClass(const ObjCInterfaceDecl *ID) {
     Classes["NSArray"] = FC_NSArray;
     Classes["NSDictionary"] = FC_NSDictionary;
     Classes["NSEnumerator"] = FC_NSEnumerator;
+    Classes["NSNull"] = FC_NSNull;
     Classes["NSOrderedSet"] = FC_NSOrderedSet;
     Classes["NSSet"] = FC_NSSet;
     Classes["NSString"] = FC_NSString;
@@ -88,20 +90,53 @@ static FoundationClass findKnownClass(const ObjCInterfaceDecl *ID) {
 //===----------------------------------------------------------------------===//
 
 namespace {
-  class NilArgChecker : public Checker<check::PreObjCMessage> {
+  class NilArgChecker : public Checker<check::PreObjCMessage,
+                                       check::PostStmt<ObjCDictionaryLiteral>,
+                                       check::PostStmt<ObjCArrayLiteral> > {
     mutable OwningPtr<APIMisuse> BT;
 
-    void WarnIfNilArg(CheckerContext &C,
-                    const ObjCMethodCall &msg, unsigned Arg,
-                    FoundationClass Class,
-                    bool CanBeSubscript = false) const;
+    void warnIfNilExpr(const Expr *E,
+                       const char *Msg,
+                       CheckerContext &C) const;
+
+    void warnIfNilArg(CheckerContext &C,
+                      const ObjCMethodCall &msg, unsigned Arg,
+                      FoundationClass Class,
+                      bool CanBeSubscript = false) const;
+
+    void generateBugReport(ExplodedNode *N,
+                           llvm::raw_svector_ostream &os,
+                           SourceRange Range,
+                           const Expr *Expr,
+                           CheckerContext &C) const;
 
   public:
     void checkPreObjCMessage(const ObjCMethodCall &M, CheckerContext &C) const;
+    void checkPostStmt(const ObjCDictionaryLiteral *DL,
+                       CheckerContext &C) const;
+    void checkPostStmt(const ObjCArrayLiteral *AL,
+                       CheckerContext &C) const;
   };
 }
 
-void NilArgChecker::WarnIfNilArg(CheckerContext &C,
+void NilArgChecker::warnIfNilExpr(const Expr *E,
+                                  const char *Msg,
+                                  CheckerContext &C) const {
+  ProgramStateRef State = C.getState();
+  SVal SV = State->getSVal(E, C.getLocationContext());
+  if (State->isNull(SV).isConstrainedTrue()) {
+
+    if (ExplodedNode *N = C.generateSink()) {
+      SmallString<128> sbuf;
+      llvm::raw_svector_ostream os(sbuf);
+      os << Msg;
+      generateBugReport(N, os, E->getSourceRange(), E, C);
+    }
+    
+  }
+}
+
+void NilArgChecker::warnIfNilArg(CheckerContext &C,
                                  const ObjCMethodCall &msg,
                                  unsigned int Arg,
                                  FoundationClass Class,
@@ -111,9 +146,6 @@ void NilArgChecker::WarnIfNilArg(CheckerContext &C,
   if (!State->isNull(msg.getArgSVal(Arg)).isConstrainedTrue())
       return;
       
-  if (!BT)
-    BT.reset(new APIMisuse("nil argument"));
-
   if (ExplodedNode *N = C.generateSink()) {
     SmallString<128> sbuf;
     llvm::raw_svector_ostream os(sbuf);
@@ -147,12 +179,24 @@ void NilArgChecker::WarnIfNilArg(CheckerContext &C,
         << msg.getSelector().getAsString() << "' cannot be nil";
       }
     }
-
-    BugReport *R = new BugReport(*BT, os.str(), N);
-    R->addRange(msg.getArgSourceRange(Arg));
-    bugreporter::trackNullOrUndefValue(N, msg.getArgExpr(Arg), *R);
-    C.emitReport(R);
+    
+    generateBugReport(N, os, msg.getArgSourceRange(Arg),
+                      msg.getArgExpr(Arg), C);
   }
+}
+
+void NilArgChecker::generateBugReport(ExplodedNode *N,
+                                      llvm::raw_svector_ostream &os,
+                                      SourceRange Range,
+                                      const Expr *Expr,
+                                      CheckerContext &C) const {
+  if (!BT)
+    BT.reset(new APIMisuse("nil argument"));
+
+  BugReport *R = new BugReport(*BT, os.str(), N);
+  R->addRange(Range);
+  bugreporter::trackNullOrUndefValue(N, Expr, *R);
+  C.emitReport(R);
 }
 
 void NilArgChecker::checkPreObjCMessage(const ObjCMethodCall &msg,
@@ -223,26 +267,41 @@ void NilArgChecker::checkPreObjCMessage(const ObjCMethodCall &msg,
     if (S.getNameForSlot(0).equals("dictionaryWithObject") &&
         S.getNameForSlot(1).equals("forKey")) {
       Arg = 0;
-      WarnIfNilArg(C, msg, /* Arg */1, Class);
+      warnIfNilArg(C, msg, /* Arg */1, Class);
     } else if (S.getNameForSlot(0).equals("setObject") &&
                S.getNameForSlot(1).equals("forKey")) {
       Arg = 0;
-      WarnIfNilArg(C, msg, /* Arg */1, Class);
+      warnIfNilArg(C, msg, /* Arg */1, Class);
     } else if (S.getNameForSlot(0).equals("setObject") &&
                S.getNameForSlot(1).equals("forKeyedSubscript")) {
       CanBeSubscript = true;
       Arg = 0;
-      WarnIfNilArg(C, msg, /* Arg */1, Class, CanBeSubscript);
+      warnIfNilArg(C, msg, /* Arg */1, Class, CanBeSubscript);
     } else if (S.getNameForSlot(0).equals("removeObjectForKey")) {
       Arg = 0;
     }
   }
 
-
   // If argument is '0', report a warning.
   if ((Arg != InvalidArgIndex))
-    WarnIfNilArg(C, msg, Arg, Class, CanBeSubscript);
+    warnIfNilArg(C, msg, Arg, Class, CanBeSubscript);
 
+}
+
+void NilArgChecker::checkPostStmt(const ObjCArrayLiteral *AL,
+                                  CheckerContext &C) const {
+  for (unsigned i = 0; i < AL->getNumElements(); ++i) {
+    warnIfNilExpr(AL->getElement(i), "Array element cannot be nil", C);
+  }
+}
+
+void NilArgChecker::checkPostStmt(const ObjCDictionaryLiteral *DL,
+                                  CheckerContext &C) const {
+  for (unsigned i = 0; i < DL->getNumElements(); ++i) {
+    ObjCDictionaryElement Element = DL->getKeyValueElement(i);
+    warnIfNilExpr(Element.Key, "Dictionary key cannot be nil", C);
+    warnIfNilExpr(Element.Value, "Dictionary value cannot be nil", C);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -845,6 +904,7 @@ class ObjCNonNilReturnValueChecker
     mutable bool Initialized;
     mutable Selector ObjectAtIndex;
     mutable Selector ObjectAtIndexedSubscript;
+    mutable Selector NullSelector;
 
 public:
   ObjCNonNilReturnValueChecker() : Initialized(false) {}
@@ -870,6 +930,7 @@ void ObjCNonNilReturnValueChecker::checkPostObjCMessage(const ObjCMethodCall &M,
     ASTContext &Ctx = C.getASTContext();
     ObjectAtIndex = GetUnarySelector("objectAtIndex", Ctx);
     ObjectAtIndexedSubscript = GetUnarySelector("objectAtIndexedSubscript", Ctx);
+    NullSelector = GetNullarySelector("null", Ctx);
   }
 
   // Check the receiver type.
@@ -889,13 +950,22 @@ void ObjCNonNilReturnValueChecker::checkPostObjCMessage(const ObjCMethodCall &M,
       State = assumeExprIsNonNull(M.getOriginExpr(), State, C);
     }
 
+    FoundationClass Cl = findKnownClass(Interface);
+
     // Objects returned from
     // [NSArray|NSOrderedSet]::[ObjectAtIndex|ObjectAtIndexedSubscript]
     // are never 'nil'.
-    FoundationClass Cl = findKnownClass(Interface);
     if (Cl == FC_NSArray || Cl == FC_NSOrderedSet) {
       Selector Sel = M.getSelector();
       if (Sel == ObjectAtIndex || Sel == ObjectAtIndexedSubscript) {
+        // Go ahead and assume the value is non-nil.
+        State = assumeExprIsNonNull(M.getOriginExpr(), State, C);
+      }
+    }
+
+    // Objects returned from [NSNull null] are not nil.
+    if (Cl == FC_NSNull) {
+      if (M.getSelector() == NullSelector) {
         // Go ahead and assume the value is non-nil.
         State = assumeExprIsNonNull(M.getOriginExpr(), State, C);
       }

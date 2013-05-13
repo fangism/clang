@@ -93,6 +93,53 @@ struct FormatStyle {
   /// \brief If \c true, aligns escaped newlines as far left as possible.
   /// Otherwise puts them into the right-most column.
   bool AlignEscapedNewlinesLeft;
+
+  /// \brief The number of characters to use for indentation.
+  unsigned IndentWidth;
+
+  /// \brief If true, \c IndentWidth consecutive spaces will be replaced with
+  /// tab characters.
+  bool UseTab;
+
+  /// \brief Different ways to attach braces to their surrounding context.
+  enum BraceBreakingStyle {
+    /// Always attach braces to surrounding context.
+    BS_Attach,
+    /// Like \c Attach, but break before braces on function, namespace and
+    /// class definitions.
+    BS_Linux,
+    /// Like \c Attach, but break before function definitions.
+    BS_Stroustrup
+  };
+
+  /// \brief The brace breaking style to use.
+  BraceBreakingStyle BreakBeforeBraces;
+
+  bool operator==(const FormatStyle &R) const {
+    return AccessModifierOffset == R.AccessModifierOffset &&
+           AlignEscapedNewlinesLeft == R.AlignEscapedNewlinesLeft &&
+           AllowAllParametersOfDeclarationOnNextLine ==
+               R.AllowAllParametersOfDeclarationOnNextLine &&
+           AllowShortIfStatementsOnASingleLine ==
+               R.AllowShortIfStatementsOnASingleLine &&
+           BinPackParameters == R.BinPackParameters &&
+           ColumnLimit == R.ColumnLimit &&
+           ConstructorInitializerAllOnOneLineOrOnePerLine ==
+               R.ConstructorInitializerAllOnOneLineOrOnePerLine &&
+           DerivePointerBinding == R.DerivePointerBinding &&
+           IndentCaseLabels == R.IndentCaseLabels &&
+           MaxEmptyLinesToKeep == R.MaxEmptyLinesToKeep &&
+           ObjCSpaceBeforeProtocolList == R.ObjCSpaceBeforeProtocolList &&
+           PenaltyExcessCharacter == R.PenaltyExcessCharacter &&
+           PenaltyReturnTypeOnItsOwnLine == R.PenaltyReturnTypeOnItsOwnLine &&
+           PointerBindsToType == R.PointerBindsToType &&
+           SpacesBeforeTrailingComments == R.SpacesBeforeTrailingComments &&
+           Standard == R.Standard &&
+           IndentWidth == R.IndentWidth &&
+           UseTab == R.UseTab &&
+           BreakBeforeBraces == R.BreakBeforeBraces;
+  }
+
 };
 
 /// \brief Returns a format style complying with the LLVM coding standards:

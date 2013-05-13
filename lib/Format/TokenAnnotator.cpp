@@ -390,8 +390,11 @@ private:
           CurrentToken->Type = TT_PointerOrReference;
         consumeToken();
       }
-      if (CurrentToken)
+      if (CurrentToken) {
         CurrentToken->Type = TT_OverloadedOperatorLParen;
+        if (CurrentToken->Parent->Type == TT_BinaryOperator)
+          CurrentToken->Parent->Type = TT_OverloadedOperator;
+      }
       break;
     case tok::question:
       parseConditional();
@@ -588,6 +591,7 @@ private:
       }
     } else if (Current.isOneOf(tok::kw_return, tok::kw_throw) ||
                (Current.is(tok::l_paren) && !Line.MustBeDeclaration &&
+                !Line.InPPDirective &&
                 (!Current.Parent || Current.Parent->isNot(tok::kw_for)))) {
       Contexts.back().IsExpression = true;
     } else if (Current.isOneOf(tok::r_paren, tok::greater, tok::comma)) {

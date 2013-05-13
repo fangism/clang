@@ -13,6 +13,7 @@
 
 #include "CGDebugInfo.h"
 #include "CGBlocks.h"
+#include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
@@ -1188,17 +1189,92 @@ CollectTemplateParams(const TemplateParameterList *TPList,
   for (unsigned i = 0, e = TAList.size(); i != e; ++i) {
     const TemplateArgument &TA = TAList[i];
     const NamedDecl *ND = TPList->getParam(i);
-    if (TA.getKind() == TemplateArgument::Type) {
+    switch (TA.getKind()) {
+    case TemplateArgument::Type: {
       llvm::DIType TTy = getOrCreateType(TA.getAsType(), Unit);
       llvm::DITemplateTypeParameter TTP =
         DBuilder.createTemplateTypeParameter(TheCU, ND->getName(), TTy);
       TemplateParams.push_back(TTP);
-    } else if (TA.getKind() == TemplateArgument::Integral) {
+    } break;
+    case TemplateArgument::Integral: {
       llvm::DIType TTy = getOrCreateType(TA.getIntegralType(), Unit);
       llvm::DITemplateValueParameter TVP =
-        DBuilder.createTemplateValueParameter(TheCU, ND->getName(), TTy,
-                                             TA.getAsIntegral().getZExtValue());
-      TemplateParams.push_back(TVP);          
+          DBuilder.createTemplateValueParameter(
+              TheCU, ND->getName(), TTy,
+              llvm::ConstantInt::get(CGM.getLLVMContext(), TA.getAsIntegral()));
+      TemplateParams.push_back(TVP);
+    } break;
+    case TemplateArgument::Declaration: {
+      const ValueDecl *D = TA.getAsDecl();
+      bool InstanceMember = D->isCXXInstanceMember();
+      QualType T = InstanceMember
+                       ? CGM.getContext().getMemberPointerType(
+                             D->getType(), cast<RecordDecl>(D->getDeclContext())
+                                               ->getTypeForDecl())
+                       : CGM.getContext().getPointerType(D->getType());
+      llvm::DIType TTy = getOrCreateType(T, Unit);
+      llvm::Value *V = 0;
+      // Variable pointer template parameters have a value that is the address
+      // of the variable.
+      if (const VarDecl *VD = dyn_cast<VarDecl>(D))
+        V = CGM.GetAddrOfGlobalVar(VD);
+      // Member function pointers have special support for building them, though
+      // this is currently unsupported in LLVM CodeGen.
+      if (InstanceMember) {
+        if (const CXXMethodDecl *method = dyn_cast<CXXMethodDecl>(D))
+          V = CGM.getCXXABI().EmitMemberPointer(method);
+      } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+        V = CGM.GetAddrOfFunction(FD);
+      // Member data pointers have special handling too to compute the fixed
+      // offset within the object.
+      if (isa<FieldDecl>(D)) {
+        // These five lines (& possibly the above member function pointer
+        // handling) might be able to be refactored to use similar code in
+        // CodeGenModule::getMemberPointerConstant
+        uint64_t fieldOffset = CGM.getContext().getFieldOffset(D);
+        CharUnits chars =
+            CGM.getContext().toCharUnitsFromBits((int64_t) fieldOffset);
+        V = CGM.getCXXABI().EmitMemberDataPointer(
+            cast<MemberPointerType>(T.getTypePtr()), chars);
+      }
+      llvm::DITemplateValueParameter TVP =
+          DBuilder.createTemplateValueParameter(TheCU, ND->getName(), TTy, V);
+      TemplateParams.push_back(TVP);
+    } break;
+    case TemplateArgument::NullPtr: {
+      QualType T = TA.getNullPtrType();
+      llvm::DIType TTy = getOrCreateType(T, Unit);
+      llvm::Value *V = 0;
+      // Special case member data pointer null values since they're actually -1
+      // instead of zero.
+      if (const MemberPointerType *MPT =
+              dyn_cast<MemberPointerType>(T.getTypePtr()))
+        // But treat member function pointers as simple zero integers because
+        // it's easier than having a special case in LLVM's CodeGen. If LLVM
+        // CodeGen grows handling for values of non-null member function
+        // pointers then perhaps we could remove this special case and rely on
+        // EmitNullMemberPointer for member function pointers.
+        if (MPT->isMemberDataPointer())
+          V = CGM.getCXXABI().EmitNullMemberPointer(MPT);
+      if (!V)
+        V = llvm::ConstantInt::get(CGM.Int8Ty, 0);
+      llvm::DITemplateValueParameter TVP =
+          DBuilder.createTemplateValueParameter(TheCU, ND->getName(), TTy, V);
+      TemplateParams.push_back(TVP);
+    } break;
+    case TemplateArgument::Template:
+      // We could support this with the GCC extension
+      // DW_TAG_GNU_template_template_param
+      break;
+    case TemplateArgument::Pack:
+      // And this with DW_TAG_GNU_template_parameter_pack
+      break;
+    // And the following should never occur:
+    case TemplateArgument::Expression:
+    case TemplateArgument::TemplateExpansion:
+    case TemplateArgument::Null:
+      llvm_unreachable(
+          "These argument types shouldn't exist in concrete types");
     }
   }
   return DBuilder.getOrCreateArray(TemplateParams);
@@ -1585,7 +1661,7 @@ llvm::DIType CGDebugInfo::CreateType(const ArrayType *Ty,
       Align = 0;
     else
       Align = CGM.getContext().getTypeAlign(Ty->getElementType());
-  } else if (Ty->isDependentSizedArrayType() || Ty->isIncompleteType()) {
+  } else if (Ty->isIncompleteType()) {
     Size = 0;
     Align = 0;
   } else {
@@ -2098,8 +2174,19 @@ llvm::DIType CGDebugInfo::CreateMemberType(llvm::DIFile Unit, QualType FType,
 }
 
 llvm::DIDescriptor CGDebugInfo::getDeclarationOrDefinition(const Decl *D) {
+  // We only need a declaration (not a definition) of the type - so use whatever
+  // we would otherwise do to get a type for a pointee. (forward declarations in
+  // limited debug info, full definitions (if the type definition is available)
+  // in unlimited debug info)
   if (const TypeDecl *RD = dyn_cast<TypeDecl>(D))
     return CreatePointeeType(QualType(RD->getTypeForDecl(), 0), llvm::DIFile());
+  // Otherwise fall back to a fairly rudimentary cache of existing declarations.
+  // This doesn't handle providing declarations (for functions or variables) for
+  // entities without definitions in this TU, nor when the definition proceeds
+  // the call to this function.
+  // FIXME: This should be split out into more specific maps with support for
+  // emitting forward declarations and merging definitions with declarations,
+  // the same way as we do for types.
   llvm::DenseMap<const Decl *, llvm::WeakVH>::iterator I =
       DeclCache.find(D->getCanonicalDecl());
   if (I == DeclCache.end())
@@ -2154,7 +2241,10 @@ llvm::DIType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
     SmallVector<llvm::Value *, 16> Elts;
 
     // First element is always return type. For 'void' functions it is NULL.
-    Elts.push_back(getOrCreateType(OMethod->getResultType(), F));
+    QualType ResultTy = OMethod->hasRelatedResultType()
+      ? QualType(OMethod->getClassInterface()->getTypeForDecl(), 0)
+      : OMethod->getResultType();
+    Elts.push_back(getOrCreateType(ResultTy, F));
     // "self" pointer is always first argument.
     QualType SelfDeclTy = OMethod->getSelfDecl()->getType();
     llvm::DIType SelfTy = getOrCreateType(SelfDeclTy, F);

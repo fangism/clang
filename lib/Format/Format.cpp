@@ -36,20 +36,39 @@ namespace llvm {
 namespace yaml {
 template <>
 struct ScalarEnumerationTraits<clang::format::FormatStyle::LanguageStandard> {
-  static void enumeration(IO &io,
-                          clang::format::FormatStyle::LanguageStandard &value) {
-    io.enumCase(value, "C++03", clang::format::FormatStyle::LS_Cpp03);
-    io.enumCase(value, "C++11", clang::format::FormatStyle::LS_Cpp11);
-    io.enumCase(value, "Auto", clang::format::FormatStyle::LS_Auto);
+  static void enumeration(IO &IO,
+                          clang::format::FormatStyle::LanguageStandard &Value) {
+    IO.enumCase(Value, "C++03", clang::format::FormatStyle::LS_Cpp03);
+    IO.enumCase(Value, "C++11", clang::format::FormatStyle::LS_Cpp11);
+    IO.enumCase(Value, "Auto", clang::format::FormatStyle::LS_Auto);
+  }
+};
+
+template<>
+struct ScalarEnumerationTraits<clang::format::FormatStyle::BraceBreakingStyle> {
+  static void
+  enumeration(IO &IO, clang::format::FormatStyle::BraceBreakingStyle &Value) {
+    IO.enumCase(Value, "Attach", clang::format::FormatStyle::BS_Attach);
+    IO.enumCase(Value, "Linux", clang::format::FormatStyle::BS_Linux);
+    IO.enumCase(Value, "Stroustrup", clang::format::FormatStyle::BS_Stroustrup);
   }
 };
 
 template <> struct MappingTraits<clang::format::FormatStyle> {
   static void mapping(llvm::yaml::IO &IO, clang::format::FormatStyle &Style) {
-    if (!IO.outputting()) {
+    if (IO.outputting()) {
+      StringRef StylesArray[] = { "LLVM", "Google", "Chromium", "Mozilla" };
+      ArrayRef<StringRef> Styles(StylesArray);
+      for (size_t i = 0, e = Styles.size(); i < e; ++i) {
+        StringRef StyleName(Styles[i]);
+        if (Style == clang::format::getPredefinedStyle(StyleName)) {
+          IO.mapOptional("# BasedOnStyle", StyleName);
+          break;
+        }
+      }
+    } else {
       StringRef BasedOnStyle;
       IO.mapOptional("BasedOnStyle", BasedOnStyle);
-
       if (!BasedOnStyle.empty())
         Style = clang::format::getPredefinedStyle(BasedOnStyle);
     }
@@ -76,6 +95,9 @@ template <> struct MappingTraits<clang::format::FormatStyle> {
     IO.mapOptional("SpacesBeforeTrailingComments",
                    Style.SpacesBeforeTrailingComments);
     IO.mapOptional("Standard", Style.Standard);
+    IO.mapOptional("IndentWidth", Style.IndentWidth);
+    IO.mapOptional("UseTab", Style.UseTab);
+    IO.mapOptional("BreakBeforeBraces", Style.BreakBeforeBraces);
   }
 };
 }
@@ -102,6 +124,9 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.PointerBindsToType = false;
   LLVMStyle.SpacesBeforeTrailingComments = 1;
   LLVMStyle.Standard = FormatStyle::LS_Cpp03;
+  LLVMStyle.IndentWidth = 2;
+  LLVMStyle.UseTab = false;
+  LLVMStyle.BreakBeforeBraces = FormatStyle::BS_Attach;
   return LLVMStyle;
 }
 
@@ -123,6 +148,9 @@ FormatStyle getGoogleStyle() {
   GoogleStyle.PointerBindsToType = true;
   GoogleStyle.SpacesBeforeTrailingComments = 2;
   GoogleStyle.Standard = FormatStyle::LS_Auto;
+  GoogleStyle.IndentWidth = 2;
+  GoogleStyle.UseTab = false;
+  GoogleStyle.BreakBeforeBraces = FormatStyle::BS_Attach;
   return GoogleStyle;
 }
 
@@ -176,7 +204,7 @@ std::string configurationAsText(const FormatStyle &Style) {
   // reference here.
   FormatStyle NonConstStyle = Style;
   Output << NonConstStyle;
-  return Text;
+  return Stream.str();
 }
 
 // Returns the length of everything up to the first possible line break after
@@ -245,9 +273,9 @@ public:
 private:
   void DebugTokenState(const AnnotatedToken &AnnotatedTok) {
     const Token &Tok = AnnotatedTok.FormatTok.Tok;
-    llvm::errs() << StringRef(SourceMgr.getCharacterData(Tok.getLocation()),
+    llvm::dbgs() << StringRef(SourceMgr.getCharacterData(Tok.getLocation()),
                               Tok.getLength());
-    llvm::errs();
+    llvm::dbgs();
   }
 
   struct ParenState {
@@ -258,7 +286,7 @@ private:
           AvoidBinPacking(AvoidBinPacking), BreakBeforeParameter(false),
           NoLineBreak(NoLineBreak), ColonPos(0), StartOfFunctionCall(0),
           NestedNameSpecifierContinuation(0), CallContinuation(0),
-          VariablePos(0) {}
+          VariablePos(0), ForFakeParenthesis(false) {}
 
     /// \brief The position to which a specific parenthesis level needs to be
     /// indented.
@@ -316,6 +344,13 @@ private:
     ///
     /// Used to align further variables if necessary.
     unsigned VariablePos;
+
+    /// \brief \c true if this \c ParenState was created for a fake parenthesis.
+    ///
+    /// Does not need to be considered for memoization / the comparison function
+    /// as otherwise identical states will have the same fake/non-fake
+    /// \c ParenStates.
+    bool ForFakeParenthesis;
 
     bool operator<(const ParenState &Other) const {
       if (Indent != Other.Indent)
@@ -420,7 +455,7 @@ private:
     if (Newline) {
       unsigned WhitespaceStartColumn = State.Column;
       if (Current.is(tok::r_brace)) {
-        State.Column = Line.Level * 2;
+        State.Column = Line.Level * Style.IndentWidth;
       } else if (Current.is(tok::string_literal) &&
                  State.StartOfStringLiteral != 0) {
         State.Column = State.StartOfStringLiteral;
@@ -487,6 +522,8 @@ private:
       }
 
       State.Stack.back().LastSpace = State.Column;
+      if (Current.isOneOf(tok::arrow, tok::period))
+        State.Stack.back().LastSpace += Current.FormatTok.TokenLength;
       State.StartOfLineLevel = State.ParenLevel;
 
       // Any break on this level means that the parent level has been broken
@@ -590,8 +627,14 @@ private:
     if (Current.isOneOf(tok::period, tok::arrow) &&
         Line.Type == LT_BuilderTypeCall && State.ParenLevel == 0)
       State.Stack.back().StartOfFunctionCall =
-          Current.LastInChainOfCalls ? 0 : State.Column;
+          Current.LastInChainOfCalls ? 0 : State.Column +
+                                               Current.FormatTok.TokenLength;
     if (Current.Type == TT_CtorInitializerColon) {
+      // Indent 2 from the column, so:
+      // SomeClass::SomeClass()
+      //     : First(...), ...
+      //       Next(...)
+      //       ^ line up here.
       State.Stack.back().Indent = State.Column + 2;
       if (Style.ConstructorInitializerAllOnOneLineOrOnePerLine)
         State.Stack.back().AvoidBinPacking = true;
@@ -621,6 +664,7 @@ private:
              E = Current.FakeLParens.rend();
          I != E; ++I) {
       ParenState NewParenState = State.Stack.back();
+      NewParenState.ForFakeParenthesis = true;
       NewParenState.Indent =
           std::max(std::max(State.Column, NewParenState.Indent),
                    State.Stack.back().LastSpace);
@@ -642,27 +686,31 @@ private:
     // prepare for the following tokens.
     if (Current.opensScope()) {
       unsigned NewIndent;
+      unsigned LastSpace = State.Stack.back().LastSpace;
       bool AvoidBinPacking;
       if (Current.is(tok::l_brace)) {
-        NewIndent = 2 + State.Stack.back().LastSpace;
+        NewIndent = Style.IndentWidth + LastSpace;
         AvoidBinPacking = false;
       } else {
-        NewIndent = 4 + std::max(State.Stack.back().LastSpace,
-                                 State.Stack.back().StartOfFunctionCall);
+        NewIndent =
+            4 + std::max(LastSpace, State.Stack.back().StartOfFunctionCall);
         AvoidBinPacking = !Style.BinPackParameters;
       }
-      State.Stack.push_back(
-          ParenState(NewIndent, State.Stack.back().LastSpace, AvoidBinPacking,
-                     State.Stack.back().NoLineBreak));
 
       if (Current.NoMoreTokensOnLevel && Current.FakeLParens.empty()) {
         // This parenthesis was the last token possibly making use of Indent and
-        // LastSpace of the next higher ParenLevel. Thus, erase them to acieve
+        // LastSpace of the next higher ParenLevel. Thus, erase them to achieve
         // better memoization results.
-        State.Stack[State.Stack.size() - 2].Indent = 0;
-        State.Stack[State.Stack.size() - 2].LastSpace = 0;
+        for (unsigned i = State.Stack.size() - 1; i > 0; --i) {
+          State.Stack[i].Indent = 0;
+          State.Stack[i].LastSpace = 0;
+          if (!State.Stack[i].ForFakeParenthesis)
+            break;
+        }
       }
 
+      State.Stack.push_back(ParenState(NewIndent, LastSpace, AvoidBinPacking,
+                                       State.Stack.back().NoLineBreak));
       ++State.ParenLevel;
     }
 
@@ -690,10 +738,10 @@ private:
       State.Stack.back().VariablePos = VariablePos;
     }
 
-    if (Current.is(tok::string_literal)) {
+    if (Current.is(tok::string_literal) && State.StartOfStringLiteral == 0) {
       State.StartOfStringLiteral = State.Column;
-    } else if (Current.isNot(tok::comment)) {
-      State.StartOfStringLiteral = 0;
+    } else if (!Current.isOneOf(tok::comment, tok::identifier, tok::hash,
+                                tok::string_literal)) {
     }
 
     State.Column += Current.FormatTok.TokenLength;
@@ -825,7 +873,7 @@ private:
       unsigned Penalty = Queue.top().first.first;
       StateNode *Node = Queue.top().second;
       if (Node->State.NextToken == NULL) {
-        DEBUG(llvm::errs() << "\n---\nPenalty for line: " << Penalty << "\n");
+        DEBUG(llvm::dbgs() << "\n---\nPenalty for line: " << Penalty << "\n");
         break;
       }
       Queue.pop();
@@ -845,8 +893,8 @@ private:
 
     // Reconstruct the solution.
     reconstructPath(InitialState, Queue.top().second);
-    DEBUG(llvm::errs() << "Total number of analyzed states: " << Count << "\n");
-    DEBUG(llvm::errs() << "---\n");
+    DEBUG(llvm::dbgs() << "Total number of analyzed states: " << Count << "\n");
+    DEBUG(llvm::dbgs() << "---\n");
 
     // Return the column after the last token of the solution.
     return Queue.top().second->State.Column;
@@ -862,7 +910,7 @@ private:
     reconstructPath(State, Current->Previous);
     DEBUG({
       if (Current->NewLine) {
-        llvm::errs()
+        llvm::dbgs()
             << "Penalty for splitting before "
             << Current->Previous->State.NextToken->FormatTok.Tok.getName()
             << ": " << Current->Previous->State.NextToken->SplitPenalty << "\n";
@@ -1109,12 +1157,21 @@ public:
     std::vector<int> IndentForLevel;
     bool PreviousLineWasTouched = false;
     const AnnotatedToken *PreviousLineLastToken = 0;
+    bool FormatPPDirective = false;
     for (std::vector<AnnotatedLine>::iterator I = AnnotatedLines.begin(),
                                               E = AnnotatedLines.end();
          I != E; ++I) {
       const AnnotatedLine &TheLine = *I;
       const FormatToken &FirstTok = TheLine.First.FormatTok;
       int Offset = getIndentOffset(TheLine.First);
+
+      // Check whether this line is part of a formatted preprocessor directive.
+      if (FirstTok.HasUnescapedNewline)
+        FormatPPDirective = false;
+      if (!FormatPPDirective && TheLine.InPPDirective &&
+          (touchesLine(TheLine) || touchesPPDirective(I + 1, E)))
+        FormatPPDirective = true;
+
       while (IndentForLevel.size() <= TheLine.Level)
         IndentForLevel.push_back(-1);
       IndentForLevel.resize(TheLine.Level + 1);
@@ -1126,7 +1183,7 @@ public:
                                         /*WhitespaceStartColumn*/ 0);
         }
       } else if (TheLine.Type != LT_Invalid &&
-                 (WasMoved || touchesLine(TheLine))) {
+                 (WasMoved || FormatPPDirective || touchesLine(TheLine))) {
         unsigned LevelIndent = getIndent(IndentForLevel, TheLine.Level);
         unsigned Indent = LevelIndent;
         if (static_cast<int>(Indent) + Offset >= 0)
@@ -1232,7 +1289,7 @@ private:
       return IndentForLevel[Level];
     if (Level == 0)
       return 0;
-    return getIndent(IndentForLevel, Level - 1) + 2;
+    return getIndent(IndentForLevel, Level - 1) + Style.IndentWidth;
   }
 
   /// \brief Get the offset of the line relatively to the level.
@@ -1401,6 +1458,17 @@ private:
         First->WhiteSpaceStart.getLocWithOffset(First->LastNewlineOffset),
         Last->Tok.getLocation());
     return touchesRanges(LineRange);
+  }
+
+  bool touchesPPDirective(std::vector<AnnotatedLine>::iterator I,
+                          std::vector<AnnotatedLine>::iterator E) {
+    for (; I != E; ++I) {
+      if (I->First.FormatTok.HasUnescapedNewline)
+        return false;
+      if (touchesLine(*I))
+        return true;
+    }
+    return false;
   }
 
   bool touchesEmptyLineBefore(const AnnotatedLine &TheLine) {

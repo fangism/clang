@@ -391,7 +391,7 @@ namespace {
 
     /// EvaluatingDecl - This is the declaration whose initializer is being
     /// evaluated, if any.
-    const VarDecl *EvaluatingDecl;
+    APValue::LValueBase EvaluatingDecl;
 
     /// EvaluatingDeclValue - This is the value being constructed for the
     /// declaration whose initializer is being evaluated, if any.
@@ -414,12 +414,12 @@ namespace {
         CallStackDepth(0), NextCallIndex(1),
         StepsLeft(getLangOpts().ConstexprStepLimit),
         BottomFrame(*this, SourceLocation(), 0, 0, 0),
-        EvaluatingDecl(0), EvaluatingDeclValue(0), HasActiveDiagnostic(false),
-        CheckingPotentialConstantExpression(false),
+        EvaluatingDecl((const ValueDecl*)0), EvaluatingDeclValue(0),
+        HasActiveDiagnostic(false), CheckingPotentialConstantExpression(false),
         IntOverflowCheckMode(OverflowCheckMode) {}
 
-    void setEvaluatingDecl(const VarDecl *VD, APValue &Value) {
-      EvaluatingDecl = VD;
+    void setEvaluatingDecl(APValue::LValueBase Base, APValue &Value) {
+      EvaluatingDecl = Base;
       EvaluatingDeclValue = &Value;
     }
 
@@ -899,19 +899,11 @@ namespace {
       return false;
     return LHS.Path == RHS.Path;
   }
-
-  /// Kinds of constant expression checking, for diagnostics.
-  enum CheckConstantExpressionKind {
-    CCEK_Constant,    ///< A normal constant.
-    CCEK_ReturnValue, ///< A constexpr function return value.
-    CCEK_MemberInit   ///< A constexpr constructor mem-initializer.
-  };
 }
 
 static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E);
 static bool EvaluateInPlace(APValue &Result, EvalInfo &Info,
                             const LValue &This, const Expr *E,
-                            CheckConstantExpressionKind CCEK = CCEK_Constant,
                             bool AllowNonLiteralTypes = false);
 static bool EvaluateLValue(const Expr *E, LValue &Result, EvalInfo &Info);
 static bool EvaluatePointer(const Expr *E, LValue &Result, EvalInfo &Info);
@@ -1079,8 +1071,17 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
 
 /// Check that this core constant expression is of literal type, and if not,
 /// produce an appropriate diagnostic.
-static bool CheckLiteralType(EvalInfo &Info, const Expr *E) {
+static bool CheckLiteralType(EvalInfo &Info, const Expr *E,
+                             const LValue *This = 0) {
   if (!E->isRValue() || E->getType()->isLiteralType(Info.Ctx))
+    return true;
+
+  // C++1y: A constant initializer for an object o [...] may also invoke
+  // constexpr constructors for o and its subobjects even if those objects
+  // are of non-literal class types.
+  if (Info.getLangOpts().CPlusPlus1y && This &&
+      Info.EvaluatingDecl.getOpaqueValue() ==
+          This->getLValueBase().getOpaqueValue())
     return true;
 
   // Prvalue constant expressions must be of literal types.
@@ -1672,7 +1673,7 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
 
   // If we're currently evaluating the initializer of this declaration, use that
   // in-flight value.
-  if (Info.EvaluatingDecl == VD) {
+  if (Info.EvaluatingDecl.dyn_cast<const ValueDecl*>() == VD) {
     Result = Info.EvaluatingDeclValue;
     return !Result->isUninit();
   }
@@ -2134,9 +2135,6 @@ CompleteObject findCompleteObject(EvalInfo &Info, const Expr *E, AccessKinds AK,
       NoteLValueLocation(Info, LVal.Base);
       return CompleteObject();
     }
-  } else if (AK != AK_Read) {
-    Info.Diag(E, diag::note_constexpr_modify_global);
-    return CompleteObject();
   }
 
   // C++11 DR1311: An lvalue-to-rvalue conversion on a volatile-qualified type
@@ -2190,8 +2188,16 @@ CompleteObject findCompleteObject(EvalInfo &Info, const Expr *E, AccessKinds AK,
     // Unless we're looking at a local variable or argument in a constexpr call,
     // the variable we're reading must be const.
     if (!Frame) {
-      assert(AK == AK_Read && "can't modify non-local");
-      if (VD->isConstexpr()) {
+      if (Info.getLangOpts().CPlusPlus1y &&
+          VD == Info.EvaluatingDecl.dyn_cast<const ValueDecl *>()) {
+        // OK, we can read and modify an object if we're in the process of
+        // evaluating its initializer, because its lifetime began in this
+        // evaluation.
+      } else if (AK != AK_Read) {
+        // All the remaining cases only permit reading.
+        Info.Diag(E, diag::note_constexpr_modify_global);
+        return CompleteObject();
+      } else if (VD->isConstexpr()) {
         // OK, we can read this variable.
       } else if (BaseType->isIntegralOrEnumerationType()) {
         if (!BaseType.isConstQualified()) {
@@ -2249,6 +2255,15 @@ CompleteObject findCompleteObject(EvalInfo &Info, const Expr *E, AccessKinds AK,
       }
       return CompleteObject();
     }
+  }
+
+  // During the construction of an object, it is not yet 'const'.
+  // FIXME: We don't set up EvaluatingDecl for local variables or temporaries,
+  // and this doesn't do quite the right thing for const subobjects of the
+  // object under construction.
+  if (LVal.getLValueBase() == Info.EvaluatingDecl) {
+    BaseType = Info.Ctx.getCanonicalType(BaseType);
+    BaseType.removeLocalConst();
   }
 
   // In C++1y, we can't safely access any mutable state when checking a
@@ -2754,7 +2769,9 @@ enum EvalStmtResult {
   /// Hit a 'continue' statement.
   ESR_Continue,
   /// Hit a 'break' statement.
-  ESR_Break
+  ESR_Break,
+  /// Still scanning for 'case' or 'default' statement.
+  ESR_CaseNotFound
 };
 }
 
@@ -2788,12 +2805,13 @@ static bool EvaluateCond(EvalInfo &Info, const VarDecl *CondDecl,
 }
 
 static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
-                                   const Stmt *S);
+                                   const Stmt *S, const SwitchCase *SC = 0);
 
 /// Evaluate the body of a loop, and translate the result as appropriate.
 static EvalStmtResult EvaluateLoopBody(APValue &Result, EvalInfo &Info,
-                                       const Stmt *Body) {
-  switch (EvalStmtResult ESR = EvaluateStmt(Result, Info, Body)) {
+                                       const Stmt *Body,
+                                       const SwitchCase *Case = 0) {
+  switch (EvalStmtResult ESR = EvaluateStmt(Result, Info, Body, Case)) {
   case ESR_Break:
     return ESR_Succeeded;
   case ESR_Succeeded:
@@ -2801,16 +2819,126 @@ static EvalStmtResult EvaluateLoopBody(APValue &Result, EvalInfo &Info,
     return ESR_Continue;
   case ESR_Failed:
   case ESR_Returned:
+  case ESR_CaseNotFound:
     return ESR;
+  }
+  llvm_unreachable("Invalid EvalStmtResult!");
+}
+
+/// Evaluate a switch statement.
+static EvalStmtResult EvaluateSwitch(APValue &Result, EvalInfo &Info,
+                                     const SwitchStmt *SS) {
+  // Evaluate the switch condition.
+  if (SS->getConditionVariable() &&
+      !EvaluateDecl(Info, SS->getConditionVariable()))
+    return ESR_Failed;
+  APSInt Value;
+  if (!EvaluateInteger(SS->getCond(), Value, Info))
+    return ESR_Failed;
+
+  // Find the switch case corresponding to the value of the condition.
+  // FIXME: Cache this lookup.
+  const SwitchCase *Found = 0;
+  for (const SwitchCase *SC = SS->getSwitchCaseList(); SC;
+       SC = SC->getNextSwitchCase()) {
+    if (isa<DefaultStmt>(SC)) {
+      Found = SC;
+      continue;
+    }
+
+    const CaseStmt *CS = cast<CaseStmt>(SC);
+    APSInt LHS = CS->getLHS()->EvaluateKnownConstInt(Info.Ctx);
+    APSInt RHS = CS->getRHS() ? CS->getRHS()->EvaluateKnownConstInt(Info.Ctx)
+                              : LHS;
+    if (LHS <= Value && Value <= RHS) {
+      Found = SC;
+      break;
+    }
+  }
+
+  if (!Found)
+    return ESR_Succeeded;
+
+  // Search the switch body for the switch case and evaluate it from there.
+  switch (EvalStmtResult ESR = EvaluateStmt(Result, Info, SS->getBody(), Found)) {
+  case ESR_Break:
+    return ESR_Succeeded;
+  case ESR_Succeeded:
+  case ESR_Continue:
+  case ESR_Failed:
+  case ESR_Returned:
+    return ESR;
+  case ESR_CaseNotFound:
+    llvm_unreachable("couldn't find switch case");
   }
   llvm_unreachable("Invalid EvalStmtResult!");
 }
 
 // Evaluate a statement.
 static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
-                                   const Stmt *S) {
+                                   const Stmt *S, const SwitchCase *Case) {
   if (!Info.nextStep(S))
     return ESR_Failed;
+
+  // If we're hunting down a 'case' or 'default' label, recurse through
+  // substatements until we hit the label.
+  if (Case) {
+    // FIXME: We don't start the lifetime of objects whose initialization we
+    // jump over. However, such objects must be of class type with a trivial
+    // default constructor that initialize all subobjects, so must be empty,
+    // so this almost never matters.
+    switch (S->getStmtClass()) {
+    case Stmt::CompoundStmtClass:
+      // FIXME: Precompute which substatement of a compound statement we
+      // would jump to, and go straight there rather than performing a
+      // linear scan each time.
+    case Stmt::LabelStmtClass:
+    case Stmt::AttributedStmtClass:
+    case Stmt::DoStmtClass:
+      break;
+
+    case Stmt::CaseStmtClass:
+    case Stmt::DefaultStmtClass:
+      if (Case == S)
+        Case = 0;
+      break;
+
+    case Stmt::IfStmtClass: {
+      // FIXME: Precompute which side of an 'if' we would jump to, and go
+      // straight there rather than scanning both sides.
+      const IfStmt *IS = cast<IfStmt>(S);
+      EvalStmtResult ESR = EvaluateStmt(Result, Info, IS->getThen(), Case);
+      if (ESR != ESR_CaseNotFound || !IS->getElse())
+        return ESR;
+      return EvaluateStmt(Result, Info, IS->getElse(), Case);
+    }
+
+    case Stmt::WhileStmtClass: {
+      EvalStmtResult ESR =
+          EvaluateLoopBody(Result, Info, cast<WhileStmt>(S)->getBody(), Case);
+      if (ESR != ESR_Continue)
+        return ESR;
+      break;
+    }
+
+    case Stmt::ForStmtClass: {
+      const ForStmt *FS = cast<ForStmt>(S);
+      EvalStmtResult ESR =
+          EvaluateLoopBody(Result, Info, FS->getBody(), Case);
+      if (ESR != ESR_Continue)
+        return ESR;
+      if (FS->getInc() && !EvaluateIgnoredValue(Info, FS->getInc()))
+        return ESR_Failed;
+      break;
+    }
+
+    case Stmt::DeclStmtClass:
+      // FIXME: If the variable has initialization that can't be jumped over,
+      // bail out of any immediately-surrounding compound-statement too.
+    default:
+      return ESR_CaseNotFound;
+    }
+  }
 
   // FIXME: Mark all temporaries in the current frame as destroyed at
   // the end of each full-expression.
@@ -2850,11 +2978,13 @@ static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
     const CompoundStmt *CS = cast<CompoundStmt>(S);
     for (CompoundStmt::const_body_iterator BI = CS->body_begin(),
            BE = CS->body_end(); BI != BE; ++BI) {
-      EvalStmtResult ESR = EvaluateStmt(Result, Info, *BI);
-      if (ESR != ESR_Succeeded)
+      EvalStmtResult ESR = EvaluateStmt(Result, Info, *BI, Case);
+      if (ESR == ESR_Succeeded)
+        Case = 0;
+      else if (ESR != ESR_CaseNotFound)
         return ESR;
     }
-    return ESR_Succeeded;
+    return Case ? ESR_CaseNotFound : ESR_Succeeded;
   }
 
   case Stmt::IfStmtClass: {
@@ -2894,9 +3024,10 @@ static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
     const DoStmt *DS = cast<DoStmt>(S);
     bool Continue;
     do {
-      EvalStmtResult ESR = EvaluateLoopBody(Result, Info, DS->getBody());
+      EvalStmtResult ESR = EvaluateLoopBody(Result, Info, DS->getBody(), Case);
       if (ESR != ESR_Continue)
         return ESR;
+      Case = 0;
 
       if (!EvaluateAsBooleanCondition(DS->getCond(), Continue, Info))
         return ESR_Failed;
@@ -2968,11 +3099,27 @@ static EvalStmtResult EvaluateStmt(APValue &Result, EvalInfo &Info,
     return ESR_Succeeded;
   }
 
+  case Stmt::SwitchStmtClass:
+    return EvaluateSwitch(Result, Info, cast<SwitchStmt>(S));
+
   case Stmt::ContinueStmtClass:
     return ESR_Continue;
 
   case Stmt::BreakStmtClass:
     return ESR_Break;
+
+  case Stmt::LabelStmtClass:
+    return EvaluateStmt(Result, Info, cast<LabelStmt>(S)->getSubStmt(), Case);
+
+  case Stmt::AttributedStmtClass:
+    // As a general principle, C++11 attributes can be ignored without
+    // any semantic impact.
+    return EvaluateStmt(Result, Info, cast<AttributedStmt>(S)->getSubStmt(),
+                        Case);
+
+  case Stmt::CaseStmtClass:
+  case Stmt::DefaultStmtClass:
+    return EvaluateStmt(Result, Info, cast<SwitchCase>(S)->getSubStmt(), Case);
   }
 }
 
@@ -3210,9 +3357,7 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
       llvm_unreachable("unknown base initializer kind");
     }
 
-    if (!EvaluateInPlace(*Value, Info, Subobject, (*I)->getInit(),
-                         (*I)->isBaseInitializer()
-                                      ? CCEK_Constant : CCEK_MemberInit)) {
+    if (!EvaluateInPlace(*Value, Info, Subobject, (*I)->getInit())) {
       // If we're checking for a potential constant expression, evaluate all
       // initializers even if some of them fail.
       if (!Info.keepEvaluatingAfterFailure())
@@ -7151,9 +7296,8 @@ static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
 /// cases, the in-place evaluation is essential, since later initializers for
 /// an object can indirectly refer to subobjects which were initialized earlier.
 static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
-                            const Expr *E, CheckConstantExpressionKind CCEK,
-                            bool AllowNonLiteralTypes) {
-  if (!AllowNonLiteralTypes && !CheckLiteralType(Info, E))
+                            const Expr *E, bool AllowNonLiteralTypes) {
+  if (!AllowNonLiteralTypes && !CheckLiteralType(Info, E, &This))
     return false;
 
   if (E->isRValue()) {
@@ -7285,13 +7429,13 @@ bool Expr::EvaluateAsInitializer(APValue &Value, const ASTContext &Ctx,
   if (Ctx.getLangOpts().CPlusPlus && !VD->hasLocalStorage() &&
       !VD->getType()->isReferenceType()) {
     ImplicitValueInitExpr VIE(VD->getType());
-    if (!EvaluateInPlace(Value, InitInfo, LVal, &VIE, CCEK_Constant,
+    if (!EvaluateInPlace(Value, InitInfo, LVal, &VIE,
                          /*AllowNonLiteralTypes=*/true))
       return false;
   }
 
-  if (!EvaluateInPlace(Value, InitInfo, LVal, this, CCEK_Constant,
-                         /*AllowNonLiteralTypes=*/true) ||
+  if (!EvaluateInPlace(Value, InitInfo, LVal, this,
+                       /*AllowNonLiteralTypes=*/true) ||
       EStatus.HasSideEffects)
     return false;
 
@@ -7835,7 +7979,7 @@ bool Expr::isPotentialConstantExpr(const FunctionDecl *FD,
   const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD);
   const CXXRecordDecl *RD = MD ? MD->getParent()->getCanonicalDecl() : 0;
 
-  // FIXME: Fabricate an arbitrary expression on the stack and pretend that it
+  // Fabricate an arbitrary expression on the stack and pretend that it
   // is a temporary being used as the 'this' pointer.
   LValue This;
   ImplicitValueInitExpr VIE(RD ? Info.Ctx.getRecordType(RD) : Info.Ctx.IntTy);
@@ -7846,9 +7990,12 @@ bool Expr::isPotentialConstantExpr(const FunctionDecl *FD,
   SourceLocation Loc = FD->getLocation();
 
   APValue Scratch;
-  if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD))
+  if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+    // Evaluate the call as a constant initializer, to allow the construction
+    // of objects of non-literal types.
+    Info.setEvaluatingDecl(This.getLValueBase(), Scratch);
     HandleConstructorCall(Loc, This, Args, CD, Info, Scratch);
-  else
+  } else
     HandleFunctionCall(Loc, FD, (MD && MD->isInstance()) ? &This : 0,
                        Args, FD->getBody(), Info, Scratch);
 
