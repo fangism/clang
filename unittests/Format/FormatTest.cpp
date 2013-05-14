@@ -218,7 +218,7 @@ TEST_F(FormatTest, ReformatsMovedLines) {
 // Tests for control statements.
 //===----------------------------------------------------------------------===//
 
-TEST_F(FormatTest, FormatIfWithoutCompountStatement) {
+TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
   verifyFormat("if (true)\n  f();\ng();");
   verifyFormat("if (a)\n  if (b)\n    if (c)\n      g();\nh();");
   verifyFormat("if (a)\n  if (b) {\n    f();\n  }\ng();");
@@ -244,6 +244,10 @@ TEST_F(FormatTest, FormatIfWithoutCompountStatement) {
                "  f();\n"
                "}",
                AllowsMergedIf);
+
+  EXPECT_EQ("if (a) return;", format("if(a)\nreturn;", 7, 1, AllowsMergedIf));
+  EXPECT_EQ("if (a) return;  // comment",
+            format("if(a)\nreturn; // comment", 20, 1, AllowsMergedIf));
 
   AllowsMergedIf.ColumnLimit = 14;
   verifyFormat("if (a) return;", AllowsMergedIf);
@@ -2790,6 +2794,10 @@ TEST_F(FormatTest, FormatsFunctionTypes) {
 
   verifyGoogleFormat("A<void*(int*, SomeType*)>;");
   verifyGoogleFormat("void* (*a)(int);");
+
+  // Other constructs can look like function types:
+  verifyFormat("A<sizeof(*x)> a;");
+  verifyFormat("A<alignof(*x)> a;");
 }
 
 TEST_F(FormatTest, BreaksLongDeclarations) {
@@ -3806,7 +3814,7 @@ TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
             "a;\n"
             "}\n"
             "{\n"
-            "  b;\n"
+            "  b; //\n"
             "}\n"
             "}",
             format("{\n"
@@ -3814,15 +3822,15 @@ TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
                    "a;\n"
                    "}\n"
                    "{\n"
-                   "           b;\n"
+                   "           b; //\n"
                    "}\n"
                    "}",
                    22, 2, getLLVMStyle()));
   EXPECT_EQ("  {\n"
-            "    a;\n"
+            "    a; //\n"
             "  }",
             format("  {\n"
-                   "a;\n"
+                   "a; //\n"
                    "  }",
                    4, 2, getLLVMStyle()));
   EXPECT_EQ("void f() {}\n"
@@ -3938,6 +3946,48 @@ TEST_F(FormatTest, BreakStringLiterals) {
       "  \"text \" \\\n"
       "  \"other\";",
       format("#define A \"some text other\";", AlignLeft));
+}
+
+TEST_F(FormatTest, BreakStringLiteralsBeforeUnbreakableTokenSequence) {
+  EXPECT_EQ("someFunction(\"aaabbbcccd\"\n"
+            "             \"ddeeefff\");",
+            format("someFunction(\"aaabbbcccdddeeefff\");",
+                   getLLVMStyleWithColumns(25)));
+  EXPECT_EQ("someFunction1234567890(\n"
+            "    \"aaabbbcccdddeeefff\");",
+            format("someFunction1234567890(\"aaabbbcccdddeeefff\");",
+                   getLLVMStyleWithColumns(26)));
+  EXPECT_EQ("someFunction1234567890(\n"
+            "    \"aaabbbcccdddeeeff\"\n"
+            "    \"f\");",
+            format("someFunction1234567890(\"aaabbbcccdddeeefff\");",
+                   getLLVMStyleWithColumns(25)));
+  EXPECT_EQ("someFunction1234567890(\n"
+            "    \"aaabbbcccdddeeeff\"\n"
+            "    \"f\");",
+            format("someFunction1234567890(\"aaabbbcccdddeeefff\");",
+                   getLLVMStyleWithColumns(24)));
+  EXPECT_EQ("someFunction(\n"
+            "    \"aaabbbcc \"\n"
+            "    \"dddeeefff\");",
+            format("someFunction(\"aaabbbcc dddeeefff\");",
+                   getLLVMStyleWithColumns(25)));
+  EXPECT_EQ("someFunction(\"aaabbbccc \"\n"
+            "             \"ddeeefff\");",
+            format("someFunction(\"aaabbbccc ddeeefff\");",
+                   getLLVMStyleWithColumns(25)));
+  EXPECT_EQ("someFunction1234567890(\n"
+            "    \"aaabb \"\n"
+            "    \"cccdddeeefff\");",
+            format("someFunction1234567890(\"aaabb cccdddeeefff\");",
+                   getLLVMStyleWithColumns(25)));
+  EXPECT_EQ("#define A          \\\n"
+            "  string s =       \\\n"
+            "      \"123456789\"  \\\n"
+            "      \"0\";         \\\n"
+            "  int i;",
+            format("#define A string s = \"1234567890\"; int i;",
+                   getLLVMStyleWithColumns(20)));
 }
 
 TEST_F(FormatTest, DoNotBreakStringLiteralsInEscapeSequence) {
@@ -4122,9 +4172,9 @@ TEST_F(FormatTest, ParsesConfiguration) {
 #define CHECK_PARSE_BOOL(FIELD)                                                \
   Style.FIELD = false;                                                         \
   EXPECT_EQ(0, parseConfiguration(#FIELD ": true", &Style).value());           \
-  EXPECT_EQ(true, Style.FIELD);                                                \
+  EXPECT_TRUE(Style.FIELD);                                                \
   EXPECT_EQ(0, parseConfiguration(#FIELD ": false", &Style).value());          \
-  EXPECT_EQ(false, Style.FIELD);
+  EXPECT_FALSE(Style.FIELD);
 
   CHECK_PARSE_BOOL(AlignEscapedNewlinesLeft);
   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);

@@ -1,4 +1,4 @@
-##===- unittests/ASTMatchers/Makefile ----------------------*- Makefile -*-===##
+##===- unittests/ASTMatchers/Dynamic/Makefile --------------*- Makefile -*-===##
 #
 #                     The LLVM Compiler Infrastructure
 #
@@ -7,16 +7,14 @@
 #
 ##===----------------------------------------------------------------------===##
 
-CLANG_LEVEL = ../..
+CLANG_LEVEL = ../../..
 
-PARALLEL_DIRS = Dynamic
-
-TESTNAME = ASTMatchers
+TESTNAME = DynamicASTMatchers
 include $(CLANG_LEVEL)/../../Makefile.config
 LINK_COMPONENTS := $(TARGETS_TO_BUILD) asmparser bitreader support mc
 USEDLIBS = clangTooling.a clangFrontend.a clangSerialization.a clangDriver.a \
-           clangRewriteCore.a clangRewriteFrontend.a \
-           clangParse.a clangSema.a clangAnalysis.a \
-           clangEdit.a clangAST.a clangASTMatchers.a clangLex.a clangBasic.a
+           clangRewriteCore.a clangRewriteFrontend.a clangParse.a clangSema.a \
+           clangAnalysis.a clangEdit.a clangAST.a clangASTMatchers.a \
+           clangLex.a clangBasic.a clangDynamicASTMatchers.a
 
 include $(CLANG_LEVEL)/unittests/Makefile
