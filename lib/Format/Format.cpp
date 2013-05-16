@@ -19,6 +19,7 @@
 #include "TokenAnnotator.h"
 #include "UnwrappedLineParser.h"
 #include "WhitespaceManager.h"
+#include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Format/Format.h"
@@ -77,6 +78,8 @@ template <> struct MappingTraits<clang::format::FormatStyle> {
                    Style.AllowAllParametersOfDeclarationOnNextLine);
     IO.mapOptional("AllowShortIfStatementsOnASingleLine",
                    Style.AllowShortIfStatementsOnASingleLine);
+    IO.mapOptional("AllowShortLoopsOnASingleLine",
+                   Style.AllowShortLoopsOnASingleLine);
     IO.mapOptional("BinPackParameters", Style.BinPackParameters);
     IO.mapOptional("ColumnLimit", Style.ColumnLimit);
     IO.mapOptional("ConstructorInitializerAllOnOneLineOrOnePerLine",
@@ -110,6 +113,7 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.AlignEscapedNewlinesLeft = false;
   LLVMStyle.AllowAllParametersOfDeclarationOnNextLine = true;
   LLVMStyle.AllowShortIfStatementsOnASingleLine = false;
+  LLVMStyle.AllowShortLoopsOnASingleLine = false;
   LLVMStyle.BinPackParameters = true;
   LLVMStyle.ColumnLimit = 80;
   LLVMStyle.ConstructorInitializerAllOnOneLineOrOnePerLine = false;
@@ -134,6 +138,7 @@ FormatStyle getGoogleStyle() {
   GoogleStyle.AlignEscapedNewlinesLeft = true;
   GoogleStyle.AllowAllParametersOfDeclarationOnNextLine = true;
   GoogleStyle.AllowShortIfStatementsOnASingleLine = true;
+  GoogleStyle.AllowShortLoopsOnASingleLine= true;
   GoogleStyle.BinPackParameters = true;
   GoogleStyle.ColumnLimit = 80;
   GoogleStyle.ConstructorInitializerAllOnOneLineOrOnePerLine = true;
@@ -156,6 +161,7 @@ FormatStyle getChromiumStyle() {
   FormatStyle ChromiumStyle = getGoogleStyle();
   ChromiumStyle.AllowAllParametersOfDeclarationOnNextLine = false;
   ChromiumStyle.AllowShortIfStatementsOnASingleLine = false;
+  ChromiumStyle.AllowShortLoopsOnASingleLine = false;
   ChromiumStyle.BinPackParameters = false;
   ChromiumStyle.Standard = FormatStyle::LS_Cpp03;
   ChromiumStyle.DerivePointerBinding = false;
@@ -744,6 +750,7 @@ private:
       State.StartOfStringLiteral = State.Column;
     } else if (!Current.isOneOf(tok::comment, tok::identifier, tok::hash,
                                 tok::string_literal)) {
+      State.StartOfStringLiteral = 0;
     }
 
     State.Column += Current.FormatTok.TokenLength;
@@ -770,7 +777,8 @@ private:
     llvm::OwningPtr<BreakableToken> Token;
     unsigned StartColumn = State.Column - Current.FormatTok.TokenLength -
                            UnbreakableTailLength;
-    if (Current.is(tok::string_literal)) {
+    if (Current.is(tok::string_literal) &&
+        Current.Type != TT_ImplicitStringLiteral) {
       // Only break up default narrow strings.
       const char *LiteralData = SourceMgr.getCharacterData(
           Current.FormatTok.getStartOfNonWhitespace());
@@ -1350,8 +1358,12 @@ private:
 
     if (I->Last->is(tok::l_brace)) {
       tryMergeSimpleBlock(I, E, Limit);
-    } else if (I->First.is(tok::kw_if)) {
-      tryMergeSimpleIf(I, E, Limit);
+    } else if (Style.AllowShortIfStatementsOnASingleLine &&
+               I->First.is(tok::kw_if)) {
+      tryMergeSimpleControlStatement(I, E, Limit);
+    } else if (Style.AllowShortLoopsOnASingleLine &&
+               I->First.isOneOf(tok::kw_for, tok::kw_while)) {
+      tryMergeSimpleControlStatement(I, E, Limit);
     } else if (I->InPPDirective && (I->First.FormatTok.HasUnescapedNewline ||
                                     I->First.FormatTok.IsFirst)) {
       tryMergeSimplePPDirective(I, E, Limit);
@@ -1374,12 +1386,10 @@ private:
     join(Line, *(++I));
   }
 
-  void tryMergeSimpleIf(std::vector<AnnotatedLine>::iterator &I,
-                        std::vector<AnnotatedLine>::iterator E,
-                        unsigned Limit) {
+  void tryMergeSimpleControlStatement(std::vector<AnnotatedLine>::iterator &I,
+                                      std::vector<AnnotatedLine>::iterator E,
+                                      unsigned Limit) {
     if (Limit == 0)
-      return;
-    if (!Style.AllowShortIfStatementsOnASingleLine)
       return;
     if ((I + 1)->InPPDirective != I->InPPDirective ||
         ((I + 1)->InPPDirective &&
@@ -1390,10 +1400,13 @@ private:
       return;
     if (1 + (I + 1)->Last->TotalLength > Limit)
       return;
-    if ((I + 1)->First.is(tok::kw_if) || (I + 1)->First.Type == TT_LineComment)
+    if ((I + 1)->First.isOneOf(tok::semi, tok::kw_if, tok::kw_for,
+                               tok::kw_while) ||
+        (I + 1)->First.Type == TT_LineComment)
       return;
     // Only inline simple if's (no nested if or else).
-    if (I + 2 != E && (I + 2)->First.is(tok::kw_else))
+    if (I + 2 != E && Line.First.is(tok::kw_if) &&
+        (I + 2)->First.is(tok::kw_else))
       return;
     join(Line, *(++I));
   }
@@ -1417,7 +1430,7 @@ private:
       return;
 
     AnnotatedToken *Tok = &(I + 1)->First;
-    if (Tok->Children.empty() && Tok->is(tok::r_brace) &&
+    if (Tok->getNextNoneComment() == NULL && Tok->is(tok::r_brace) &&
         !Tok->MustBreakBefore) {
       // We merge empty blocks even if the line exceeds the column limit.
       Tok->SpacesRequiredBefore = 0;
@@ -1442,7 +1455,7 @@ private:
 
       // Last, check that the third line contains a single closing brace.
       Tok = &(I + 2)->First;
-      if (!Tok->Children.empty() || Tok->isNot(tok::r_brace) ||
+      if (Tok->getNextNoneComment() != NULL || Tok->isNot(tok::r_brace) ||
           Tok->MustBreakBefore)
         return;
 
@@ -1550,6 +1563,31 @@ tooling::Replacements reformat(const FormatStyle &Style, Lexer &Lex,
                                std::vector<CharSourceRange> Ranges) {
   Formatter formatter(Style, Lex, SourceMgr, Ranges);
   return formatter.format();
+}
+
+tooling::Replacements reformat(const FormatStyle &Style, StringRef Code,
+                               std::vector<tooling::Range> Ranges,
+                               StringRef FileName) {
+  FileManager Files((FileSystemOptions()));
+  DiagnosticsEngine Diagnostics(
+      IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs),
+      new DiagnosticOptions);
+  SourceManager SourceMgr(Diagnostics, Files);
+  llvm::MemoryBuffer *Buf = llvm::MemoryBuffer::getMemBuffer(Code, FileName);
+  const clang::FileEntry *Entry =
+      Files.getVirtualFile(FileName, Buf->getBufferSize(), 0);
+  SourceMgr.overrideFileContents(Entry, Buf);
+  FileID ID =
+      SourceMgr.createFileID(Entry, SourceLocation(), clang::SrcMgr::C_User);
+  Lexer Lex(ID, SourceMgr.getBuffer(ID), SourceMgr, getFormattingLangOpts());
+  SourceLocation StartOfFile = SourceMgr.getLocForStartOfFile(ID);
+  std::vector<CharSourceRange> CharRanges;
+  for (unsigned i = 0, e = Ranges.size(); i != e; ++i) {
+    SourceLocation Start = StartOfFile.getLocWithOffset(Ranges[i].getOffset());
+    SourceLocation End = Start.getLocWithOffset(Ranges[i].getLength());
+    CharRanges.push_back(CharSourceRange::getCharRange(Start, End));
+  }
+  return reformat(Style, Lex, SourceMgr, CharRanges);
 }
 
 LangOptions getFormattingLangOpts() {

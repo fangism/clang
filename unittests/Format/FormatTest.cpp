@@ -10,7 +10,6 @@
 #define DEBUG_TYPE "format-test"
 
 #include "clang/Format/Format.h"
-#include "../Tooling/RewriterTestContext.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/Support/Debug.h"
 #include "gtest/gtest.h"
@@ -23,21 +22,13 @@ protected:
   std::string format(llvm::StringRef Code, unsigned Offset, unsigned Length,
                      const FormatStyle &Style) {
     DEBUG(llvm::errs() << "---\n");
-    RewriterTestContext Context;
-    FileID ID = Context.createInMemoryFile("input.cc", Code);
-    SourceLocation Start =
-        Context.Sources.getLocForStartOfFile(ID).getLocWithOffset(Offset);
-    std::vector<CharSourceRange> Ranges(
-        1,
-        CharSourceRange::getCharRange(Start, Start.getLocWithOffset(Length)));
-    Lexer Lex(ID, Context.Sources.getBuffer(ID), Context.Sources,
-              getFormattingLangOpts());
-    tooling::Replacements Replace =
-        reformat(Style, Lex, Context.Sources, Ranges);
-    ReplacementCount = Replace.size();
-    EXPECT_TRUE(applyAllReplacements(Replace, Context.Rewrite));
-    DEBUG(llvm::errs() << "\n" << Context.getRewrittenText(ID) << "\n\n");
-    return Context.getRewrittenText(ID);
+    std::vector<tooling::Range> Ranges(1, tooling::Range(Offset, Length));
+    tooling::Replacements Replaces = reformat(Style, Code, Ranges);
+    ReplacementCount = Replaces.size();
+    std::string Result = applyAllReplacements(Code, Replaces);
+    EXPECT_NE("", Result);
+    DEBUG(llvm::errs() << "\n" << Result << "\n\n");
+    return Result;
   }
 
   std::string
@@ -223,20 +214,26 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
   verifyFormat("if (a)\n  if (b)\n    if (c)\n      g();\nh();");
   verifyFormat("if (a)\n  if (b) {\n    f();\n  }\ng();");
 
-  FormatStyle AllowsMergedIf = getGoogleStyle();
+  FormatStyle AllowsMergedIf = getLLVMStyle();
   AllowsMergedIf.AllowShortIfStatementsOnASingleLine = true;
   verifyFormat("if (a)\n"
                "  // comment\n"
                "  f();",
                AllowsMergedIf);
+  verifyFormat("if (a)\n"
+               "  ;",
+               AllowsMergedIf);
+  verifyFormat("if (a)\n"
+               "  if (b) return;",
+               AllowsMergedIf);
 
-  verifyFormat("if (a)  // Can't merge this\n"
+  verifyFormat("if (a) // Can't merge this\n"
                "  f();\n",
                AllowsMergedIf);
   verifyFormat("if (a) /* still don't merge */\n"
                "  f();",
                AllowsMergedIf);
-  verifyFormat("if (a) {  // Never merge this\n"
+  verifyFormat("if (a) { // Never merge this\n"
                "  f();\n"
                "}",
                AllowsMergedIf);
@@ -246,7 +243,7 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
                AllowsMergedIf);
 
   EXPECT_EQ("if (a) return;", format("if(a)\nreturn;", 7, 1, AllowsMergedIf));
-  EXPECT_EQ("if (a) return;  // comment",
+  EXPECT_EQ("if (a) return; // comment",
             format("if(a)\nreturn; // comment", 20, 1, AllowsMergedIf));
 
   AllowsMergedIf.ColumnLimit = 14;
@@ -257,6 +254,29 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
 
   AllowsMergedIf.ColumnLimit = 13;
   verifyFormat("if (a)\n  return;", AllowsMergedIf);
+}
+
+TEST_F(FormatTest, FormatLoopsWithoutCompoundStatement) {
+  FormatStyle AllowsMergedLoops = getLLVMStyle();
+  AllowsMergedLoops.AllowShortLoopsOnASingleLine = true;
+  verifyFormat("while (true) continue;", AllowsMergedLoops);
+  verifyFormat("for (;;) continue;", AllowsMergedLoops);
+  verifyFormat("for (int &v : vec) v *= 2;", AllowsMergedLoops);
+  verifyFormat("while (true)\n"
+               "  ;",
+               AllowsMergedLoops);
+  verifyFormat("for (;;)\n"
+               "  ;",
+               AllowsMergedLoops);
+  verifyFormat("for (;;)\n"
+               "  for (;;) continue;",
+               AllowsMergedLoops);
+  verifyFormat("for (;;) // Can't merge this\n"
+               "  continue;",
+               AllowsMergedLoops);
+  verifyFormat("for (;;) /* still don't merge */\n"
+               "  continue;",
+               AllowsMergedLoops);
 }
 
 TEST_F(FormatTest, ParseIfElse) {
@@ -2238,6 +2258,8 @@ TEST_F(FormatTest, AlignsStringLiterals) {
   verifyFormat("a = a + \"a\"\n"
                "        \"a\"\n"
                "        \"a\";");
+  verifyFormat("f(\"a\", \"b\"\n"
+               "       \"c\");");
 
   verifyFormat(
       "#define LL_FORMAT \"ll\"\n"
@@ -2872,6 +2894,7 @@ TEST_F(FormatTest, HandlesIncludeDirectives) {
                "#include <a-a>\n"
                "#include < path with space >\n"
                "#include \"abc.h\" // this is included for ABC\n"
+               "#include \"some long include\" // with a comment\n"
                "#include \"some very long include paaaaaaaaaaaaaaaaaaaaaaath\"",
                getLLVMStyleWithColumns(35));
 
@@ -3041,6 +3064,11 @@ TEST_F(FormatTest, PullTrivialFunctionDefinitionsIntoSingleLine) {
                "  int a;\n"
                "#error {\n"
                "}");
+  verifyFormat("void f() {} // comment");
+  verifyFormat("void f() { int a; } // comment");
+  verifyFormat("void f() {\n"
+               "} // comment",
+               getLLVMStyleWithColumns(15));
 
   verifyFormat("void f() { return 42; }", getLLVMStyleWithColumns(23));
   verifyFormat("void f() {\n  return 42;\n}", getLLVMStyleWithColumns(22));
@@ -4209,6 +4237,7 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE_BOOL(AlignEscapedNewlinesLeft);
   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
   CHECK_PARSE_BOOL(AllowShortIfStatementsOnASingleLine);
+  CHECK_PARSE_BOOL(AllowShortLoopsOnASingleLine);
   CHECK_PARSE_BOOL(BinPackParameters);
   CHECK_PARSE_BOOL(ConstructorInitializerAllOnOneLineOrOnePerLine);
   CHECK_PARSE_BOOL(DerivePointerBinding);

@@ -3854,7 +3854,7 @@ def err_arc_objc_property_default_assign_on_object : Error<
 def err_arc_illegal_selector : Error<
   "ARC forbids use of %0 in a @selector">;
 def err_arc_illegal_method_def : Error<
-  "ARC forbids implementation of %0">;
+  "ARC forbids %select{implementation|synthesis}0 of %1">;
 def warn_arc_strong_pointer_objc_pointer : Warning<
   "method parameter of type %0 with no explicit ownership">,
   InGroup<DiagGroup<"explicit-ownership-type">>, DefaultIgnore;
@@ -4895,8 +4895,16 @@ let CategoryName = "Lambda Issue" in {
   def note_lambda_to_block_conv : Note<
     "implicit capture of lambda object due to conversion to block pointer "
     "here">;
-  def err_lambda_init_capture_unsupported : Error<
-    "sorry, initialized lambda-captures are not supported yet">;
+
+  // C++1y lambda init-captures.
+  def err_init_capture_no_expression : Error<
+    "initializer missing for lambda capture %0">;
+  def err_init_capture_multiple_expressions : Error<
+    "initializer for lambda capture %0 contains multiple expressions">;
+  def err_init_capture_deduction_failure : Error<
+    "cannot deduce type for lambda capture %0 from initializer of type %1">;
+  def err_init_capture_deduction_failure_from_init_list : Error<
+    "cannot deduce type for lambda capture %0 from initializer list">;
 }
 
 def err_return_in_captured_stmt : Error<
