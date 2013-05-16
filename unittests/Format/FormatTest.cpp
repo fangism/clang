@@ -32,8 +32,8 @@ protected:
         CharSourceRange::getCharRange(Start, Start.getLocWithOffset(Length)));
     Lexer Lex(ID, Context.Sources.getBuffer(ID), Context.Sources,
               getFormattingLangOpts());
-    tooling::Replacements Replace = reformat(
-        Style, Lex, Context.Sources, Ranges, new IgnoringDiagConsumer());
+    tooling::Replacements Replace =
+        reformat(Style, Lex, Context.Sources, Ranges);
     ReplacementCount = Replace.size();
     EXPECT_TRUE(applyAllReplacements(Replace, Context.Rewrite));
     DEBUG(llvm::errs() << "\n" << Context.getRewrittenText(ID) << "\n\n");
@@ -745,11 +745,11 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
 }
 
 TEST_F(FormatTest, ParsesCommentsAdjacentToPPDirectives) {
-  EXPECT_EQ("namespace {}\n// Test\n#define A",
+  EXPECT_EQ("namespace {\n}\n// Test\n#define A",
             format("namespace {}\n   // Test\n#define A"));
-  EXPECT_EQ("namespace {}\n/* Test */\n#define A",
+  EXPECT_EQ("namespace {\n}\n/* Test */\n#define A",
             format("namespace {}\n   /* Test */\n#define A"));
-  EXPECT_EQ("namespace {}\n/* Test */ #define A",
+  EXPECT_EQ("namespace {\n}\n/* Test */ #define A",
             format("namespace {}\n   /* Test */    #define A"));
 }
 
@@ -1110,7 +1110,7 @@ TEST_F(FormatTest, FormatsInlineASM) {
       "asm(\"movq\\t%%rbx, %%rsi\\n\\t\"\n"
       "    \"cpuid\\n\\t\"\n"
       "    \"xchgq\\t%%rbx, %%rsi\\n\\t\"\n"
-      "    : \"=a\" (*rEAX), \"=S\" (*rEBX), \"=c\" (*rECX), \"=d\" (*rEDX)\n"
+      "    : \"=a\"(*rEAX), \"=S\"(*rEBX), \"=c\"(*rECX), \"=d\"(*rEDX)\n"
       "    : \"a\"(value));");
 }
 
@@ -1646,6 +1646,14 @@ TEST_F(FormatTest, LineBreakingInBinaryExpressions) {
                "    SourceMgr.getSpellingColumnNumber(\n"
                "        TheLine.Last->FormatTok.Tok.getLocation()) -\n"
                "    1);");
+
+  FormatStyle OnePerLine = getLLVMStyle();
+  OnePerLine.BinPackParameters = false;
+  verifyFormat(
+      "if (aaaaaaaaaaaaaaaaaaaaaaaaaaaa || aaaaaaaaaaaaaaaaaaaaaaaaaaaa ||\n"
+      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaa || aaaaaaaaaaaaaaaaaaaaaaaaaaaa ||\n"
+      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaa) {\n}",
+      OnePerLine);
 }
 
 TEST_F(FormatTest, ExpressionIndentation) {
@@ -1994,7 +2002,7 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
       "    .StartsWith(\".eh_frame\", ORDER_EH_FRAME).StartsWith(\".init\", ORDER_INIT)\n"
       "    .StartsWith(\".fini\", ORDER_FINI).StartsWith(\".hash\", ORDER_HASH)\n"
       "    .Default(ORDER_TEXT);\n");
-      
+
   verifyFormat("return aaaaaaaaaaaaaaaaa->aaaaa().aaaaaaaaaaaaa().aaaaaa() <\n"
                "       aaaaaaaaaaaaaaa->aaaaa().aaaaaaaaaaaaa().aaaaaa();");
   verifyFormat(
@@ -2795,9 +2803,9 @@ TEST_F(FormatTest, FormatsFunctionTypes) {
   verifyGoogleFormat("A<void*(int*, SomeType*)>;");
   verifyGoogleFormat("void* (*a)(int);");
 
-  // Other constructs can look like function types:
+  // Other constructs can look somewhat like function types:
   verifyFormat("A<sizeof(*x)> a;");
-  verifyFormat("A<alignof(*x)> a;");
+  verifyFormat("#define DEREF_AND_CALL_F(x) f(*x)");
 }
 
 TEST_F(FormatTest, BreaksLongDeclarations) {
@@ -2827,6 +2835,10 @@ TEST_F(FormatTest, BreaksLongDeclarations) {
                "        ReallyReallyLongParameterName,\n"
                "    const SomeType<string, SomeOtherTemplateParameter> &\n"
                "        AnotherLongParameterName) {}");
+  verifyFormat("template <typename A>\n"
+               "SomeLoooooooooooooooooooooongType<\n"
+               "    typename some_namespace::SomeOtherType<A>::Type>\n"
+               "Function() {}");
   verifyFormat(
       "aaaaaaaaaaaaaaaa::aaaaaaaaaaaaaaaa<aaaaaaaaaaaaa, aaaaaaaaaaaa>\n"
       "    aaaaaaaaaaaaaaaaaaaaaaa;");
@@ -2909,7 +2921,10 @@ TEST_F(FormatTest, IncorrectCodeMissingSemicolon) {
             "    return\n"
             "}",
             format("void  f  (  )  {  if  ( a )  return  }"));
-  EXPECT_EQ("namespace N { void f() }", format("namespace  N  {  void f()  }"));
+  EXPECT_EQ("namespace N {\n"
+            "void f()\n"
+            "}",
+            format("namespace  N  {  void f()  }"));
   EXPECT_EQ("namespace N {\n"
             "void f() {}\n"
             "void g()\n"
@@ -3065,6 +3080,13 @@ TEST_F(FormatTest, UnderstandContextOfRecordTypeKeywords) {
   verifyFormat("class A::B::C {\n} n;");
 
   // Template definitions.
+  verifyFormat(
+      "template <typename F>\n"
+      "Matcher(const Matcher<F> &Other,\n"
+      "        typename enable_if_c<is_base_of<F, T>::value &&\n"
+      "                             !is_same<F, T>::value>::type * = 0)\n"
+      "    : Implementation(new ImplicitCastMatcher<F>(Other)) {}");
+
   // FIXME: This is still incorrectly handled at the formatter side.
   verifyFormat("template <> struct X < 15, i < 3 && 42 < 50 && 33<28> {\n};");
 
@@ -4109,6 +4131,10 @@ TEST_F(FormatTest, LinuxBraceBreaking) {
                "      b();\n"
                "    }\n"
                "  }\n"
+               "  void g()\n"
+               "  {\n"
+               "    return;\n"
+               "  }\n"
                "}\n"
                "}",
                BreakBeforeBrace);
@@ -4125,6 +4151,10 @@ TEST_F(FormatTest, StroustrupBraceBreaking) {
                "      a();\n"
                "      b();\n"
                "    }\n"
+               "  }\n"
+               "  void g()\n"
+               "  {\n"
+               "    return;\n"
                "  }\n"
                "}\n"
                "}",

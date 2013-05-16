@@ -19,11 +19,9 @@
 #include "TokenAnnotator.h"
 #include "UnwrappedLineParser.h"
 #include "WhitespaceManager.h"
-#include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Format/Format.h"
-#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Allocator.h"
@@ -506,6 +504,8 @@ private:
            !State.Stack.back().AvoidBinPacking) ||
           Previous.Type == TT_BinaryOperator)
         State.Stack.back().BreakBeforeParameter = false;
+      if (Previous.Type == TT_TemplateCloser && State.ParenLevel == 0)
+        State.Stack.back().BreakBeforeParameter = false;
 
       if (!DryRun) {
         unsigned NewLines = 1;
@@ -533,6 +533,7 @@ private:
       }
       const AnnotatedToken *TokenBefore = Current.getPreviousNoneComment();
       if (TokenBefore && !TokenBefore->isOneOf(tok::comma, tok::semi) &&
+          TokenBefore->Type != TT_TemplateCloser &&
           TokenBefore->Type != TT_BinaryOperator && !TokenBefore->opensScope())
         State.Stack.back().BreakBeforeParameter = true;
 
@@ -543,7 +544,8 @@ private:
       if (State.Stack.back().AvoidBinPacking) {
         // If we are breaking after '(', '{', '<', this is not bin packing
         // unless AllowAllParametersOfDeclarationOnNextLine is false.
-        if ((Previous.isNot(tok::l_paren) && Previous.isNot(tok::l_brace)) ||
+        if (!(Previous.isOneOf(tok::l_paren, tok::l_brace) ||
+              Previous.Type == TT_BinaryOperator) ||
             (!Style.AllowAllParametersOfDeclarationOnNextLine &&
              Line.MustBeDeclaration))
           State.Stack.back().BreakBeforeParameter = true;
@@ -1018,6 +1020,10 @@ private:
         getRemainingLength(State) + State.Column > getColumnLimit() &&
         State.ParenLevel < State.StartOfLineLevel)
       return true;
+
+    if (Current.Type == TT_StartOfName && Line.MightBeFunctionDecl &&
+        State.Stack.back().BreakBeforeParameter && State.ParenLevel == 0)
+      return true;
     return false;
   }
 
@@ -1139,17 +1145,16 @@ private:
 
 class Formatter : public UnwrappedLineConsumer {
 public:
-  Formatter(DiagnosticsEngine &Diag, const FormatStyle &Style, Lexer &Lex,
-            SourceManager &SourceMgr,
+  Formatter(const FormatStyle &Style, Lexer &Lex, SourceManager &SourceMgr,
             const std::vector<CharSourceRange> &Ranges)
-      : Diag(Diag), Style(Style), Lex(Lex), SourceMgr(SourceMgr),
+      : Style(Style), Lex(Lex), SourceMgr(SourceMgr),
         Whitespaces(SourceMgr, Style), Ranges(Ranges) {}
 
   virtual ~Formatter() {}
 
   tooling::Replacements format() {
     LexerBasedFormatTokenSource Tokens(Lex, SourceMgr);
-    UnwrappedLineParser Parser(Diag, Style, Tokens, *this);
+    UnwrappedLineParser Parser(Style, Tokens, *this);
     bool StructuralError = Parser.parse();
     unsigned PreviousEndOfLineColumn = 0;
     TokenAnnotator Annotator(Style, SourceMgr, Lex,
@@ -1396,13 +1401,17 @@ private:
   void tryMergeSimpleBlock(std::vector<AnnotatedLine>::iterator &I,
                            std::vector<AnnotatedLine>::iterator E,
                            unsigned Limit) {
+    // No merging if the brace already is on the next line.
+    if (Style.BreakBeforeBraces != FormatStyle::BS_Attach)
+      return;
+
     // First, check that the current line allows merging. This is the case if
     // we're not in a control flow statement and the last token is an opening
     // brace.
     AnnotatedLine &Line = *I;
     if (Line.First.isOneOf(tok::kw_if, tok::kw_while, tok::kw_do, tok::r_brace,
                            tok::kw_else, tok::kw_try, tok::kw_catch,
-                           tok::kw_for,
+                           tok::kw_for, tok::kw_namespace,
                            // This gets rid of all ObjC @ keywords and methods.
                            tok::at, tok::minus, tok::plus))
       return;
@@ -1528,7 +1537,6 @@ private:
     }
   }
 
-  DiagnosticsEngine &Diag;
   FormatStyle Style;
   Lexer &Lex;
   SourceManager &SourceMgr;
@@ -1539,20 +1547,8 @@ private:
 
 tooling::Replacements reformat(const FormatStyle &Style, Lexer &Lex,
                                SourceManager &SourceMgr,
-                               std::vector<CharSourceRange> Ranges,
-                               DiagnosticConsumer *DiagClient) {
-  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
-  OwningPtr<DiagnosticConsumer> DiagPrinter;
-  if (DiagClient == 0) {
-    DiagPrinter.reset(new TextDiagnosticPrinter(llvm::errs(), &*DiagOpts));
-    DiagPrinter->BeginSourceFile(Lex.getLangOpts(), Lex.getPP());
-    DiagClient = DiagPrinter.get();
-  }
-  DiagnosticsEngine Diagnostics(
-      IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs()), &*DiagOpts,
-      DiagClient, false);
-  Diagnostics.setSourceManager(&SourceMgr);
-  Formatter formatter(Diagnostics, Style, Lex, SourceMgr, Ranges);
+                               std::vector<CharSourceRange> Ranges) {
+  Formatter formatter(Style, Lex, SourceMgr, Ranges);
   return formatter.format();
 }
 

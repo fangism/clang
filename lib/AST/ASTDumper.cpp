@@ -449,9 +449,7 @@ void ASTDumper::dumpBareDeclRef(const Decl *D) {
 
   if (const NamedDecl *ND = dyn_cast<NamedDecl>(D)) {
     ColorScope Color(*this, DeclNameColor);
-    OS << " '";
-    ND->getDeclName().printName(OS);
-    OS << "'";
+    OS << " '" << ND->getDeclName() << '\'';
   }
 
   if (const ValueDecl *VD = dyn_cast<ValueDecl>(D))
@@ -1331,7 +1329,7 @@ void ASTDumper::dumpStmt(const Stmt *S) {
     return;
   }
 
-  setMoreChildren(S->children());
+  setMoreChildren(!S->children().empty());
   ConstStmtVisitor<ASTDumper>::Visit(S);
   setMoreChildren(false);
   for (Stmt::const_child_range CI = S->children(); CI; ++CI) {

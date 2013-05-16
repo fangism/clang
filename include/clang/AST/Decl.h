@@ -24,6 +24,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace clang {
 struct ASTTemplateArgumentListInfo;
@@ -142,7 +143,7 @@ public:
   // FIXME: Deprecated, move clients to getName().
   std::string getNameAsString() const { return Name.getAsString(); }
 
-  void printName(raw_ostream &os) const { return Name.printName(os); }
+  void printName(raw_ostream &os) const { os << Name; }
 
   /// getDeclName - Get the actual, stored name of the declaration,
   /// which may be a special name.

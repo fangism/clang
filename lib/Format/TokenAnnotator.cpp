@@ -101,8 +101,10 @@ private:
         return true;
       }
       if (CurrentToken->isOneOf(tok::r_paren, tok::r_square, tok::r_brace,
-                                tok::pipepipe, tok::ampamp, tok::question,
-                                tok::colon))
+                                tok::question, tok::colon))
+        return false;
+      if (CurrentToken->isOneOf(tok::pipepipe, tok::ampamp) &&
+          Line.First.isNot(tok::kw_template))
         return false;
       updateParameterCount(Left, CurrentToken);
       if (!consumeToken())
@@ -155,6 +157,9 @@ private:
       }
 
       if (CurrentToken->is(tok::r_paren)) {
+        if (CurrentToken->Children.empty() ||
+            !CurrentToken->Children[0].isOneOf(tok::l_paren, tok::l_square))
+          Left->DefinesFunctionType = false;
         if (CurrentToken->Parent->closesScope())
           CurrentToken->Parent->MatchingParen->NoMoreTokensOnLevel = true;
         Left->MatchingParen = CurrentToken;
@@ -173,9 +178,7 @@ private:
       }
       if (CurrentToken->isOneOf(tok::r_square, tok::r_brace))
         return false;
-      if (Left->Parent &&
-          !Left->Parent->isOneOf(tok::kw_sizeof, tok::kw_alignof) &&
-          CurrentToken->Parent->Type == TT_PointerOrReference &&
+      if (CurrentToken->Parent->Type == TT_PointerOrReference &&
           CurrentToken->Parent->Parent->isOneOf(tok::l_paren, tok::coloncolon))
         Left->DefinesFunctionType = true;
       updateParameterCount(Left, CurrentToken);
