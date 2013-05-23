@@ -1788,7 +1788,9 @@ def err_attribute_uuid_malformed_guid : Error<
 def warn_nonnull_pointers_only : Warning<
   "nonnull attribute only applies to pointer arguments">;
 def err_attribute_pointers_only : Error<
-  "'%0' attribute only applies to pointer arguments">;
+  "%0 attribute only applies to pointer arguments">;
+def err_attribute_no_member_pointers : Error<
+  "%0 attribute cannot be used with pointers to members">;
 def err_attribute_invalid_implicit_this_argument : Error<
   "'%0' attribute is invalid for the implicit this argument">;
 def err_ownership_type : Error<
@@ -4759,13 +4761,17 @@ def err_default_init_const : Error<
 def err_delete_operand : Error<"cannot delete expression of type %0">;
 def ext_delete_void_ptr_operand : ExtWarn<
   "cannot delete expression with pointer-to-'void' type %0">;
-def err_ambiguous_delete_operand : Error<"ambiguous conversion of delete "
-                                         "expression of type %0 to a pointer">;
+def err_ambiguous_delete_operand : Error<
+  "ambiguous conversion of delete expression of type %0 to a pointer">;
 def warn_delete_incomplete : Warning<
   "deleting pointer to incomplete type %0 may cause undefined behavior">,
   InGroup<DiagGroup<"delete-incomplete">>;
 def err_delete_incomplete_class_type : Error<
   "deleting incomplete class type %0; no conversions to pointer type">;
+def err_delete_explicit_conversion : Error<
+  "converting delete expression from type %0 to type %1 invokes an explicit "
+  "conversion function">;
+def note_delete_conversion : Note<"conversion to pointer type %0">;
 def warn_delete_array_type : Warning<
   "'delete' applied to a pointer-to-array type %0 treated as delete[]">;
 def err_no_suitable_delete_member_function_found : Error<
@@ -6187,6 +6193,9 @@ def warn_collection_expr_type : Warning<
 
 def err_invalid_conversion_between_ext_vectors : Error<
   "invalid conversion between ext-vector type %0 and %1">;
+
+def warn_duplicate_attribute_exact : Warning<
+  "attribute %0 is already applied">, InGroup<IgnoredAttributes>;
 
 def warn_duplicate_attribute : Warning<
   "attribute %0 is already applied with different parameters">,

@@ -658,15 +658,13 @@ llvm::DIType CGDebugInfo::CreatePointerLikeType(unsigned Tag,
 
 llvm::DIType CGDebugInfo::getOrCreateStructPtrType(StringRef Name,
                                                    llvm::DIType &Cache) {
-    if (Cache.Verify())
-      return Cache;
-    Cache =
-      DBuilder.createForwardDecl(llvm::dwarf::DW_TAG_structure_type,
-                                 Name, TheCU, getOrCreateMainFile(),
-                                 0);
-    unsigned Size = CGM.getContext().getTypeSize(CGM.getContext().VoidPtrTy);
-    Cache = DBuilder.createPointerType(Cache, Size);
+  if (Cache.Verify())
     return Cache;
+  Cache = DBuilder.createForwardDecl(llvm::dwarf::DW_TAG_structure_type, Name,
+                                     TheCU, getOrCreateMainFile(), 0);
+  unsigned Size = CGM.getContext().getTypeSize(CGM.getContext().VoidPtrTy);
+  Cache = DBuilder.createPointerType(Cache, Size);
+  return Cache;
 }
 
 llvm::DIType CGDebugInfo::CreateType(const BlockPointerType *Ty,
@@ -963,17 +961,17 @@ CollectRecordFields(const RecordDecl *record, llvm::DIFile tunit,
 /// getOrCreateMethodType - CXXMethodDecl's type is a FunctionType. This
 /// function type is not updated to include implicit "this" pointer. Use this
 /// routine to get a method type which includes "this" pointer.
-llvm::DIType
+llvm::DICompositeType
 CGDebugInfo::getOrCreateMethodType(const CXXMethodDecl *Method,
                                    llvm::DIFile Unit) {
   const FunctionProtoType *Func = Method->getType()->getAs<FunctionProtoType>();
   if (Method->isStatic())
-    return getOrCreateType(QualType(Func, 0), Unit);
+    return llvm::DICompositeType(getOrCreateType(QualType(Func, 0), Unit));
   return getOrCreateInstanceMethodType(Method->getThisType(CGM.getContext()),
                                        Func, Unit);
 }
 
-llvm::DIType CGDebugInfo::getOrCreateInstanceMethodType(
+llvm::DICompositeType CGDebugInfo::getOrCreateInstanceMethodType(
     QualType ThisPtr, const FunctionProtoType *Func, llvm::DIFile Unit) {
   // Add "this" pointer.
   llvm::DIArray Args = llvm::DICompositeType(
@@ -1039,7 +1037,7 @@ CGDebugInfo::CreateCXXMemberFunction(const CXXMethodDecl *Method,
     isa<CXXConstructorDecl>(Method) || isa<CXXDestructorDecl>(Method);
 
   StringRef MethodName = getFunctionName(Method);
-  llvm::DIType MethodTy = getOrCreateMethodType(Method, Unit);
+  llvm::DICompositeType MethodTy = getOrCreateMethodType(Method, Unit);
 
   // Since a single ctor/dtor corresponds to multiple functions, it doesn't
   // make sense to give a single ctor/dtor a linkage name.
@@ -1411,7 +1409,7 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty) {
   llvm::DICompositeType FwdDecl(
       getOrCreateLimitedType(QualType(Ty, 0), DefUnit));
   assert(FwdDecl.Verify() &&
-         "The debug type of a RecordType should be a DICompositeType");
+         "The debug type of a RecordType should be a llvm::DICompositeType");
 
   if (FwdDecl.isForwardDecl())
     return FwdDecl;
@@ -1934,20 +1932,20 @@ llvm::DIType CGDebugInfo::getOrCreateType(QualType Ty, llvm::DIFile Unit) {
     // the ObjCInterfaceCache together with a checksum. Instead of
     // the (possibly) incomplete interface type, we return a forward
     // declaration that gets RAUW'd in CGDebugInfo::finalize().
-    llvm::DenseMap<void *, std::pair<llvm::WeakVH, unsigned > >
-      ::iterator it = ObjCInterfaceCache.find(TyPtr);
-    if (it != ObjCInterfaceCache.end())
-      TC = llvm::DIType(cast<llvm::MDNode>(it->second.first));
-    else
-      TC = DBuilder.createForwardDecl(llvm::dwarf::DW_TAG_structure_type,
-                                      Decl->getName(), TheCU, Unit,
-                                      getLineNumber(Decl->getLocation()),
-                                      TheCU.getLanguage());
+    std::pair<llvm::WeakVH, unsigned> &V = ObjCInterfaceCache[TyPtr];
+    if (V.first)
+      return llvm::DIType(cast<llvm::MDNode>(V.first));
+    TC = DBuilder.createForwardDecl(llvm::dwarf::DW_TAG_structure_type,
+                                    Decl->getName(), TheCU, Unit,
+                                    getLineNumber(Decl->getLocation()),
+                                    TheCU.getLanguage());
     // Store the forward declaration in the cache.
-    ObjCInterfaceCache[TyPtr] = std::make_pair(TC, Checksum(Decl));
+    V.first = TC;
+    V.second = Checksum(Decl);
 
     // Register the type for replacement in finalize().
     ReplaceMap.push_back(std::make_pair(TyPtr, static_cast<llvm::Value*>(TC)));
+
     return TC;
   }
 
@@ -2247,9 +2245,9 @@ llvm::DISubprogram CGDebugInfo::getFunctionDeclaration(const Decl *D) {
 
 // getOrCreateFunctionType - Construct DIType. If it is a c++ method, include
 // implicit parameter "this".
-llvm::DIType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
-                                                  QualType FnType,
-                                                  llvm::DIFile F) {
+llvm::DICompositeType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
+                                                           QualType FnType,
+                                                           llvm::DIFile F) {
 
   if (const CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(D))
     return getOrCreateMethodType(Method, F);
@@ -2258,9 +2256,13 @@ llvm::DIType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
     SmallVector<llvm::Value *, 16> Elts;
 
     // First element is always return type. For 'void' functions it is NULL.
-    QualType ResultTy = OMethod->hasRelatedResultType()
-      ? QualType(OMethod->getClassInterface()->getTypeForDecl(), 0)
-      : OMethod->getResultType();
+    QualType ResultTy = OMethod->getResultType();
+
+    // Replace the instancetype keyword with the actual type.
+    if (ResultTy == CGM.getContext().getObjCInstanceType())
+      ResultTy = CGM.getContext().getPointerType(
+        QualType(OMethod->getClassInterface()->getTypeForDecl(), 0));
+
     Elts.push_back(getOrCreateType(ResultTy, F));
     // "self" pointer is always first argument.
     QualType SelfDeclTy = OMethod->getSelfDecl()->getType();
@@ -2277,7 +2279,7 @@ llvm::DIType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
     llvm::DIArray EltTypeArray = DBuilder.getOrCreateArray(Elts);
     return DBuilder.createSubroutineType(F, EltTypeArray);
   }
-  return getOrCreateType(FnType, F);
+  return llvm::DICompositeType(getOrCreateType(FnType, F));
 }
 
 /// EmitFunctionStart - Constructs the debug code for entering a function.
@@ -2361,7 +2363,7 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   if (!HasDecl || D->isImplicit())
     Flags |= llvm::DIDescriptor::FlagArtificial;
 
-  llvm::DIType DIFnType;
+  llvm::DICompositeType DIFnType;
   llvm::DISubprogram SPDecl;
   if (HasDecl &&
       DebugKind >= CodeGenOptions::LimitedDebugInfo) {

@@ -29,7 +29,7 @@ namespace format {
 /// whitespace characters preceeding it.
 struct FormatToken {
   FormatToken()
-      : NewlinesBefore(0), HasUnescapedNewline(false), WhiteSpaceLength(0),
+      : NewlinesBefore(0), HasUnescapedNewline(false),
         LastNewlineOffset(0), TokenLength(0), IsFirst(false),
         MustBreakBefore(false), TrailingWhiteSpaceLength(0) {}
 
@@ -46,15 +46,8 @@ struct FormatToken {
   /// Token.
   bool HasUnescapedNewline;
 
-  /// \brief The location of the start of the whitespace immediately preceeding
-  /// the \c Token.
-  ///
-  /// Used together with \c WhiteSpaceLength to create a \c Replacement.
-  SourceLocation WhiteSpaceStart;
-
-  /// \brief The length in characters of the whitespace immediately preceeding
-  /// the \c Token.
-  unsigned WhiteSpaceLength;
+  /// \brief The range of the whitespace immediately preceeding the \c Token.
+  SourceRange WhitespaceRange;
 
   /// \brief The offset just past the last '\n' in this token's leading
   /// whitespace (relative to \c WhiteSpaceStart). 0 if there is no '\n'.
@@ -83,7 +76,7 @@ struct FormatToken {
   /// This can be different to Tok.getLocation(), which includes leading escaped
   /// newlines.
   SourceLocation getStartOfNonWhitespace() const {
-    return WhiteSpaceStart.getLocWithOffset(WhiteSpaceLength);
+    return WhitespaceRange.getEnd();
   }
 };
 
@@ -122,6 +115,15 @@ public:
   virtual ~FormatTokenSource() {
   }
   virtual FormatToken getNextToken() = 0;
+
+  // FIXME: This interface will become an implementation detail of
+  // the UnwrappedLineParser once we switch to generate all tokens
+  // up-front.
+  virtual unsigned getPosition() { return 0; }
+  virtual FormatToken setPosition(unsigned Position) {
+    assert(false);
+    return FormatToken();
+  }
 };
 
 class UnwrappedLineParser {
@@ -140,6 +142,7 @@ private:
   void parsePPDefine();
   void parsePPUnknown();
   void parseStructuralElement();
+  bool tryToParseBracedList();
   void parseBracedList();
   void parseReturn();
   void parseParens();
@@ -163,6 +166,14 @@ private:
   void readToken();
   void flushComments(bool NewlineBeforeNext);
   void pushToken(const FormatToken &Tok);
+  void calculateBraceTypes();
+
+  // Represents what type of block a left brace opens.
+  enum LBraceState {
+    BS_Unknown,
+    BS_Block,
+    BS_BracedInit
+  };
 
   // FIXME: We are constantly running into bugs where Line.Level is incorrectly
   // subtracted from beyond 0. Introduce a method to subtract from Line.Level
@@ -202,6 +213,16 @@ private:
   const FormatStyle &Style;
   FormatTokenSource *Tokens;
   UnwrappedLineConsumer &Callback;
+
+  // FIXME: This is a temporary measure until we have reworked the ownership
+  // of the format tokens. The goal is to have the actual tokens created and
+  // owned outside of and handed into the UnwrappedLineParser.
+  SmallVector<FormatToken, 16> AllTokens;
+
+  // FIXME: Currently we cannot store attributes with tokens, as we treat
+  // them as read-only; thus, we now store the brace state indexed by the
+  // position of the token in the stream (see \c AllTokens).
+  SmallVector<LBraceState, 16> LBraces;
 
   friend class ScopedLineState;
 };
