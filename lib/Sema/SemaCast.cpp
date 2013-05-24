@@ -683,6 +683,12 @@ void CastOperation::CheckConstCast() {
       << SrcExpr.get()->getType() << DestType << OpRange;
 }
 
+// gcc-4.0 doesn't jive with local anonymous enums
+  enum ReinterpretKindEnum {
+    ReinterpretUpcast,
+    ReinterpretDowncast
+  };
+
 /// Check that a reinterpret_cast\<DestType\>(SrcExpr) is not used as upcast
 /// or downcast between respective pointers or references.
 static void DiagnoseReinterpretUpDownCast(Sema &Self, const Expr *SrcExpr,
@@ -706,10 +712,7 @@ static void DiagnoseReinterpretUpDownCast(Sema &Self, const Expr *SrcExpr,
   if (!DestRD || !DestRD->isCompleteDefinition() || DestRD->isInvalidDecl())
     return;
 
-  enum {
-    ReinterpretUpcast,
-    ReinterpretDowncast
-  } ReinterpretKind;
+  ReinterpretKindEnum ReinterpretKind;
 
   CXXBasePaths BasePaths;
 

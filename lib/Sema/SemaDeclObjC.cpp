@@ -1404,6 +1404,11 @@ static bool CheckMethodOverrideParam(Sema &S,
   return false;
 }
 
+// gcc-4.0 wants non-local enum
+  enum FamilySelector {
+    F_alloc, F_copy, F_mutableCopy = F_copy, F_init, F_new
+  };
+  enum ReasonSelector { R_NonObjectReturn, R_UnrelatedReturn };
 /// In ARC, check whether the conventional meanings of the two methods
 /// match.  If they don't, it's a hard error.
 static bool checkMethodFamilyMismatch(Sema &S, ObjCMethodDecl *impl,
@@ -1432,9 +1437,6 @@ static bool checkMethodFamilyMismatch(Sema &S, ObjCMethodDecl *impl,
   }
 
   // Indexes into a %select clause in the diagnostic.
-  enum FamilySelector {
-    F_alloc, F_copy, F_mutableCopy = F_copy, F_init, F_new
-  };
   FamilySelector familySelector = FamilySelector();
 
   switch (family) {
@@ -1458,7 +1460,6 @@ static bool checkMethodFamilyMismatch(Sema &S, ObjCMethodDecl *impl,
   case OMF_new: familySelector = F_new; break;
   }
 
-  enum ReasonSelector { R_NonObjectReturn, R_UnrelatedReturn };
   ReasonSelector reasonSelector;
 
   // The only reason these methods don't fall within their families is

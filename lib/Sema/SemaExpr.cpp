@@ -311,6 +311,8 @@ std::string Sema::getDeletedOrUnavailableSuffix(const FunctionDecl *FD) {
   return std::string();
 }
 
+// gcc-4.0 needs non-local enums
+  enum CalleeType { CT_Function, CT_Method, CT_Block };
 /// DiagnoseSentinelCalls - This routine checks whether a call or
 /// message-send is to a declaration with the sentinel attribute, and
 /// if so, it checks that the requirements of the sentinel are
@@ -326,7 +328,7 @@ void Sema::DiagnoseSentinelCalls(NamedDecl *D, SourceLocation Loc,
 
   // The kind of declaration.  This is also an index into a %select in
   // the diagnostic.
-  enum CalleeType { CT_Function, CT_Method, CT_Block } calleeType;
+  CalleeType calleeType;
 
   if (ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(D)) {
     numFormalParams = MD->param_size();

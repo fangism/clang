@@ -54,6 +54,20 @@
 
 using namespace clang;
 
+// enums that were lifted from local scope and given names
+  enum FunctionKindEnum {
+    Function,
+    Method,
+    Block,
+    Lambda
+  };
+    enum ObjectKindEnum {
+      Variable,
+      Property,
+      ImplicitProperty,
+      Ivar
+    };
+
 //===----------------------------------------------------------------------===//
 // Unreachable code analysis.
 //===----------------------------------------------------------------------===//
@@ -1064,12 +1078,7 @@ static void diagnoseRepeatedUseOfWeak(Sema &S,
   // warn_arc_repeated_use_of_weak and warn_arc_possible_repeated_use_of_weak.
   // FIXME: Should we use a common classification enum and the same set of
   // possibilities all throughout Sema?
-  enum {
-    Function,
-    Method,
-    Block,
-    Lambda
-  } FunctionKind;
+  FunctionKindEnum FunctionKind;
 
   if (isa<sema::BlockScopeInfo>(CurFn))
     FunctionKind = Block;
@@ -1102,12 +1111,7 @@ static void diagnoseRepeatedUseOfWeak(Sema &S,
     // Classify the weak object being accessed for better warning text.
     // This enum should stay in sync with the cases in
     // warn_arc_repeated_use_of_weak and warn_arc_possible_repeated_use_of_weak.
-    enum {
-      Variable,
-      Property,
-      ImplicitProperty,
-      Ivar
-    } ObjectKind;
+    ObjectKindEnum ObjectKind;
 
     const NamedDecl *D = Key.getProperty();
     if (isa<VarDecl>(D))
