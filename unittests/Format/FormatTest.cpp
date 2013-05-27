@@ -766,8 +766,8 @@ TEST_F(FormatTest, AlignsMultiLineComments) {
                    "           1.1.1. to keep the formatting.\n"
                    "   */"));
   EXPECT_EQ("/*\n"
-            " Don't try to outdent if there's not enough inentation.\n"
-            " */",
+            "Don't try to outdent if there's not enough inentation.\n"
+            "*/",
             format("  /*\n"
                    " Don't try to outdent if there's not enough inentation.\n"
                    " */"));
@@ -808,6 +808,65 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
             format("// A comment before a macro definition\n"
                    "#define a b",
                    getLLVMStyleWithColumns(20)));
+
+  EXPECT_EQ("/* A comment before\n"
+            " * a macro\n"
+            " * definition */\n"
+            "#define a b",
+            format("/* A comment before a macro definition */\n"
+                   "#define a b",
+                   getLLVMStyleWithColumns(20)));
+
+  EXPECT_EQ("/* some comment\n"
+            "     *   a comment\n"
+            "* that we break\n"
+            " * another comment\n"
+            "* we have to break\n"
+            "* a left comment\n"
+            " */",
+            format("  /* some comment\n"
+                   "       *   a comment that we break\n"
+                   "   * another comment we have to break\n"
+                   "* a left comment\n"
+                   "   */",
+                   getLLVMStyleWithColumns(20)));
+
+  EXPECT_EQ("/*\n"
+            "\n"
+            "\n"
+            "    */\n",
+            format("  /*       \n"
+                   "      \n"
+                   "               \n"
+                   "      */\n"));
+}
+
+TEST_F(FormatTest, MultiLineCommentsInDefines) {
+  // FIXME: The line breaks are still suboptimal (current guess
+  // is that this is due to the token length being misused), but
+  // the comment handling is correct.
+  EXPECT_EQ("#define A(      \\\n"
+            "    x) /*       \\\n"
+            "a comment       \\\n"
+            "inside */       \\\n"
+            "  f();",
+            format("#define A(x) /* \\\n"
+                   "  a comment     \\\n"
+                   "  inside */     \\\n"
+                   "  f();",
+                   getLLVMStyleWithColumns(17)));
+  EXPECT_EQ("#define A(x) /* \\\n"
+            "        a       \\\n"
+            "        comment \\\n"
+            "        inside  \\\n"
+            "        */      \\\n"
+            "  f();",
+            format("#define A(      \\\n"
+                   "    x) /*       \\\n"
+                   "  a comment     \\\n"
+                   "  inside */     \\\n"
+                   "  f();",
+                   getLLVMStyleWithColumns(17)));
 }
 
 TEST_F(FormatTest, ParsesCommentsAdjacentToPPDirectives) {
@@ -928,7 +987,8 @@ TEST_F(FormatTest, SplitsLongLinesInComments) {
                    "    */", getLLVMStyleWithColumns(20)));
   EXPECT_EQ("{\n"
             "  if (something) /* This is a\n"
-            "long comment */\n"
+            "                    long\n"
+            "                    comment */\n"
             "    ;\n"
             "}",
             format("{\n"
@@ -1360,7 +1420,6 @@ TEST_F(FormatTest, FormatObjCTryCatch) {
 TEST_F(FormatTest, StaticInitializers) {
   verifyFormat("static SomeClass SC = { 1, 'a' };");
 
-  // FIXME: Format like enums if the static initializer does not fit on a line.
   verifyFormat(
       "static SomeClass WithALoooooooooooooooooooongName = {\n"
       "  100000000, \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
@@ -1597,13 +1656,10 @@ TEST_F(FormatTest, EmptyLinesInMacroDefinitions) {
 
 TEST_F(FormatTest, MacroDefinitionsWithIncompleteCode) {
   verifyFormat("#define A :");
-
-  // FIXME: Improve formatting of case labels in macros.
   verifyFormat("#define SOMECASES  \\\n"
                "  case 1:          \\\n"
                "  case 2\n",
                getLLVMStyleWithColumns(20));
-
   verifyFormat("#define A template <typename T>");
   verifyFormat("#define STR(x) #x\n"
                "f(STR(this_is_a_string_literal{));");
@@ -2336,6 +2392,10 @@ TEST_F(FormatTest, BreaksAfterAssignments) {
   verifyFormat(
       "aaaaaaaaaaaaaaaaaaaaaaaaaa aaaa = aaaaaaaaaaaaaa(0).aaaa()\n"
       "    .aaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaa::aaaaaaaaaaaaaaaaaaaaa);");
+  verifyFormat("unsigned OriginalStartColumn =\n"
+               "    SourceMgr.getSpellingColumnNumber(\n"
+               "        Current.FormatTok.getStartOfNonWhitespace()) -\n"
+               "    1;");
 }
 
 TEST_F(FormatTest, AlignsAfterAssignments) {
@@ -2610,6 +2670,9 @@ TEST_F(FormatTest, WrapsAtFunctionCallsIfNecessary) {
                "    .WillRepeatedly(Return(SomeValue));");
   verifyFormat("SomeMap[std::pair(aaaaaaaaaaaa, bbbbbbbbbbbbbbb)]\n"
                "    .insert(ccccccccccccccccccccccc);");
+  verifyFormat("aaaaa(aaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa).aaaaa(aaaaa),\n"
+               "      aaaaaaaaaaaaaaaaaaaaa);");
   verifyFormat(
       "aaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
       "      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
@@ -2700,8 +2763,6 @@ TEST_F(FormatTest, WrapsAtNestedNameSpecifiers) {
       "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::\n"
       "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
 
-  // FIXME: Look into whether we should indent 4 from the start or 4 from
-  // "bbbbb..." here instead of what we are doing now.
   verifyFormat(
       "aaaaaaaaaaaaaaa(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb::\n"
       "                    cccccccccccccccccccccccccccccccccccccccccccccc());");
@@ -2895,7 +2956,6 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyGoogleFormat("return sizeof(int**);");
   verifyIndependentOfContext("Type **A = static_cast<Type **>(P);");
   verifyGoogleFormat("Type** A = static_cast<Type**>(P);");
-  // FIXME: The newline is wrong.
   verifyFormat("auto a = [](int **&, int ***) {};");
 
   verifyIndependentOfContext("InvalidRegions[*R] = 0;");
@@ -3007,12 +3067,10 @@ TEST_F(FormatTest, UnderstandsRvalueReferences) {
   verifyGoogleFormat("int f(int a, char&& b) {}");
   verifyGoogleFormat("void f() { int&& a = b; }");
 
-  // FIXME: These require somewhat deeper changes in template arguments
-  // formatting.
-  //  verifyIndependentOfContext("A<int &&> a;");
-  //  verifyIndependentOfContext("A<int &&, int &&> a;");
-  //  verifyGoogleFormat("A<int&&> a;");
-  //  verifyGoogleFormat("A<int&&, int&&> a;");
+  verifyIndependentOfContext("A<int &&> a;");
+  verifyIndependentOfContext("A<int &&, int &&> a;");
+  verifyGoogleFormat("A<int&&> a;");
+  verifyGoogleFormat("A<int&&, int&&> a;");
 }
 
 TEST_F(FormatTest, FormatsBinaryOperatorsPrecedingEquals) {
@@ -4098,6 +4156,10 @@ TEST_F(FormatTest, ObjCLiterals) {
   verifyFormat(
       "NSDictionary *d = @{ @\"nam\" : NSUserNam(), @\"dte\" : [NSDate date],\n"
       "                     @\"processInfo\" : [NSProcessInfo processInfo] };");
+  verifyFormat(
+      "@{ NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee :\n"
+      "   regularFont, };");
+
 }
 
 TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
@@ -4424,6 +4486,35 @@ TEST_F(FormatTest, ConfigurableUseOfTab) {
                "\t\t    parameter2); \\\n"
                "\t}",
                Tab);
+  EXPECT_EQ("/*\n"
+            "\t      a\t\tcomment\n"
+            "\t      in multiple lines\n"
+            "       */",
+            format("   /*\t \t \n"
+                   " \t \t a\t\tcomment\t \t\n"
+                   " \t \t in multiple lines\t\n"
+                   " \t  */",
+                   Tab));
+  Tab.UseTab = false;
+  // FIXME: Change this test to a different tab size than
+  // 8 once configurable.
+  EXPECT_EQ("/*\n"
+            "              a\t\tcomment\n"
+            "              in multiple lines\n"
+            "       */",
+            format("   /*\t \t \n"
+                   " \t \t a\t\tcomment\t \t\n"
+                   " \t \t in multiple lines\t\n"
+                   " \t  */",
+                   Tab));
+
+  // FIXME: This is broken, as the spelling column number we
+  // get from the SourceManager counts tab as '1'.
+  // EXPECT_EQ("/* some\n"
+  //           "   comment */",
+  //          format(" \t \t /* some\n"
+  //                 " \t \t    comment */",
+  //                 Tab));
 }
 
 TEST_F(FormatTest, LinuxBraceBreaking) {

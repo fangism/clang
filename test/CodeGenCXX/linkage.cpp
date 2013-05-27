@@ -103,3 +103,59 @@ namespace test8 {
   }
   void *h() { return g(); }
 }
+
+namespace test9 {
+  // CHECK-DAG: define linkonce_odr void @_ZN5test91fIPZNS_1gEvE1S_5EEvT_(
+  template <typename T> void f(T) {}
+  inline void *g() {
+    struct S {
+    } s;
+    return reinterpret_cast<void *>(f<S*>);
+  }
+  void *h() { return g(); }
+}
+
+namespace test10 {
+  // CHECK-DAG: define linkonce_odr void @_ZN6test101fIPFZNS_1gEvE1S_6vEEEvT_(
+  template <typename T> void f(T) {}
+  inline void *g() {
+    struct S {
+    } s;
+    typedef S(*ftype)();
+    return reinterpret_cast<void *>(f<ftype>);
+  }
+  void *h() { return g(); }
+}
+
+namespace test11 {
+  // CHECK-DAG: define internal void @_ZN6test111fIPFZNS_1gEvE1S_7PNS_12_GLOBAL__N_11IEEEEvT_(
+  namespace {
+    struct I {
+    };
+  }
+
+  template <typename T> void f(T) {}
+  inline void *g() {
+    struct S {
+    };
+    typedef S(*ftype)(I * x);
+    return reinterpret_cast<void *>(f<ftype>);
+  }
+  void *h() { return g(); }
+}
+
+namespace test12 {
+  // CHECK-DAG: define linkonce_odr void @_ZN6test123fooIZNS_3barIZNS_3zedEvE2S2EEPvvE2S1EEvv
+  template <typename T> void foo() {}
+  template <typename T> inline void *bar() {
+    enum S1 {
+    };
+    return reinterpret_cast<void *>(foo<S1>);
+  }
+  inline void *zed() {
+    enum S2 {
+    };
+    return reinterpret_cast<void *>(bar<S2>);
+  }
+  void *h() { return zed(); }
+}

@@ -257,6 +257,7 @@ public:
     State.ParenLevel = 0;
     State.StartOfStringLiteral = 0;
     State.StartOfLineLevel = State.ParenLevel;
+    State.LowestLevelOnLine = State.ParenLevel;
     State.IgnoreStackForComparison = false;
 
     // The first token has already been indented and thus consumed.
@@ -412,6 +413,9 @@ private:
     /// \brief The \c ParenLevel at the start of this line.
     unsigned StartOfLineLevel;
 
+    /// \brief The lowest \c ParenLevel on the current line.
+    unsigned LowestLevelOnLine;
+
     /// \brief The start column of the string literal, if we're in a string
     /// literal sequence, 0 otherwise.
     unsigned StartOfStringLiteral;
@@ -448,6 +452,8 @@ private:
         return ParenLevel < Other.ParenLevel;
       if (StartOfLineLevel != Other.StartOfLineLevel)
         return StartOfLineLevel < Other.StartOfLineLevel;
+      if (LowestLevelOnLine != Other.LowestLevelOnLine)
+        return LowestLevelOnLine < Other.LowestLevelOnLine;
       if (StartOfStringLiteral != Other.StartOfStringLiteral)
         return StartOfStringLiteral < Other.StartOfStringLiteral;
       if (IgnoreStackForComparison || Other.IgnoreStackForComparison)
@@ -556,6 +562,7 @@ private:
       if (Current.isOneOf(tok::arrow, tok::period))
         State.Stack.back().LastSpace += Current.FormatTok.TokenLength;
       State.StartOfLineLevel = State.ParenLevel;
+      State.LowestLevelOnLine = State.ParenLevel;
 
       // Any break on this level means that the parent level has been broken
       // and we need to avoid bin packing there.
@@ -633,7 +640,10 @@ private:
       else if ((Previous.Type == TT_BinaryOperator ||
                 Previous.Type == TT_ConditionalExpr ||
                 Previous.Type == TT_CtorInitializerColon) &&
-               getPrecedence(Previous) != prec::Assignment)
+               !(getPrecedence(Previous) == prec::Assignment &&
+                 Current.FakeLParens.empty()))
+        // Always indent relative to the RHS of the expression unless this is a
+        // simple assignment without binary expression on the RHS.
         State.Stack.back().LastSpace = State.Column;
       else if (Previous.Type == TT_InheritanceColon)
         State.Stack.back().Indent = State.Column;
@@ -752,6 +762,8 @@ private:
       State.Stack.pop_back();
       --State.ParenLevel;
     }
+    State.LowestLevelOnLine =
+        std::min(State.LowestLevelOnLine, State.ParenLevel);
 
     // Remove scopes created by fake parenthesis.
     for (unsigned i = 0, e = Current.FakeRParens; i != e; ++i) {
@@ -790,6 +802,9 @@ private:
     unsigned UnbreakableTailLength = Current.UnbreakableTailLength;
     llvm::OwningPtr<BreakableToken> Token;
     unsigned StartColumn = State.Column - Current.FormatTok.TokenLength;
+    unsigned OriginalStartColumn = SourceMgr.getSpellingColumnNumber(
+        Current.FormatTok.getStartOfNonWhitespace()) - 1;
+
     if (Current.is(tok::string_literal) &&
         Current.Type != TT_ImplicitStringLiteral) {
       // Only break up default narrow strings.
@@ -798,18 +813,16 @@ private:
       if (!LiteralData || *LiteralData != '"')
         return 0;
 
-      Token.reset(new BreakableStringLiteral(SourceMgr, Current.FormatTok,
-                                             StartColumn));
+      Token.reset(new BreakableStringLiteral(Current.FormatTok, StartColumn));
     } else if (Current.Type == TT_BlockComment) {
       BreakableBlockComment *BBC =
-          new BreakableBlockComment(SourceMgr, Current, StartColumn);
-      if (!DryRun)
-        BBC->alignLines(Whitespaces);
+          new BreakableBlockComment(Style, Current.FormatTok, StartColumn,
+                                    OriginalStartColumn, !Current.Parent);
       Token.reset(BBC);
     } else if (Current.Type == TT_LineComment &&
                (Current.Parent == NULL ||
                 Current.Parent->Type != TT_ImplicitStringLiteral)) {
-      Token.reset(new BreakableLineComment(SourceMgr, Current, StartColumn));
+      Token.reset(new BreakableLineComment(Current.FormatTok, StartColumn));
     } else {
       return 0;
     }
@@ -820,8 +833,12 @@ private:
     bool BreakInserted = false;
     unsigned Penalty = 0;
     unsigned PositionAfterLastLineInToken = 0;
-    for (unsigned LineIndex = 0; LineIndex < Token->getLineCount();
-         ++LineIndex) {
+    for (unsigned LineIndex = 0, EndIndex = Token->getLineCount();
+         LineIndex != EndIndex; ++LineIndex) {
+      if (!DryRun) {
+        Token->replaceWhitespaceBefore(LineIndex, Line.InPPDirective,
+                                       Whitespaces);
+      }
       unsigned TailOffset = 0;
       unsigned RemainingTokenLength =
           Token->getLineLengthAfterSplit(LineIndex, TailOffset);
@@ -833,8 +850,7 @@ private:
         assert(Split.first != 0);
         unsigned NewRemainingTokenLength = Token->getLineLengthAfterSplit(
             LineIndex, TailOffset + Split.first + Split.second);
-        if (NewRemainingTokenLength >= RemainingTokenLength)
-          break;
+        assert(NewRemainingTokenLength < RemainingTokenLength);
         if (!DryRun) {
           Token->insertBreak(LineIndex, TailOffset, Split, Line.InPPDirective,
                              Whitespaces);
@@ -845,9 +861,6 @@ private:
         BreakInserted = true;
       }
       PositionAfterLastLineInToken = RemainingTokenLength;
-      if (!DryRun) {
-        Token->trimLine(LineIndex, TailOffset, Line.InPPDirective, Whitespaces);
-      }
     }
 
     if (BreakInserted) {
@@ -996,6 +1009,14 @@ private:
         Previous.Parent &&
         Previous.Parent->isOneOf(tok::l_brace, tok::l_paren, tok::comma))
       return false;
+    // This prevents breaks like:
+    //   ...
+    //   SomeParameter, OtherParameter).DoSomething(
+    //   ...
+    // As they hide "DoSomething" and are generally bad for readability.
+    if (Previous.opensScope() &&
+        State.LowestLevelOnLine < State.StartOfLineLevel)
+      return false;
     return !State.Stack.back().NoLineBreak;
   }
 
@@ -1034,16 +1055,6 @@ private:
          (Previous.ClosesTemplateDeclaration && State.ParenLevel == 0)))
       return true;
 
-    // This prevents breaks like:
-    //   ...
-    //   SomeParameter, OtherParameter).DoSomething(
-    //   ...
-    // As they hide "DoSomething" and generally bad for readability.
-    if (Current.isOneOf(tok::period, tok::arrow) &&
-        getRemainingLength(State) + State.Column > getColumnLimit() &&
-        State.ParenLevel < State.StartOfLineLevel)
-      return true;
-
     if (Current.Type == TT_StartOfName && Line.MightBeFunctionDecl &&
         State.Stack.back().BreakBeforeParameter && State.ParenLevel == 0)
       return true;
@@ -1074,8 +1085,8 @@ private:
 class LexerBasedFormatTokenSource : public FormatTokenSource {
 public:
   LexerBasedFormatTokenSource(Lexer &Lex, SourceManager &SourceMgr)
-      : GreaterStashed(false), Lex(Lex), SourceMgr(SourceMgr),
-        IdentTable(Lex.getLangOpts()) {
+      : GreaterStashed(false), TrailingWhitespace(0), Lex(Lex),
+        SourceMgr(SourceMgr), IdentTable(Lex.getLangOpts()) {
     Lex.SetKeepWhitespaceMode(true);
   }
 
@@ -1092,12 +1103,13 @@ public:
     FormatTok = FormatToken();
     Lex.LexFromRawLexer(FormatTok.Tok);
     StringRef Text = rawTokenText(FormatTok.Tok);
-    SourceLocation WhitespaceStart = FormatTok.Tok.getLocation();
+    SourceLocation WhitespaceStart =
+        FormatTok.Tok.getLocation().getLocWithOffset(-TrailingWhitespace);
     if (SourceMgr.getFileOffset(WhitespaceStart) == 0)
       FormatTok.IsFirst = true;
 
     // Consume and record whitespace until we find a significant token.
-    unsigned WhitespaceLength = 0;
+    unsigned WhitespaceLength = TrailingWhitespace;
     while (FormatTok.Tok.is(tok::unknown)) {
       unsigned Newlines = Text.count('\n');
       if (Newlines > 0)
@@ -1120,9 +1132,10 @@ public:
     // Now FormatTok is the next non-whitespace token.
     FormatTok.TokenLength = Text.size();
 
+    TrailingWhitespace = 0;
     if (FormatTok.Tok.is(tok::comment)) {
-      FormatTok.TrailingWhiteSpaceLength = Text.size() - Text.rtrim().size();
-      FormatTok.TokenLength -= FormatTok.TrailingWhiteSpaceLength;
+      TrailingWhitespace = Text.size() - Text.rtrim().size();
+      FormatTok.TokenLength -= TrailingWhitespace;
     }
 
     // In case the token starts with escaped newlines, we want to
@@ -1153,6 +1166,9 @@ public:
 
     FormatTok.WhitespaceRange = SourceRange(
         WhitespaceStart, WhitespaceStart.getLocWithOffset(WhitespaceLength));
+    FormatTok.TokenText = StringRef(
+        SourceMgr.getCharacterData(FormatTok.getStartOfNonWhitespace()),
+        FormatTok.TokenLength);
     return FormatTok;
   }
 
@@ -1161,6 +1177,7 @@ public:
 private:
   FormatToken FormatTok;
   bool GreaterStashed;
+  unsigned TrailingWhitespace;
   Lexer &Lex;
   SourceManager &SourceMgr;
   IdentifierTable IdentTable;
