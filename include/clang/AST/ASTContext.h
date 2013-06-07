@@ -55,6 +55,7 @@ namespace clang {
   class ExternalASTSource;
   class ASTMutationListener;
   class IdentifierTable;
+  class MaterializeTemporaryExpr;
   class SelectorTable;
   class TargetInfo;
   class CXXABI;
@@ -162,6 +163,11 @@ class ASTContext : public RefCountedBase<ASTContext> {
   /// template patterns.
   llvm::DenseMap<const FunctionDecl*, FunctionDecl*>
     ClassScopeSpecializationPattern;
+
+  /// \brief Mapping from materialized temporaries with static storage duration
+  /// that appear in constant initializers to their evaluated values.
+  llvm::DenseMap<const MaterializeTemporaryExpr*, APValue>
+    MaterializedTemporaryValues;
 
   /// \brief Representation of a "canonical" template template parameter that
   /// is used in canonical template names.
@@ -469,6 +475,8 @@ public:
   }
 
   const TargetInfo &getTargetInfo() const { return *Target; }
+  
+  bool AtomicUsesUnsupportedLibcall(const AtomicExpr *E) const;
   
   const LangOptions& getLangOpts() const { return LangOpts; }
 
@@ -2115,7 +2123,12 @@ public:
   /// \brief Used by ParmVarDecl to retrieve on the side the
   /// index of the parameter when it exceeds the size of the normal bitfield.
   unsigned getParameterIndex(const ParmVarDecl *D) const;
-  
+
+  /// \brief Get the storage for the constant value of a materialized temporary
+  /// of static storage duration.
+  APValue *getMaterializedTemporaryValue(const MaterializeTemporaryExpr *E,
+                                         bool MayCreate);
+
   //===--------------------------------------------------------------------===//
   //                    Statistics
   //===--------------------------------------------------------------------===//
@@ -2207,18 +2220,17 @@ private:
                 const ObjCImplementationDecl *Impl) const;
 
 private:
-  /// \brief A set of deallocations that should be performed when the 
+  /// \brief A set of deallocations that should be performed when the
   /// ASTContext is destroyed.
-  SmallVector<std::pair<void (*)(void*), void *>, 16> Deallocations;
-                                       
+  typedef llvm::SmallDenseMap<void(*)(void*), llvm::SmallVector<void*, 16> >
+    DeallocationMap;
+  DeallocationMap Deallocations;
+
   // FIXME: This currently contains the set of StoredDeclMaps used
   // by DeclContext objects.  This probably should not be in ASTContext,
   // but we include it here so that ASTContext can quickly deallocate them.
   llvm::PointerIntPair<StoredDeclsMap*,1> LastSDM;
 
-  /// \brief A counter used to uniquely identify "blocks".
-  mutable unsigned int UniqueBlockByRefTypeID;
-  
   friend class DeclContext;
   friend class DeclarationNameTable;
   void ReleaseDeclContextMaps();

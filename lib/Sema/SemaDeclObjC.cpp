@@ -935,6 +935,7 @@ Decl *Sema::ActOnStartCategoryImplementation(
         << CatName;
       Diag(CatIDecl->getImplementation()->getLocation(),
            diag::note_previous_definition);
+      CDecl->setInvalidDecl();
     } else {
       CatIDecl->setImplementation(CDecl);
       // Warn on implementating category of deprecated class under 
@@ -1056,6 +1057,7 @@ Decl *Sema::ActOnStartClassImplementation(
     Diag(ClassLoc, diag::err_dup_implementation_class) << ClassName;
     Diag(IDecl->getImplementation()->getLocation(),
          diag::note_previous_definition);
+    IMPDecl->setInvalidDecl();
   } else { // add it to the list.
     IDecl->setImplementation(IMPDecl);
     PushOnScopeChains(IMPDecl, TUScope);
@@ -2270,7 +2272,103 @@ ObjCMethodDecl *Sema::LookupImplementedMethodInGlobalPool(Selector Sel) {
   return 0;
 }
 
-/// DiagnoseDuplicateIvars - 
+static void
+HelperSelectorsForTypoCorrection(
+                      SmallVectorImpl<const ObjCMethodDecl *> &BestMethod,
+                      StringRef Typo, const ObjCMethodDecl * Method) {
+  const unsigned MaxEditDistance = 1;
+  unsigned BestEditDistance = MaxEditDistance + 1;
+  std::string MethodName = Method->getSelector().getAsString();
+  
+  unsigned MinPossibleEditDistance = abs((int)MethodName.size() - (int)Typo.size());
+  if (MinPossibleEditDistance > 0 &&
+      Typo.size() / MinPossibleEditDistance < 1)
+    return;
+  unsigned EditDistance = Typo.edit_distance(MethodName, true, MaxEditDistance);
+  if (EditDistance > MaxEditDistance)
+    return;
+  if (EditDistance == BestEditDistance)
+    BestMethod.push_back(Method);
+  else if (EditDistance < BestEditDistance) {
+    BestMethod.clear();
+    BestMethod.push_back(Method);
+    BestEditDistance = EditDistance;
+  }
+}
+
+const ObjCMethodDecl *
+Sema::SelectorsForTypoCorrection(Selector Sel) {
+  unsigned NumArgs = Sel.getNumArgs();
+  SmallVector<const ObjCMethodDecl *, 8> Methods;
+  
+  for (GlobalMethodPool::iterator b = MethodPool.begin(),
+       e = MethodPool.end(); b != e; b++) {
+    // instance methods
+    for (ObjCMethodList *M = &b->second.first; M; M=M->getNext())
+      if (M->Method &&
+          (M->Method->getSelector().getNumArgs() == NumArgs))
+        Methods.push_back(M->Method);
+    // class methods
+    for (ObjCMethodList *M = &b->second.second; M; M=M->getNext())
+      if (M->Method &&
+          (M->Method->getSelector().getNumArgs() == NumArgs))
+        Methods.push_back(M->Method);
+  }
+  
+  SmallVector<const ObjCMethodDecl *, 8> SelectedMethods;
+  for (unsigned i = 0, e = Methods.size(); i < e; i++) {
+    HelperSelectorsForTypoCorrection(SelectedMethods,
+                                     Sel.getAsString(), Methods[i]);
+  }
+  return (SelectedMethods.size() == 1) ? SelectedMethods[0] : NULL;
+}
+
+static void
+HelperToDiagnoseMismatchedMethodsInGlobalPool(Sema &S,
+                                              ObjCMethodList &MethList) {
+  ObjCMethodList *M = &MethList;
+  ObjCMethodDecl *TargetMethod = M->Method;
+  while (TargetMethod &&
+         isa<ObjCImplDecl>(TargetMethod->getDeclContext())) {
+    M = M->getNext();
+    TargetMethod = M ? M->Method : 0;
+  }
+  if (!TargetMethod)
+    return;
+  bool FirstTime = true;
+  for (M = M->getNext(); M; M=M->getNext()) {
+    ObjCMethodDecl *MatchingMethodDecl = M->Method;
+    if (isa<ObjCImplDecl>(MatchingMethodDecl->getDeclContext()))
+      continue;
+    if (!S.MatchTwoMethodDeclarations(TargetMethod,
+                                      MatchingMethodDecl, Sema::MMS_loose)) {
+      if (FirstTime) {
+        FirstTime = false;
+        S.Diag(TargetMethod->getLocation(), diag::warning_multiple_selectors)
+        << TargetMethod->getSelector();
+      }
+      S.Diag(MatchingMethodDecl->getLocation(), diag::note_also_found);
+    }
+  }
+}
+
+void Sema::DiagnoseMismatchedMethodsInGlobalPool() {
+  unsigned DIAG = diag::warning_multiple_selectors;
+  if (Diags.getDiagnosticLevel(DIAG, SourceLocation())
+      == DiagnosticsEngine::Ignored)
+    return;
+  for (GlobalMethodPool::iterator b = MethodPool.begin(),
+       e = MethodPool.end(); b != e; b++) {
+    // first, instance methods
+    ObjCMethodList &InstMethList = b->second.first;
+    HelperToDiagnoseMismatchedMethodsInGlobalPool(*this, InstMethList);
+    // second, class methods
+    ObjCMethodList &ClsMethList = b->second.second;
+    HelperToDiagnoseMismatchedMethodsInGlobalPool(*this, ClsMethList);
+  }
+}
+
+/// DiagnoseDuplicateIvars -
 /// Check for duplicate ivars in the entire class at the start of 
 /// \@implementation. This becomes necesssary because class extension can
 /// add ivars to a class in random order which will not be known until
@@ -3292,6 +3390,8 @@ void Sema::DiagnoseUseOfUnimplementedSelectors() {
     for (unsigned I = 0, N = Sels.size(); I != N; ++I)
       ReferencedSelectors[Sels[I].first] = Sels[I].second;
   }
+  
+  DiagnoseMismatchedMethodsInGlobalPool();
   
   // Warning will be issued only when selector table is
   // generated (which means there is at lease one implementation

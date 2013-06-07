@@ -716,8 +716,7 @@ ASTContext::ASTContext(LangOptions& LOpts, SourceManager &SM,
     ExternalSource(0), Listener(0),
     Comments(SM), CommentsLoaded(false),
     CommentCommandTraits(BumpAlloc, LOpts.CommentOpts),
-    LastSDM(0, 0),
-    UniqueBlockByRefTypeID(0)
+    LastSDM(0, 0)
 {
   if (size_reserve > 0) Types.reserve(size_reserve);
   TUDecl = TranslationUnitDecl::Create(*this);
@@ -733,10 +732,12 @@ ASTContext::~ASTContext() {
   // FIXME: Is this the ideal solution?
   ReleaseDeclContextMaps();
 
-  // Call all of the deallocation functions.
-  for (unsigned I = 0, N = Deallocations.size(); I != N; ++I)
-    Deallocations[I].first(Deallocations[I].second);
-  
+  // Call all of the deallocation functions on all of their targets.
+  for (DeallocationMap::const_iterator I = Deallocations.begin(),
+           E = Deallocations.end(); I != E; ++I)
+    for (unsigned J = 0, N = I->second.size(); J != N; ++J)
+      (I->first)((I->second)[J]);
+
   // ASTRecordLayout objects in ASTRecordLayouts must always be destroyed
   // because they can contain DenseMaps.
   for (llvm::DenseMap<const ObjCContainerDecl*,
@@ -760,7 +761,7 @@ ASTContext::~ASTContext() {
 }
 
 void ASTContext::AddDeallocation(void (*Callback)(void*), void *Data) {
-  Deallocations.push_back(std::make_pair(Callback, Data));
+  Deallocations[Callback].push_back(Data);
 }
 
 void
@@ -5242,12 +5243,9 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     } else {
       S += '[';
 
-      if (const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(AT)) {
-        if (getTypeSize(CAT->getElementType()) == 0)
-          S += '0';
-        else
-          S += llvm::utostr(CAT->getSize().getZExtValue());
-      } else {
+      if (const ConstantArrayType *CAT = dyn_cast<ConstantArrayType>(AT))
+        S += llvm::utostr(CAT->getSize().getZExtValue());
+      else {
         //Variable length arrays are encoded as a regular array with 0 elements.
         assert((isa<VariableArrayType>(AT) || isa<IncompleteArrayType>(AT)) &&
                "Unknown array type!");
@@ -8000,8 +7998,7 @@ size_t ASTContext::getSideTableAllocatedMemory() const {
 void ASTContext::addUnnamedTag(const TagDecl *Tag) {
   // FIXME: This mangling should be applied to function local classes too
   if (!Tag->getName().empty() || Tag->getTypedefNameForAnonDecl() ||
-      !isa<CXXRecordDecl>(Tag->getParent()) ||
-      !Tag->isExternallyVisible())
+      !isa<CXXRecordDecl>(Tag->getParent()))
     return;
 
   std::pair<llvm::DenseMap<const DeclContext *, unsigned>::iterator, bool> P =
@@ -8031,4 +8028,31 @@ unsigned ASTContext::getParameterIndex(const ParmVarDecl *D) const {
   assert(I != ParamIndices.end() && 
          "ParmIndices lacks entry set by ParmVarDecl");
   return I->second;
+}
+
+APValue *
+ASTContext::getMaterializedTemporaryValue(const MaterializeTemporaryExpr *E,
+                                          bool MayCreate) {
+  assert(E && E->getStorageDuration() == SD_Static &&
+         "don't need to cache the computed value for this temporary");
+  if (MayCreate)
+    return &MaterializedTemporaryValues[E];
+
+  llvm::DenseMap<const MaterializeTemporaryExpr *, APValue>::iterator I =
+      MaterializedTemporaryValues.find(E);
+  return I == MaterializedTemporaryValues.end() ? 0 : &I->second;
+}
+
+bool ASTContext::AtomicUsesUnsupportedLibcall(const AtomicExpr *E) const {
+  const llvm::Triple &T = getTargetInfo().getTriple();
+  if (!T.isOSDarwin())
+    return false;
+
+  QualType AtomicTy = E->getPtr()->getType()->getPointeeType();
+  CharUnits sizeChars = getTypeSizeInChars(AtomicTy);
+  uint64_t Size = sizeChars.getQuantity();
+  CharUnits alignChars = getTypeAlignInChars(AtomicTy);
+  unsigned Align = alignChars.getQuantity();
+  unsigned MaxInlineWidthInBits = getTargetInfo().getMaxAtomicInlineWidth();
+  return (Size != Align || toBits(sizeChars) > MaxInlineWidthInBits);
 }

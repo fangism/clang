@@ -1617,8 +1617,18 @@ static void checkIntToPointerCast(bool CStyle, SourceLocation Loc,
       && !SrcType->isBooleanType()
       && !SrcType->isEnumeralType()
       && !SrcExpr->isIntegerConstantExpr(Self.Context)
-      && Self.Context.getTypeSize(DestType) > Self.Context.getTypeSize(SrcType))
-    Self.Diag(Loc, diag::warn_int_to_pointer_cast) << SrcType << DestType;
+      && Self.Context.getTypeSize(DestType) >
+         Self.Context.getTypeSize(SrcType)) {
+    // Separate between casts to void* and non-void* pointers.
+    // Some APIs use (abuse) void* for something like a user context,
+    // and often that value is an integer even if it isn't a pointer itself.
+    // Having a separate warning flag allows users to control the warning
+    // for their workflow.
+    unsigned Diag = DestType->isVoidPointerType() ?
+                      diag::warn_int_to_void_pointer_cast
+                    : diag::warn_int_to_pointer_cast;
+    Self.Diag(Loc, Diag) << SrcType << DestType;
+  }
 }
 
 static TryCastResult TryReinterpretCast(Sema &Self, ExprResult &SrcExpr,
@@ -1806,10 +1816,12 @@ static TryCastResult TryReinterpretCast(Sema &Self, ExprResult &SrcExpr,
     assert(srcIsPtr && "One type must be a pointer");
     // C++ 5.2.10p4: A pointer can be explicitly converted to any integral
     //   type large enough to hold it; except in Microsoft mode, where the
-    //   integral type size doesn't matter.
+    //   integral type size doesn't matter (except we don't allow bool).
+    bool MicrosoftException = Self.getLangOpts().MicrosoftExt &&
+                              !DestType->isBooleanType();
     if ((Self.Context.getTypeSize(SrcType) >
          Self.Context.getTypeSize(DestType)) &&
-         !Self.getLangOpts().MicrosoftExt) {
+         !MicrosoftException) {
       msg = diag::err_bad_reinterpret_cast_small_int;
       return TC_Failed;
     }

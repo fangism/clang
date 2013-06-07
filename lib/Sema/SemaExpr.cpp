@@ -5107,9 +5107,11 @@ static QualType checkConditionalPointerCompatibility(Sema &S, ExprResult &LHS,
   QualType lhptee, rhptee;
 
   // Get the pointee types.
+  bool IsBlockPointer = false;
   if (const BlockPointerType *LHSBTy = LHSTy->getAs<BlockPointerType>()) {
     lhptee = LHSBTy->getPointeeType();
     rhptee = RHSTy->castAs<BlockPointerType>()->getPointeeType();
+    IsBlockPointer = true;
   } else {
     lhptee = LHSTy->castAs<PointerType>()->getPointeeType();
     rhptee = RHSTy->castAs<PointerType>()->getPointeeType();
@@ -5151,7 +5153,10 @@ static QualType checkConditionalPointerCompatibility(Sema &S, ExprResult &LHS,
 
   // The pointer types are compatible.
   QualType ResultTy = CompositeTy.withCVRQualifiers(MergedCVRQual);
-  ResultTy = S.Context.getPointerType(ResultTy);
+  if (IsBlockPointer)
+    ResultTy = S.Context.getBlockPointerType(ResultTy);
+  else
+    ResultTy = S.Context.getPointerType(ResultTy);
 
   LHS = S.ImpCastExprToType(LHS.take(), ResultTy, CK_BitCast);
   RHS = S.ImpCastExprToType(RHS.take(), ResultTy, CK_BitCast);
@@ -8355,7 +8360,7 @@ static QualType CheckAddressOfOperand(Sema &S, ExprResult &OrigOp,
       return QualType();
     // Materialize the temporary as an lvalue so that we can take its address.
     OrigOp = op = new (S.Context)
-        MaterializeTemporaryExpr(op->getType(), OrigOp.take(), true);
+        MaterializeTemporaryExpr(op->getType(), OrigOp.take(), true, 0);
   } else if (isa<ObjCSelectorExpr>(op)) {
     return S.Context.getPointerType(op->getType());
   } else if (lval == Expr::LV_MemberFunction) {
