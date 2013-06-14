@@ -811,11 +811,8 @@ static void addFunctionPointerConversion(Sema &S,
   {
     FunctionProtoType::ExtProtoInfo ExtInfo = Proto->getExtProtoInfo();
     ExtInfo.TypeQuals = 0;
-    FunctionTy =
-      S.Context.getFunctionType(Proto->getResultType(),
-                                ArrayRef<QualType>(Proto->arg_type_begin(),
-                                                   Proto->getNumArgs()),
-                                ExtInfo);
+    FunctionTy = S.Context.getFunctionType(Proto->getResultType(),
+                                           Proto->getArgTypes(), ExtInfo);
     FunctionPtrTy = S.Context.getPointerType(FunctionTy);
   }
   
@@ -837,7 +834,7 @@ static void addFunctionPointerConversion(Sema &S,
                                 ConvTy, 
                                 S.Context.getTrivialTypeSourceInfo(ConvTy, 
                                                                    Loc),
-                                /*isInline=*/false, /*isExplicit=*/false,
+                                /*isInline=*/true, /*isExplicit=*/false,
                                 /*isConstexpr=*/false, 
                                 CallOperator->getBody()->getLocEnd());
   Conversion->setAccess(AS_public);
@@ -883,11 +880,8 @@ static void addBlockPointerConversion(Sema &S,
   {
     FunctionProtoType::ExtProtoInfo ExtInfo = Proto->getExtProtoInfo();
     ExtInfo.TypeQuals = 0;
-    QualType FunctionTy
-      = S.Context.getFunctionType(Proto->getResultType(),
-                                  ArrayRef<QualType>(Proto->arg_type_begin(),
-                                                     Proto->getNumArgs()),
-                                  ExtInfo);
+    QualType FunctionTy = S.Context.getFunctionType(
+        Proto->getResultType(), Proto->getArgTypes(), ExtInfo);
     BlockPtrTy = S.Context.getBlockPointerType(FunctionTy);
   }
   
@@ -906,7 +900,7 @@ static void addBlockPointerConversion(Sema &S,
                                 DeclarationNameInfo(Name, Loc, NameLoc),
                                 ConvTy, 
                                 S.Context.getTrivialTypeSourceInfo(ConvTy, Loc),
-                                /*isInline=*/false, /*isExplicit=*/false,
+                                /*isInline=*/true, /*isExplicit=*/false,
                                 /*isConstexpr=*/false, 
                                 CallOperator->getBody()->getLocEnd());
   Conversion->setAccess(AS_public);
@@ -1010,11 +1004,8 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
       // Create a function type with the inferred return type.
       const FunctionProtoType *Proto
         = CallOperator->getType()->getAs<FunctionProtoType>();
-      QualType FunctionTy
-        = Context.getFunctionType(LSI->ReturnType,
-                                  ArrayRef<QualType>(Proto->arg_type_begin(),
-                                                     Proto->getNumArgs()),
-                                  Proto->getExtProtoInfo());
+      QualType FunctionTy = Context.getFunctionType(
+          LSI->ReturnType, Proto->getArgTypes(), Proto->getExtProtoInfo());
       CallOperator->setType(FunctionTy);
     }
 

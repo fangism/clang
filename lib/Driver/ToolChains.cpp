@@ -11,18 +11,18 @@
 #include "SanitizerArgs.h"
 #include "clang/Basic/ObjCRuntime.h"
 #include "clang/Basic/Version.h"
-#include "clang/Driver/Arg.h"
-#include "clang/Driver/ArgList.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
-#include "clang/Driver/OptTable.h"
-#include "clang/Driver/Option.h"
 #include "clang/Driver/Options.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Option/Arg.h"
+#include "llvm/Option/ArgList.h"
+#include "llvm/Option/OptTable.h"
+#include "llvm/Option/Option.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -39,6 +39,7 @@
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
 using namespace clang;
+using namespace llvm::opt;
 
 /// Darwin - Darwin tool chain for i386 and x86_64.
 
@@ -2009,6 +2010,7 @@ enum Distro {
   UbuntuPrecise,
   UbuntuQuantal,
   UbuntuRaring,
+  UbuntuSaucy,
   UnknownDistro
 };
 
@@ -2026,7 +2028,7 @@ static bool IsDebian(enum Distro Distro) {
 }
 
 static bool IsUbuntu(enum Distro Distro) {
-  return Distro >= UbuntuHardy && Distro <= UbuntuRaring;
+  return Distro >= UbuntuHardy && Distro <= UbuntuSaucy;
 }
 
 static Distro DetectDistro(llvm::Triple::ArchType Arch) {
@@ -2050,6 +2052,7 @@ static Distro DetectDistro(llvm::Triple::ArchType Arch) {
           .Case("precise", UbuntuPrecise)
           .Case("quantal", UbuntuQuantal)
           .Case("raring", UbuntuRaring)
+          .Case("saucy", UbuntuSaucy)
           .Default(UnknownDistro);
     return Version;
   }
@@ -2151,6 +2154,7 @@ static std::string getMultiarchTriple(const llvm::Triple TargetTriple,
   case llvm::Triple::aarch64:
     if (llvm::sys::fs::exists(SysRoot + "/lib/aarch64-linux-gnu"))
       return "aarch64-linux-gnu";
+    return TargetTriple.str();
   case llvm::Triple::mips:
     if (llvm::sys::fs::exists(SysRoot + "/lib/mips-linux-gnu"))
       return "mips-linux-gnu";

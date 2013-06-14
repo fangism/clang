@@ -64,7 +64,7 @@ namespace dr7 { // dr7: yes
   class B : virtual private A {}; // expected-note 2 {{declared private here}}
   class C : public B {} c; // expected-error 2 {{inherited virtual base class 'dr7::A' has private destructor}} \
                            // expected-note {{implicit default constructor for 'dr7::C' first required here}} \
-                           // expected-note {{implicit default destructor for 'dr7::C' first required here}}
+                           // expected-note {{implicit destructor for 'dr7::C' first required here}}
   class VeryDerivedC : public B, virtual public A {} vdc;
 
   class X { ~X(); }; // expected-note {{here}}
@@ -627,7 +627,7 @@ namespace dr60 { // dr60: yes
   int &n = f(k);
 }
 
-namespace dr61 { // dr61: no
+namespace dr61 { // dr61: yes
   struct X {
     static void f();
   } x;
@@ -638,8 +638,7 @@ namespace dr61 { // dr61: no
   // This is (presumably) valid, because x.f does not refer to an overloaded
   // function name.
   void (*p)() = &x.f;
-  // FIXME: This should be rejected.
-  void (*q)() = &y.f;
+  void (*q)() = &y.f; // expected-error {{cannot create a non-constant pointer to member function}}
 }
 
 namespace dr62 { // dr62: yes
@@ -862,15 +861,31 @@ namespace dr84 { // dr84: yes
   B b = a; // expected-error {{no viable}}
 }
 
-namespace dr85 { // dr85: no
+namespace dr85 { // dr85: yes
   struct A {
     struct B;
-    struct B {};
-    // FIXME: This redeclaration is invalid. Per [class.mem]p1,
-    //   "A member shall not be declared twice in the member-specification,
-    //   except that a nested class [...] can be declared then later defined"
-    // This is not that case.
-    struct B;
+    struct B {}; // expected-note{{previous declaration is here}}
+    struct B; // expected-error{{class member cannot be redeclared}}
+
+    union U;
+    union U {}; // expected-note{{previous declaration is here}}
+    union U; // expected-error{{class member cannot be redeclared}}
+
+#if __cplusplus >= 201103L
+    enum E1 : int;
+    enum E1 : int { e1 }; // expected-note{{previous declaration is here}}
+    enum E1 : int; // expected-error{{class member cannot be redeclared}}
+
+    enum class E2;
+    enum class E2 { e2 }; // expected-note{{previous declaration is here}}
+    enum class E2; // expected-error{{class member cannot be redeclared}}
+#endif
+  };
+
+  template <typename T>
+  struct C {
+    struct B {}; // expected-note{{previous declaration is here}}
+    struct B; // expected-error{{class member cannot be redeclared}}
   };
 }
 
