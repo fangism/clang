@@ -1003,6 +1003,8 @@ public:
   QualType BuildExtVectorType(QualType T, Expr *ArraySize,
                               SourceLocation AttrLoc);
 
+  bool CheckFunctionReturnType(QualType T, SourceLocation Loc);
+
   /// \brief Build a function type.
   ///
   /// This routine checks the function type according to C++ rules and
@@ -1936,9 +1938,10 @@ public:
 
   /// Contexts in which a converted constant expression is required.
   enum CCEKind {
-    CCEK_CaseValue,  ///< Expression in a case label.
-    CCEK_Enumerator, ///< Enumerator value with fixed underlying type.
-    CCEK_TemplateArg ///< Value of a non-type template parameter.
+    CCEK_CaseValue,   ///< Expression in a case label.
+    CCEK_Enumerator,  ///< Enumerator value with fixed underlying type.
+    CCEK_TemplateArg, ///< Value of a non-type template parameter.
+    CCEK_NewExpr      ///< Constant expression in a noptr-new-declarator.
   };
   ExprResult CheckConvertedConstantExpression(Expr *From, QualType T,
                                               llvm::APSInt &Value, CCEKind CCE);
@@ -2669,7 +2672,8 @@ public:
                                     warn, /*instance*/false);
   }
 
-  const ObjCMethodDecl *SelectorsForTypoCorrection(Selector Sel);
+  const ObjCMethodDecl *SelectorsForTypoCorrection(Selector Sel,
+                              QualType ObjectType=QualType());
   
   /// DiagnoseMismatchedMethodsInGlobalPool - This routine goes through list of
   /// methods in global pool and issues diagnostic on identical selectors which
@@ -7369,24 +7373,20 @@ public:
                                    bool IsParameter);
   void CodeCompleteObjCMessageReceiver(Scope *S);
   void CodeCompleteObjCSuperMessage(Scope *S, SourceLocation SuperLoc,
-                                    IdentifierInfo **SelIdents,
-                                    unsigned NumSelIdents,
+                                    ArrayRef<IdentifierInfo *> SelIdents,
                                     bool AtArgumentExpression);
   void CodeCompleteObjCClassMessage(Scope *S, ParsedType Receiver,
-                                    IdentifierInfo **SelIdents,
-                                    unsigned NumSelIdents,
+                                    ArrayRef<IdentifierInfo *> SelIdents,
                                     bool AtArgumentExpression,
                                     bool IsSuper = false);
   void CodeCompleteObjCInstanceMessage(Scope *S, Expr *Receiver,
-                                       IdentifierInfo **SelIdents,
-                                       unsigned NumSelIdents,
+                                       ArrayRef<IdentifierInfo *> SelIdents,
                                        bool AtArgumentExpression,
                                        ObjCInterfaceDecl *Super = 0);
   void CodeCompleteObjCForCollection(Scope *S,
                                      DeclGroupPtrTy IterationVar);
   void CodeCompleteObjCSelector(Scope *S,
-                                IdentifierInfo **SelIdents,
-                                unsigned NumSelIdents);
+                                ArrayRef<IdentifierInfo *> SelIdents);
   void CodeCompleteObjCProtocolReferences(IdentifierLocPair *Protocols,
                                           unsigned NumProtocols);
   void CodeCompleteObjCProtocolDecl(Scope *S);
@@ -7411,8 +7411,7 @@ public:
                                           bool IsInstanceMethod,
                                           bool AtParameterName,
                                           ParsedType ReturnType,
-                                          IdentifierInfo **SelIdents,
-                                          unsigned NumSelIdents);
+                                          ArrayRef<IdentifierInfo *> SelIdents);
   void CodeCompletePreprocessorDirective(bool InConditional);
   void CodeCompleteInPreprocessorConditionalExclusion(Scope *S);
   void CodeCompletePreprocessorMacroName(bool IsDefinition);

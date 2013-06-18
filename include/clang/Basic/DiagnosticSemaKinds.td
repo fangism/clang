@@ -36,15 +36,15 @@ def err_typecheck_converted_constant_expression : Error<
 def err_typecheck_converted_constant_expression_disallowed : Error<
   "conversion from %0 to %1 is not allowed in a converted constant expression">;
 def err_expr_not_cce : Error<
-  "%select{case value|enumerator value|non-type template argument}0 "
+  "%select{case value|enumerator value|non-type template argument|array size}0 "
   "is not a constant expression">;
 def err_cce_narrowing : ExtWarn<
-  "%select{case value|enumerator value|non-type template argument}0 "
+  "%select{case value|enumerator value|non-type template argument|array size}0 "
   "%select{cannot be narrowed from type %2 to %3|"
   "evaluates to %2, which cannot be narrowed to type %3}1">,
   InGroup<CXX11Narrowing>, DefaultError;
 def err_cce_narrowing_sfinae : Error<
-  "%select{case value|enumerator value|non-type template argument}0 "
+  "%select{case value|enumerator value|non-type template argument|array size}0 "
   "%select{cannot be narrowed from type %2 to %3|"
   "evaluates to %2, which cannot be narrowed to type %3}1">;
 def err_ice_not_integral : Error<
@@ -4601,6 +4601,9 @@ def warn_instance_method_on_class_found : Warning<
 def warn_inst_method_not_found : Warning<
   "instance method %objcinstance0 not found (return type defaults to 'id')">,
   InGroup<MethodAccess>;
+def warn_method_not_found_with_typo : Warning<
+  "%select{instance|class}0 method %1 not found (return type defaults to 'id')"
+  "; did you mean %2?">, InGroup<MethodAccess>;
 def error_no_super_class_message : Error<
   "no @interface declaration found in class messaging of %0">;
 def error_root_class_cannot_use_super : Error<
@@ -4926,8 +4929,6 @@ let CategoryName = "Lambda Issue" in {
     "lambda expression in default argument cannot capture any entity">;
   def err_lambda_incomplete_result : Error<
     "incomplete result type %0 in lambda expression">;
-  def err_lambda_objc_object_result : Error<
-    "non-pointer Objective-C class type %0 in lambda expression result">;
   def err_noreturn_lambda_has_return_expr : Error<
     "lambda declared 'noreturn' should not return">;
   def warn_maybe_falloff_nonvoid_lambda : Warning<
@@ -5492,10 +5493,8 @@ def ext_empty_struct_union : Extension<
   "empty %select{struct|union}0 is a GNU extension">, InGroup<GNU>;
 def ext_no_named_members_in_struct_union : Extension<
   "%select{struct|union}0 without named members is a GNU extension">, InGroup<GNU>;
-def warn_empty_struct_union_compat : Warning<"empty %select{struct|union}0 "
-  "has size 0 in C, size 1 in C++">, InGroup<CXXCompat>, DefaultIgnore;
-def warn_zero_size_struct_union_compat : Warning<"%select{struct|union}0 "
-  "with only bit-fields of width 0 has size 0 in C, size 1 in C++">,
+def warn_zero_size_struct_union_compat : Warning<"%select{|empty }0"
+  "%select{struct|union}1 has size 0 in C, %select{size 1|non-zero size}2 in C++">,
   InGroup<CXXCompat>, DefaultIgnore;
 } // End of general sema category.
 

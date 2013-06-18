@@ -2670,7 +2670,6 @@ bool InitializationSequence::isAmbiguous() const {
   case FK_ListInitializationFailed:
   case FK_VariableLengthArrayHasInitializer:
   case FK_PlaceholderType:
-  case FK_InitListElementCopyFailure:
   case FK_ExplicitConstructor:
     return false;
 
@@ -5236,7 +5235,7 @@ getDeclForTemporaryLifetimeExtension(const InitializedEntity &Entity,
   case InitializedEntity::EK_Exception:
   case InitializedEntity::EK_VectorElement:
   case InitializedEntity::EK_ComplexElement:
-    llvm_unreachable("should not materialize a temporary to initialize this");
+    return 0;
   }
   llvm_unreachable("unknown entity kind");
 }
@@ -5245,7 +5244,8 @@ static void performLifetimeExtension(Expr *Init, const ValueDecl *ExtendingD);
 
 /// Update a glvalue expression that is used as the initializer of a reference
 /// to note that its lifetime is extended.
-static void performReferenceExtension(Expr *Init, const ValueDecl *ExtendingD) {
+/// \return \c true if any temporary had its lifetime extended.
+static bool performReferenceExtension(Expr *Init, const ValueDecl *ExtendingD) {
   if (InitListExpr *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->getNumInits() == 1 && ILE->isGLValue()) {
       // This is just redundant braces around an initializer. Step over it.
@@ -5253,12 +5253,38 @@ static void performReferenceExtension(Expr *Init, const ValueDecl *ExtendingD) {
     }
   }
 
+  // Walk past any constructs which we can lifetime-extend across.
+  Expr *Old;
+  do {
+    Old = Init;
+
+    // Step over any subobject adjustments; we may have a materialized
+    // temporary inside them.
+    SmallVector<const Expr *, 2> CommaLHSs;
+    SmallVector<SubobjectAdjustment, 2> Adjustments;
+    Init = const_cast<Expr *>(
+        Init->skipRValueSubobjectAdjustments(CommaLHSs, Adjustments));
+
+    // Per current approach for DR1376, look through casts to reference type
+    // when performing lifetime extension.
+    if (CastExpr *CE = dyn_cast<CastExpr>(Init))
+      if (CE->getSubExpr()->isGLValue())
+        Init = CE->getSubExpr();
+
+    // FIXME: Per DR1213, subscripting on an array temporary produces an xvalue.
+    // It's unclear if binding a reference to that xvalue extends the array
+    // temporary.
+  } while (Init != Old);
+
   if (MaterializeTemporaryExpr *ME = dyn_cast<MaterializeTemporaryExpr>(Init)) {
     // Update the storage duration of the materialized temporary.
     // FIXME: Rebuild the expression instead of mutating it.
     ME->setExtendingDecl(ExtendingD);
     performLifetimeExtension(ME->GetTemporaryExpr(), ExtendingD);
+    return true;
   }
+
+  return false;
 }
 
 /// Update a prvalue expression that is going to be materialized as a
@@ -5274,8 +5300,10 @@ static void performLifetimeExtension(Expr *Init, const ValueDecl *ExtendingD) {
     Init = BTE->getSubExpr();
 
   if (CXXStdInitializerListExpr *ILE =
-          dyn_cast<CXXStdInitializerListExpr>(Init))
-    return performReferenceExtension(ILE->getSubExpr(), ExtendingD);
+          dyn_cast<CXXStdInitializerListExpr>(Init)) {
+    performReferenceExtension(ILE->getSubExpr(), ExtendingD);
+    return;
+  }
 
   if (InitListExpr *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->getType()->isArrayType()) {
@@ -5581,6 +5609,16 @@ InitializationSequence::Perform(Sema &S,
       // Check exception specifications
       if (S.CheckExceptionSpecCompatibility(CurInit.get(), DestType))
         return ExprError();
+
+      // Even though we didn't materialize a temporary, the binding may still
+      // extend the lifetime of a temporary. This happens if we bind a reference
+      // to the result of a cast to reference type.
+      if (const ValueDecl *ExtendingDecl =
+              getDeclForTemporaryLifetimeExtension(Entity)) {
+        if (performReferenceExtension(CurInit.get(), ExtendingDecl))
+          warnOnLifetimeExtension(S, Entity, CurInit.get(), false,
+                                  ExtendingDecl);
+      }
 
       break;
 
@@ -6454,37 +6492,6 @@ bool InitializationSequence::Diagnose(Sema &S,
     break;
   }
 
-  case FK_InitListElementCopyFailure: {
-    // Try to perform all copies again.
-    InitListExpr* InitList = cast<InitListExpr>(Args[0]);
-    unsigned NumInits = InitList->getNumInits();
-    QualType DestType = Entity.getType();
-    QualType E;
-    bool Success = S.isStdInitializerList(DestType.getNonReferenceType(), &E);
-    (void)Success;
-    assert(Success && "Where did the std::initializer_list go?");
-    InitializedEntity HiddenArray = InitializedEntity::InitializeTemporary(
-        S.Context.getConstantArrayType(E,
-            llvm::APInt(S.Context.getTypeSize(S.Context.getSizeType()),
-                        NumInits),
-            ArrayType::Normal, 0));
-    InitializedEntity Element = InitializedEntity::InitializeElement(S.Context,
-        0, HiddenArray);
-    // Show at most 3 errors. Otherwise, you'd get a lot of errors for errors
-    // where the init list type is wrong, e.g.
-    //   std::initializer_list<void*> list = { 1, 2, 3, 4, 5, 6, 7, 8 };
-    // FIXME: Emit a note if we hit the limit?
-    int ErrorCount = 0;
-    for (unsigned i = 0; i < NumInits && ErrorCount < 3; ++i) {
-      Element.setElementIndex(i);
-      ExprResult Init = S.Owned(InitList->getInit(i));
-      if (S.PerformCopyInitialization(Element, Init.get()->getExprLoc(), Init)
-           .isInvalid())
-        ++ErrorCount;
-    }
-    break;
-  }
-
   case FK_ExplicitConstructor: {
     S.Diag(Kind.getLocation(), diag::err_selected_explicit_constructor)
       << Args[0]->getSourceRange();
@@ -6622,10 +6629,6 @@ void InitializationSequence::dump(raw_ostream &OS) const {
 
     case FK_ListConstructorOverloadFailed:
       OS << "list constructor overloading failed";
-      break;
-
-    case FK_InitListElementCopyFailure:
-      OS << "copy construction of initializer list element failed";
       break;
 
     case FK_ExplicitConstructor:

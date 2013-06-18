@@ -876,6 +876,16 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
             format("// A comment before a macro definition\n"
                    "#define a b",
                    getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("void ffffff(int aaaaaaaaa,  // wwww\n"
+            "            int a, int bbb, // xxxxxxx\n"
+            "                            // yyyyyyyyy\n"
+            "            int c, int d, int e) {}",
+            format("void ffffff(\n"
+                   "    int aaaaaaaaa, // wwww\n"
+                   "    int a,\n"
+                   "    int bbb, // xxxxxxx yyyyyyyyy\n"
+                   "    int c, int d, int e) {}",
+                   getLLVMStyleWithColumns(40)));
 }
 
 TEST_F(FormatTest, PriorityOfCommentBreaking) {
@@ -2140,6 +2150,13 @@ TEST_F(FormatTest, ExpressionIndentation) {
                "} else if (aaaaa && bbbbb > // break\n"
                "                        ccccc) {\n"
                "}");
+
+  // Presence of a trailing comment used to change indentation of b.
+  verifyFormat("return aaaaaaaaaaaaaaaaaaa +\n"
+               "       b;\n"
+               "return aaaaaaaaaaaaaaaaaaa +\n"
+               "       b; //",
+               getLLVMStyleWithColumns(30));
 }
 
 TEST_F(FormatTest, ConstructorInitializers) {
@@ -2456,6 +2473,14 @@ TEST_F(FormatTest, BreaksDesireably) {
                "          Line.Tokens[i - 1].Tok.isNot(tok::l_paren) &&\n"
                "          Line.Tokens[i - 1].Tok.isNot(tok::l_square);\n"
                "    }\n  }\n}");
+
+  // Break on an outer level if there was a break on an inner level.
+  EXPECT_EQ("f(g(h(a, // comment\n"
+            "      b, c),\n"
+            "    d, e),\n"
+            "  x, y);",
+            format("f(g(h(a, // comment\n"
+                   "    b, c), d, e), x, y);"));
 }
 
 TEST_F(FormatTest, FormatsOneParameterPerLineIfNecessary) {
@@ -4564,6 +4589,18 @@ TEST_F(FormatTest, BreakStringLiterals) {
             "    loooooooooooooooooooong);",
             format("variable = f(\"long string literal\", short, "
                    "loooooooooooooooooooong);",
+                   getLLVMStyleWithColumns(20)));
+
+  EXPECT_EQ("f(g(\"long string \"\n"
+            "    \"literal\"),\n"
+            "  b);",
+            format("f(g(\"long string literal\"), b);",
+                   getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("f(g(\"long string \"\n"
+            "    \"literal\",\n"
+            "    a),\n"
+            "  b);",
+            format("f(g(\"long string literal\", a), b);",
                    getLLVMStyleWithColumns(20)));
   EXPECT_EQ(
       "f(\"one two\".split(\n"

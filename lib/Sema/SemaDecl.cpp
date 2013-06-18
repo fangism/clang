@@ -4727,6 +4727,17 @@ Sema::ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     SC = SC_None;
   }
 
+  if (getLangOpts().CPlusPlus11 && SCSpec == DeclSpec::SCS_register &&
+      !D.getAsmLabel() && !getSourceManager().isInSystemMacro(
+                              D.getDeclSpec().getStorageClassSpecLoc())) {
+    // In C++11, the 'register' storage class specifier is deprecated.
+    // Suppress the warning in system macros, it's used in macros in some
+    // popular C system headers, such as in glibc's htonl() macro.
+    Diag(D.getDeclSpec().getStorageClassSpecLoc(),
+         diag::warn_deprecated_register)
+      << FixItHint::CreateRemoval(D.getDeclSpec().getStorageClassSpecLoc());
+  }
+
   IdentifierInfo *II = Name.getAsIdentifierInfo();
   if (!II) {
     Diag(D.getIdentifierLoc(), diag::err_bad_variable_name)
@@ -4740,7 +4751,6 @@ Sema::ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     // C99 6.9p2: The storage-class specifiers auto and register shall not
     // appear in the declaration specifiers in an external declaration.
     if (SC == SC_Auto || SC == SC_Register) {
-
       // If this is a register variable with an asm label specified, then this
       // is a GNU extension.
       if (SC == SC_Register && D.getAsmLabel())
@@ -4750,7 +4760,7 @@ Sema::ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
       D.setInvalidType();
     }
   }
-  
+
   if (getLangOpts().OpenCL) {
     // Set up the special work-group-local storage class for variables in the
     // OpenCL __local address space.
@@ -5895,23 +5905,6 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     Diag(D.getDeclSpec().getThreadStorageClassSpecLoc(),
          diag::err_invalid_thread)
       << DeclSpec::getSpecifierName(TSCS);
-
-  // Do not allow returning a objc interface by-value.
-  if (R->getAs<FunctionType>()->getResultType()->isObjCObjectType()) {
-    Diag(D.getIdentifierLoc(),
-         diag::err_object_cannot_be_passed_returned_by_value) << 0
-    << R->getAs<FunctionType>()->getResultType()
-    << FixItHint::CreateInsertion(D.getIdentifierLoc(), "*");
-
-    QualType T = R->getAs<FunctionType>()->getResultType();
-    T = Context.getObjCObjectPointerType(T);
-    if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(R)) {
-      FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
-      R = Context.getFunctionType(T, FPT->getArgTypes(), EPI);
-    }
-    else if (isa<FunctionNoProtoType>(R))
-      R = Context.getFunctionNoProtoType(T);
-  }
 
   bool isFriend = false;
   FunctionTemplateDecl *FunctionTemplate = 0;
@@ -11243,32 +11236,34 @@ void Sema::ActOnFields(Scope* S,
     // Check if the structure/union declaration is a language extension.
     if (!getLangOpts().CPlusPlus) {
       bool ZeroSize = true;
-      bool UnnamedOnly = true;
-      unsigned UnnamedCnt = 0;
+      bool IsEmpty = true;
+      unsigned NonBitFields = 0;
       for (RecordDecl::field_iterator I = Record->field_begin(),
-                                      E = Record->field_end(); UnnamedOnly && I != E; ++I) {
+                                      E = Record->field_end();
+           (NonBitFields == 0 || ZeroSize) && I != E; ++I) {
+        IsEmpty = false;
         if (I->isUnnamedBitfield()) {
-          UnnamedCnt++;
           if (I->getBitWidthValue(Context) > 0)
             ZeroSize = false;
         } else {
-          UnnamedOnly = ZeroSize = false;
+          ++NonBitFields;
+          QualType FieldType = I->getType();
+          if (FieldType->isIncompleteType() ||
+              !Context.getTypeSizeInChars(FieldType).isZero())
+            ZeroSize = false;
         }
       }
 
       // Empty structs are an extension in C (C99 6.7.2.1p7), but are allowed in
       // C++.
-      if (ZeroSize) {
-        if (UnnamedCnt == 0)
-          Diag(RecLoc, diag::warn_empty_struct_union_compat) << Record->isUnion();
-        else
-          Diag(RecLoc, diag::warn_zero_size_struct_union_compat) << Record->isUnion();
-      }
+      if (ZeroSize)
+        Diag(RecLoc, diag::warn_zero_size_struct_union_compat) << IsEmpty
+            << Record->isUnion() << (NonBitFields > 1);
 
       // Structs without named members are extension in C (C99 6.7.2.1p7), but
       // are accepted by GCC.
-      if (UnnamedOnly) {
-        if (UnnamedCnt == 0)
+      if (NonBitFields == 0) {
+        if (IsEmpty)
           Diag(RecLoc, diag::ext_empty_struct_union) << Record->isUnion();
         else
           Diag(RecLoc, diag::ext_no_named_members_in_struct_union) << Record->isUnion();
