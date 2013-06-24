@@ -3340,12 +3340,12 @@ ABIArgInfo ARMABIInfo::classifyArgumentType(QualType Ty, int *VFPRegs,
             ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
   }
 
+  if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, CGT))
+    return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
+
   // Ignore empty records.
   if (isEmptyRecord(getContext(), Ty, true))
     return ABIArgInfo::getIgnore();
-
-  if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, CGT))
-    return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
 
   if (getABIKind() == ARMABIInfo::AAPCS_VFP) {
     // Homogeneous Aggregates need to be expanded when we can fit the aggregate
@@ -3592,6 +3592,12 @@ llvm::Value *ARMABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
   CGBuilderTy &Builder = CGF.Builder;
   llvm::Value *VAListAddrAsBPP = Builder.CreateBitCast(VAListAddr, BPP, "ap");
   llvm::Value *Addr = Builder.CreateLoad(VAListAddrAsBPP, "ap.cur");
+
+  if (isEmptyRecord(getContext(), Ty, true)) {
+    // These are ignored for parameter passing purposes.
+    llvm::Type *PTy = llvm::PointerType::getUnqual(CGF.ConvertType(Ty));
+    return Builder.CreateBitCast(Addr, PTy);
+  }
 
   uint64_t Size = CGF.getContext().getTypeSize(Ty) / 8;
   uint64_t TyAlign = CGF.getContext().getTypeAlign(Ty) / 8;

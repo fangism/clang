@@ -225,7 +225,10 @@ static void addProfileRT(const ToolChain &TC, const ArgList &Args,
 }
 
 static bool forwardToGCC(const Option &O) {
-  return !O.hasFlag(options::NoForward) &&
+  // Don't forward inputs from the original command line.  They are added from
+  // InputInfoList.
+  return O.getKind() != Option::InputClass &&
+         !O.hasFlag(options::NoForward) &&
          !O.hasFlag(options::DriverOption) &&
          !O.hasFlag(options::LinkerInput);
 }
@@ -1671,6 +1674,24 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC, const ArgList &Args)
   }
 }
 
+static void addProfileRTLinux(
+    const ToolChain &TC, const ArgList &Args, ArgStringList &CmdArgs) {
+  if (!(Args.hasArg(options::OPT_fprofile_arcs) ||
+        Args.hasArg(options::OPT_fprofile_generate) ||
+        Args.hasArg(options::OPT_fcreate_profile) ||
+        Args.hasArg(options::OPT_coverage)))
+    return;
+
+  // The profile runtime is located in the Linux library directory and has name
+  // "libclang_rt.profile-<ArchName>.a".
+  SmallString<128> LibProfile(TC.getDriver().ResourceDir);
+  llvm::sys::path::append(
+      LibProfile, "lib", "linux",
+      Twine("libclang_rt.profile-") + TC.getArchName() + ".a");
+
+  CmdArgs.push_back(Args.MakeArgString(LibProfile));
+}
+
 static void addSanitizerRTLinkFlagsLinux(
     const ToolChain &TC, const ArgList &Args, ArgStringList &CmdArgs,
     const StringRef Sanitizer, bool BeforeLibStdCXX,
@@ -2489,6 +2510,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Arg *A = Args.getLastArg(options::OPT_g_Group)) {
     if (A->getOption().matches(options::OPT_gline_tables_only))
       CmdArgs.push_back("-gline-tables-only");
+    else if (A->getOption().matches(options::OPT_gdwarf_2))
+      CmdArgs.push_back("-gdwarf-2");
+    else if (A->getOption().matches(options::OPT_gdwarf_3))
+      CmdArgs.push_back("-gdwarf-3");
+    else if (A->getOption().matches(options::OPT_gdwarf_4))
+      CmdArgs.push_back("-gdwarf-4");
     else if (!A->getOption().matches(options::OPT_g0) &&
              !A->getOption().matches(options::OPT_ggdb0))
       CmdArgs.push_back("-g");
@@ -6200,6 +6227,9 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   if (Sanitize.needsLsanRt())
     addLsanRTLinux(getToolChain(), Args, CmdArgs);
 
+  // The profile runtime also needs access to system libraries.
+  addProfileRTLinux(getToolChain(), Args, CmdArgs);
+
   if (D.CCCIsCXX &&
       !Args.hasArg(options::OPT_nostdlib) &&
       !Args.hasArg(options::OPT_nodefaultlibs)) {
@@ -6255,8 +6285,6 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtn.o")));
     }
   }
-
-  addProfileRT(getToolChain(), Args, CmdArgs, getToolChain().getTriple());
 
   C.addCommand(new Command(JA, *this, ToolChain.Linker.c_str(), CmdArgs));
 }

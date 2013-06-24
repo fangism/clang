@@ -535,7 +535,8 @@ CompilerInstance::createOutputFile(StringRef OutputPath,
     bool Exists;
     if ((CreateMissingDirectories || ParentExists) &&
         ((llvm::sys::fs::exists(AbsPath.str(), Exists) || !Exists) ||
-         (OutPath.isRegularFile() && OutPath.canWrite()))) {
+         (OutPath.isRegularFile() &&
+          llvm::sys::fs::can_write(AbsPath.c_str())))) {
       // Create a temporary file.
       SmallString<128> TempPath;
       TempPath = OutFile;
@@ -880,7 +881,7 @@ static void compileModule(CompilerInstance &ImportingInstance,
 
 
   // Construct a module-generating action.
-  GenerateModuleAction CreateModuleAction;
+  GenerateModuleAction CreateModuleAction(Module->IsSystem);
   
   // Execute the action to actually build the module in-place. Use a separate
   // thread so that we get a stack large enough.

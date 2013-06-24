@@ -484,7 +484,6 @@ def err_no_nsconstant_string_class : Error<
   "cannot find interface declaration for %0">;
 def err_recursive_superclass : Error<
   "trying to recursively use %0 as superclass of %1">;
-def warn_previous_alias_decl : Warning<"previously declared alias is ignored">;
 def err_conflicting_aliasing_type : Error<"conflicting types for alias %0">;
 def warn_undef_interface : Warning<"cannot find interface declaration for %0">;
 def warn_duplicate_protocol_def : Warning<"duplicate protocol definition of %0 is ignored">;
@@ -1110,6 +1109,8 @@ def err_explicit_non_ctor_or_conv_function : Error<
 def err_static_not_bitfield : Error<"static member %0 cannot be a bit-field">;
 def err_static_out_of_line : Error<
   "'static' can only be specified inside the class definition">;
+def err_storage_class_for_static_member : Error<
+  "static data member definition cannot specify a storage class">;
 def err_typedef_not_bitfield : Error<"typedef member %0 cannot be a bit-field">;
 def err_not_integral_type_bitfield : Error<
   "bit-field %0 has non-integral type %1">;
@@ -1824,6 +1825,8 @@ def err_format_attribute_result_not : Error<"function does not return %0">;
 def err_format_attribute_implicit_this_format_string : Error<
   "format attribute cannot specify the implicit this argument as the format "
   "string">;
+def err_common_not_supported_cplusplus : Error<
+  "common attribute is not supported in C++">;
 def warn_unknown_method_family : Warning<"unrecognized method family">;
 def err_init_method_bad_return_type : Error<
   "init methods must return an object pointer type, not %0">;
@@ -4306,13 +4309,13 @@ def err_typecheck_pointer_arith_void_type : Error<
   "arithmetic on%select{ a|}0 pointer%select{|s}0 to void">;
 def err_typecheck_decl_incomplete_type : Error<
   "variable has incomplete type %0">;
+def err_typecheck_decl_incomplete_type___float128 : Error<
+  "support for type '__float128' is not yet implemented">;
 def ext_typecheck_decl_incomplete_type : ExtWarn<
   "tentative definition of variable with internal linkage has incomplete non-array type %0">,
   InGroup<DiagGroup<"tentative-definition-incomplete-type">>;
 def err_tentative_def_incomplete_type : Error<
   "tentative definition has type %0 that is never completed">;
-def err_tentative_def_incomplete_type_arr : Error<
-  "tentative definition has array of type %0 that is never completed">;
 def warn_tentative_incomplete_array : Warning<
   "tentative array definition assumed to have one element">;
 def err_typecheck_incomplete_array_needs_initializer : Error<

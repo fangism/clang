@@ -130,6 +130,9 @@ public:
                        raw_ostream &);
   void mangleCXXVTT(const CXXRecordDecl *RD,
                     raw_ostream &);
+  void mangleCXXVBTable(const CXXRecordDecl *Derived,
+                        ArrayRef<const CXXRecordDecl *> BasePath,
+                        raw_ostream &Out);
   void mangleCXXCtorVTable(const CXXRecordDecl *RD, int64_t Offset,
                            const CXXRecordDecl *Type,
                            raw_ostream &);
@@ -825,6 +828,7 @@ void CXXNameMangler::mangleUnresolvedPrefix(NestedNameSpecifier *qualifier,
     switch (type->getTypeClass()) {
     case Type::Builtin:
     case Type::Complex:
+    case Type::Decayed:
     case Type::Pointer:
     case Type::BlockPointer:
     case Type::LValueReference:
@@ -2164,8 +2168,19 @@ void CXXNameMangler::mangleType(const ObjCInterfaceType *T) {
 }
 
 void CXXNameMangler::mangleType(const ObjCObjectType *T) {
-  // We don't allow overloading by different protocol qualification,
-  // so mangling them isn't necessary.
+  if (!T->qual_empty()) {
+    // Mangle protocol qualifiers.
+    SmallString<64> QualStr;
+    llvm::raw_svector_ostream QualOS(QualStr);
+    QualOS << "objcproto";
+    ObjCObjectType::qual_iterator i = T->qual_begin(), e = T->qual_end();
+    for ( ; i != e; ++i) {
+      StringRef name = (*i)->getName();
+      QualOS << name.size() << name;
+    }
+    QualOS.flush();
+    Out << 'U' << QualStr.size() << QualStr;
+  }
   mangleType(T->getBaseType());
 }
 
@@ -3584,6 +3599,13 @@ void ItaniumMangleContext::mangleCXXVTT(const CXXRecordDecl *RD,
   CXXNameMangler Mangler(*this, Out);
   Mangler.getStream() << "_ZTT";
   Mangler.mangleNameOrStandardSubstitution(RD);
+}
+
+void
+ItaniumMangleContext::mangleCXXVBTable(const CXXRecordDecl *Derived,
+                                       ArrayRef<const CXXRecordDecl *> BasePath,
+                                       raw_ostream &Out) {
+  llvm_unreachable("The Itanium C++ ABI does not have virtual base tables!");
 }
 
 void ItaniumMangleContext::mangleCXXCtorVTable(const CXXRecordDecl *RD,

@@ -109,6 +109,8 @@ template <> struct MappingTraits<clang::format::FormatStyle> {
     IO.mapOptional("IndentWidth", Style.IndentWidth);
     IO.mapOptional("UseTab", Style.UseTab);
     IO.mapOptional("BreakBeforeBraces", Style.BreakBeforeBraces);
+    IO.mapOptional("IndentFunctionDeclarationAfterType",
+                   Style.IndentFunctionDeclarationAfterType);
   }
 };
 }
@@ -143,6 +145,7 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.IndentWidth = 2;
   LLVMStyle.UseTab = false;
   LLVMStyle.BreakBeforeBraces = FormatStyle::BS_Attach;
+  LLVMStyle.IndentFunctionDeclarationAfterType = false;
   return LLVMStyle;
 }
 
@@ -172,6 +175,7 @@ FormatStyle getGoogleStyle() {
   GoogleStyle.IndentWidth = 2;
   GoogleStyle.UseTab = false;
   GoogleStyle.BreakBeforeBraces = FormatStyle::BS_Attach;
+  GoogleStyle.IndentFunctionDeclarationAfterType = true;
   return GoogleStyle;
 }
 
@@ -524,7 +528,8 @@ private:
         State.Column = State.Stack.back().VariablePos;
       } else if (Previous.ClosesTemplateDeclaration ||
                  (Current.Type == TT_StartOfName && State.ParenLevel == 0 &&
-                  Line.StartsDefinition)) {
+                  (!Style.IndentFunctionDeclarationAfterType ||
+                   Line.StartsDefinition))) {
         State.Column = State.Stack.back().Indent;
       } else if (Current.Type == TT_ObjCSelectorName) {
         if (State.Stack.back().ColonPos > Current.CodePointCount) {
@@ -832,17 +837,17 @@ private:
     }
     if (Current.UnbreakableTailLength >= getColumnLimit())
       return 0;
-    unsigned RemainingSpace = getColumnLimit() - Current.UnbreakableTailLength;
 
+    unsigned RemainingSpace = getColumnLimit() - Current.UnbreakableTailLength;
     bool BreakInserted = false;
     unsigned Penalty = 0;
-    unsigned PositionAfterLastLineInToken = 0;
+    unsigned RemainingTokenColumns = 0;
     for (unsigned LineIndex = 0, EndIndex = Token->getLineCount();
          LineIndex != EndIndex; ++LineIndex) {
       if (!DryRun)
         Token->replaceWhitespaceBefore(LineIndex, Whitespaces);
       unsigned TailOffset = 0;
-      unsigned RemainingTokenColumns = Token->getLineLengthAfterSplit(
+      RemainingTokenColumns = Token->getLineLengthAfterSplit(
           LineIndex, TailOffset, StringRef::npos);
       while (RemainingTokenColumns > RemainingSpace) {
         BreakableToken::Split Split =
@@ -868,11 +873,11 @@ private:
         RemainingTokenColumns = NewRemainingTokenColumns;
         BreakInserted = true;
       }
-      PositionAfterLastLineInToken = RemainingTokenColumns;
     }
 
+    State.Column = RemainingTokenColumns;
+
     if (BreakInserted) {
-      State.Column = PositionAfterLastLineInToken;
       // If we break the token inside a parameter list, we need to break before
       // the next parameter on all levels, so that the next parameter is clearly
       // visible. Line comments already introduce a break.

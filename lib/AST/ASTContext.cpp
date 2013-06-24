@@ -698,7 +698,7 @@ ASTContext::ASTContext(LangOptions& LOpts, SourceManager &SM,
     DependentTemplateSpecializationTypes(this_()),
     SubstTemplateTemplateParmPacks(this_()),
     GlobalNestedNameSpecifier(0), 
-    Int128Decl(0), UInt128Decl(0),
+    Int128Decl(0), UInt128Decl(0), Float128StubDecl(0),
     BuiltinVaListDecl(0),
     ObjCIdDecl(0), ObjCSelDecl(0), ObjCClassDecl(0), ObjCProtocolClassDecl(0),
     BOOLDecl(0),
@@ -855,6 +855,20 @@ TypedefDecl *ASTContext::getUInt128Decl() const {
   }
   
   return UInt128Decl;
+}
+
+TypeDecl *ASTContext::getFloat128StubType() const {
+  assert(LangOpts.CPlusPlus && "should only be called for c++");
+  if (!Float128StubDecl) {
+    Float128StubDecl = CXXRecordDecl::Create(const_cast<ASTContext &>(*this), 
+                                             TTK_Struct,
+                                             getTranslationUnitDecl(),
+                                             SourceLocation(),
+                                             SourceLocation(),
+                                             &Idents.get("__float128"));
+  }
+  
+  return Float128StubDecl;
 }
 
 void ASTContext::InitBuiltinType(CanQualType &R, BuiltinType::Kind K) {
@@ -1601,6 +1615,8 @@ ASTContext::getTypeInfoImpl(const Type *T) const {
   }
   case Type::ObjCObject:
     return getTypeInfo(cast<ObjCObjectType>(T)->getBaseType().getTypePtr());
+  case Type::Decayed:
+    return getTypeInfo(cast<DecayedType>(T)->getDecayedType().getTypePtr());
   case Type::ObjCInterface: {
     const ObjCInterfaceType *ObjCI = cast<ObjCInterfaceType>(T);
     const ASTRecordLayout &Layout = getASTObjCInterfaceLayout(ObjCI->getDecl());
@@ -2150,6 +2166,45 @@ QualType ASTContext::getPointerType(QualType T) const {
   PointerType *New = new (*this, TypeAlignment) PointerType(T, Canonical);
   Types.push_back(New);
   PointerTypes.InsertNode(New, InsertPos);
+  return QualType(New, 0);
+}
+
+QualType ASTContext::getDecayedType(QualType T) const {
+  assert((T->isArrayType() || T->isFunctionType()) && "T does not decay");
+
+  llvm::FoldingSetNodeID ID;
+  DecayedType::Profile(ID, T);
+  void *InsertPos = 0;
+  if (DecayedType *DT = DecayedTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(DT, 0);
+
+  QualType Decayed;
+
+  // C99 6.7.5.3p7:
+  //   A declaration of a parameter as "array of type" shall be
+  //   adjusted to "qualified pointer to type", where the type
+  //   qualifiers (if any) are those specified within the [ and ] of
+  //   the array type derivation.
+  if (T->isArrayType())
+    Decayed = getArrayDecayedType(T);
+
+  // C99 6.7.5.3p8:
+  //   A declaration of a parameter as "function returning type"
+  //   shall be adjusted to "pointer to function returning type", as
+  //   in 6.3.2.1.
+  if (T->isFunctionType())
+    Decayed = getPointerType(T);
+
+  QualType Canonical = getCanonicalType(Decayed);
+
+  // Get the new insert position for the node we care about.
+  DecayedType *NewIP = DecayedTypes.FindNodeOrInsertPos(ID, InsertPos);
+  assert(NewIP == 0 && "Shouldn't be in the map!"); (void)NewIP;
+
+  DecayedType *New =
+      new (*this, TypeAlignment) DecayedType(T, Decayed, Canonical);
+  Types.push_back(New);
+  DecayedTypes.InsertNode(New, InsertPos);
   return QualType(New, 0);
 }
 
@@ -4140,22 +4195,9 @@ const ArrayType *ASTContext::getAsArrayType(QualType T) const {
 }
 
 QualType ASTContext::getAdjustedParameterType(QualType T) const {
-  // C99 6.7.5.3p7:
-  //   A declaration of a parameter as "array of type" shall be
-  //   adjusted to "qualified pointer to type", where the type
-  //   qualifiers (if any) are those specified within the [ and ] of
-  //   the array type derivation.
-  if (T->isArrayType())
-    return getArrayDecayedType(T);
-  
-  // C99 6.7.5.3p8:
-  //   A declaration of a parameter as "function returning type"
-  //   shall be adjusted to "pointer to function returning type", as
-  //   in 6.3.2.1.
-  if (T->isFunctionType())
-    return getPointerType(T);
-  
-  return T;  
+  if (T->isArrayType() || T->isFunctionType())
+    return getDecayedType(T);
+  return T;
 }
 
 QualType ASTContext::getSignatureParameterType(QualType T) const {

@@ -287,9 +287,8 @@ void CodeGenFunction::GenerateThunk(llvm::Function *Fn,
                                     GlobalDecl GD, const ThunkInfo &Thunk) {
   const CXXMethodDecl *MD = cast<CXXMethodDecl>(GD.getDecl());
   const FunctionProtoType *FPT = MD->getType()->getAs<FunctionProtoType>();
+  QualType ResultType = FPT->getResultType();
   QualType ThisType = MD->getThisType(getContext());
-  QualType ResultType =
-    CGM.getCXXABI().HasThisReturn(GD) ? ThisType : FPT->getResultType();
 
   FunctionArgList FunctionArgs;
 
@@ -813,14 +812,8 @@ CodeGenVTables::GenerateClassData(const CXXRecordDecl *RD) {
   llvm::GlobalVariable::LinkageTypes Linkage = CGM.getVTableLinkage(RD);
   EmitVTableDefinition(VTable, Linkage, RD);
 
-  if (RD->getNumVBases()) {
-    if (!CGM.getTarget().getCXXABI().isMicrosoft()) {
-      llvm::GlobalVariable *VTT = GetAddrOfVTT(RD);
-      EmitVTTDefinition(VTT, Linkage, RD);
-    } else {
-      // FIXME: Emit vbtables here.
-    }
-  }
+  if (RD->getNumVBases())
+    CGM.getCXXABI().EmitVirtualInheritanceTables(Linkage, RD);
 
   // If this is the magic class __cxxabiv1::__fundamental_type_info,
   // we will emit the typeinfo for the fundamental types. This is the

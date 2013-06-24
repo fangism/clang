@@ -1590,26 +1590,28 @@ Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
     return false;
   }
   
-  // We know that the derived-to-base conversion is ambiguous, and
-  // we're going to produce a diagnostic. Perform the derived-to-base
-  // search just one more time to compute all of the possible paths so
-  // that we can print them out. This is more expensive than any of
-  // the previous derived-to-base checks we've done, but at this point
-  // performance isn't as much of an issue.
-  Paths.clear();
-  Paths.setRecordingPaths(true);
-  bool StillOkay = IsDerivedFrom(Derived, Base, Paths);
-  assert(StillOkay && "Can only be used with a derived-to-base conversion");
-  (void)StillOkay;
-  
-  // Build up a textual representation of the ambiguous paths, e.g.,
-  // D -> B -> A, that will be used to illustrate the ambiguous
-  // conversions in the diagnostic. We only print one of the paths
-  // to each base class subobject.
-  std::string PathDisplayStr = getAmbiguousPathsDisplayString(Paths);
-  
-  Diag(Loc, AmbigiousBaseConvID)
-  << Derived << Base << PathDisplayStr << Range << Name;
+  if (AmbigiousBaseConvID) {
+    // We know that the derived-to-base conversion is ambiguous, and
+    // we're going to produce a diagnostic. Perform the derived-to-base
+    // search just one more time to compute all of the possible paths so
+    // that we can print them out. This is more expensive than any of
+    // the previous derived-to-base checks we've done, but at this point
+    // performance isn't as much of an issue.
+    Paths.clear();
+    Paths.setRecordingPaths(true);
+    bool StillOkay = IsDerivedFrom(Derived, Base, Paths);
+    assert(StillOkay && "Can only be used with a derived-to-base conversion");
+    (void)StillOkay;
+
+    // Build up a textual representation of the ambiguous paths, e.g.,
+    // D -> B -> A, that will be used to illustrate the ambiguous
+    // conversions in the diagnostic. We only print one of the paths
+    // to each base class subobject.
+    std::string PathDisplayStr = getAmbiguousPathsDisplayString(Paths);
+
+    Diag(Loc, AmbigiousBaseConvID)
+    << Derived << Base << PathDisplayStr << Range << Name;
+  }
   return true;
 }
 
@@ -6039,8 +6041,8 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
   if (SC == SC_Static) {
     if (!D.isInvalidType())
       Diag(D.getIdentifierLoc(), diag::err_conv_function_not_member)
-        << "static" << SourceRange(D.getDeclSpec().getStorageClassSpecLoc())
-        << SourceRange(D.getIdentifierLoc());
+        << SourceRange(D.getDeclSpec().getStorageClassSpecLoc())
+        << D.getName().getSourceRange();
     D.setInvalidType();
     SC = SC_None;
   }

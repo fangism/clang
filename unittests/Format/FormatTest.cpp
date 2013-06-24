@@ -755,7 +755,7 @@ TEST_F(FormatTest, RemovesTrailingWhitespaceOfComments) {
                    getLLVMStyleWithColumns(33)));
 }
 
-TEST_F(FormatTest, UnderstandsMultiLineComments) {
+TEST_F(FormatTest, UnderstandsBlockComments) {
   verifyFormat("f(/*test=*/ true);");
   EXPECT_EQ(
       "f(aaaaaaaaaaaaaaaaaaaaaaaaa, /* Trailing comment for aa... */\n"
@@ -786,7 +786,7 @@ TEST_F(FormatTest, UnderstandsMultiLineComments) {
                NoBinPacking);
 }
 
-TEST_F(FormatTest, AlignsMultiLineComments) {
+TEST_F(FormatTest, AlignsBlockComments) {
   EXPECT_EQ("/*\n"
             " * Really multi-line\n"
             " * comment.\n"
@@ -834,6 +834,13 @@ TEST_F(FormatTest, AlignsMultiLineComments) {
             format("int i; /* Comment with empty...\n"
                    "        *\n"
                    "        * line. */"));
+}
+
+TEST_F(FormatTest, CorrectlyHandlesLengthOfBlockComments) {
+  EXPECT_EQ("double *x; /* aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "              aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa */",
+            format("double *x; /* aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+                   "              aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa */"));
 }
 
 TEST_F(FormatTest, SplitsLongCxxComments) {
@@ -886,6 +893,9 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
                    "    int bbb, // xxxxxxx yyyyyyyyy\n"
                    "    int c, int d, int e) {}",
                    getLLVMStyleWithColumns(40)));
+  EXPECT_EQ("//\t aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            format("//\t aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                   getLLVMStyleWithColumns(20)));
 }
 
 TEST_F(FormatTest, PriorityOfCommentBreaking) {
@@ -919,24 +929,19 @@ TEST_F(FormatTest, PriorityOfCommentBreaking) {
 }
 
 TEST_F(FormatTest, MultiLineCommentsInDefines) {
-  // FIXME: The line breaks are still suboptimal (current guess
-  // is that this is due to the token length being misused), but
-  // the comment handling is correct.
-  EXPECT_EQ("#define A(      \\\n"
-            "    x) /*       \\\n"
-            "a comment       \\\n"
-            "inside */       \\\n"
+  EXPECT_EQ("#define A(x) /* \\\n"
+            "  a comment     \\\n"
+            "  inside */     \\\n"
             "  f();",
             format("#define A(x) /* \\\n"
                    "  a comment     \\\n"
                    "  inside */     \\\n"
                    "  f();",
                    getLLVMStyleWithColumns(17)));
-  EXPECT_EQ("#define A(x) /* \\\n"
-            "        a       \\\n"
-            "        comment \\\n"
-            "        inside  \\\n"
-            "        */      \\\n"
+  EXPECT_EQ("#define A(      \\\n"
+            "    x) /*       \\\n"
+            "  a comment     \\\n"
+            "  inside */     \\\n"
             "  f();",
             format("#define A(      \\\n"
                    "    x) /*       \\\n"
@@ -2003,7 +2008,7 @@ TEST_F(FormatTest, LayoutStatementsAroundPreprocessorDirectives) {
   EXPECT_EQ("int\n"
             "#define A\n"
             "    a;",
-            format("int\n#define A\na;"));
+            format("int\n#define A\na;", getGoogleStyle()));
   verifyFormat("functionCallTo(\n"
                "    someOtherFunction(\n"
                "        withSomeParameters, whichInSequence,\n"
@@ -2332,19 +2337,22 @@ TEST_F(FormatTest, BreaksFunctionDeclarations) {
 
   // 2) break after return type.
   verifyFormat(
-      "Aaaaaaaaaaaaaaaaaaaaaaaa\n"
-      "    bbbbbbbbbbbbbb(Cccccccccccccc cccccccccccccccccccccccccc);");
+      "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "    bbbbbbbbbbbbbb(Cccccccccccccc cccccccccccccccccccccccccc);",
+      getGoogleStyle());
 
   // 3) break after (.
   verifyFormat(
       "Aaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbb(\n"
-      "    Cccccccccccccccccccccccccccccc cccccccccccccccccccccccccccccccc);");
+      "    Cccccccccccccccccccccccccccccc cccccccccccccccccccccccccccccccc);",
+      getGoogleStyle());
 
   // 4) break before after nested name specifiers.
   verifyFormat(
       "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "    SomeClasssssssssssssssssssssssssssssssssssssss::\n"
-      "        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb(Cccccccccccccc cccccccccc);");
+      "        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb(Cccccccccccccc cccccccccc);",
+      getGoogleStyle());
 
   // However, there are exceptions, if a sufficient amount of lines can be
   // saved.
@@ -2356,10 +2364,11 @@ TEST_F(FormatTest, BreaksFunctionDeclarations) {
                "                                  Cccccccccccccc cccccccccc,\n"
                "                                  Cccccccccccccc cccccccccc);");
   verifyFormat(
-      "Aaaaaaaaaaaaaaaaaa\n"
+      "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "    bbbbbbbbbbb(Cccccccccccccc cccccccccc, Cccccccccccccc cccccccccc,\n"
       "                Cccccccccccccc cccccccccc, Cccccccccccccc cccccccccc,\n"
-      "                Cccccccccccccc cccccccccc, Cccccccccccccc cccccccccc);");
+      "                Cccccccccccccc cccccccccc, Cccccccccccccc cccccccccc);",
+      getGoogleStyle());
   verifyFormat(
       "Aaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb(Cccccccccccccc cccccccccc,\n"
       "                                          Cccccccccccccc cccccccccc,\n"
@@ -2414,10 +2423,10 @@ TEST_F(FormatTest, BreaksFunctionDeclarationsWithTrailingTokens) {
   verifyFormat("bool aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                "    __attribute__((unused));");
   verifyFormat(
-      "bool aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-      "    GUARDED_BY(aaaaaaaaaaaa);");
+      "bool aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "    GUARDED_BY(aaaaaaaaaaaa);",
+      getGoogleStyle());
 }
-
 
 TEST_F(FormatTest, BreaksDesireably) {
   verifyFormat("if (aaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaa) ||\n"
@@ -2740,9 +2749,10 @@ TEST_F(FormatTest, DeclarationsOfMultipleVariables) {
                "          ***c = ccccccccccccccccccc, ***d = ddddddddddddddd;");
   // FIXME: If multiple variables are defined, the "*" needs to move to the new
   // line. Also fix indent for breaking after the type, this looks bad.
-  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa *\n"
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa*\n"
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa = aaaaaaaaaaaaaaaaaaa,\n"
-               "   *b = bbbbbbbbbbbbbbbbbbb;");
+               "    *b = bbbbbbbbbbbbbbbbbbb;",
+               getGoogleStyle());
 
   // Not ideal, but pointer-with-type does not allow much here.
   verifyGoogleFormat(
@@ -3395,17 +3405,21 @@ TEST_F(FormatTest, FormatsFunctionTypes) {
 
 TEST_F(FormatTest, BreaksLongDeclarations) {
   verifyFormat("typedef LoooooooooooooooooooooooooooooooooooooooongType\n"
-               "    AnotherNameForTheLongType;");
+               "    AnotherNameForTheLongType;",
+               getGoogleStyle());
   verifyFormat("LoooooooooooooooooooooooooooooooooooooooongType\n"
-               "    LoooooooooooooooooooooooooooooooooooooooongVariable;");
+               "    LoooooooooooooooooooooooooooooooooooooooongVariable;",
+               getGoogleStyle());
   verifyFormat("LoooooooooooooooooooooooooooooooooooooooongReturnType\n"
-               "    LoooooooooooooooooooooooooooooooongFunctionDeclaration();");
+               "    LoooooooooooooooooooooooooooooooongFunctionDeclaration();",
+               getGoogleStyle());
   verifyFormat("LoooooooooooooooooooooooooooooooooooooooongReturnType\n"
                "LooooooooooooooooooooooooooooooooooongFunctionDefinition() {}");
 
   // FIXME: Without the comment, this breaks after "(".
-  verifyFormat("LoooooooooooooooooooooooooooooooooooooooongType // break\n"
-               "    (*LoooooooooooooooooooooooooooongFunctionTypeVarialbe)();");
+  verifyFormat("LoooooooooooooooooooooooooooooooooooooooongType  // break\n"
+               "    (*LoooooooooooooooooooooooooooongFunctionTypeVarialbe)();",
+               getGoogleStyle());
 
   verifyFormat("int *someFunction(int LoooooooooooooooooooongParam1,\n"
                "                  int LoooooooooooooooooooongParam2) {}");
@@ -3426,7 +3440,8 @@ TEST_F(FormatTest, BreaksLongDeclarations) {
                "Function() {}");
   verifyFormat(
       "aaaaaaaaaaaaaaaa::aaaaaaaaaaaaaaaa<aaaaaaaaaaaaa, aaaaaaaaaaaa>\n"
-      "    aaaaaaaaaaaaaaaaaaaaaaa;");
+      "    aaaaaaaaaaaaaaaaaaaaaaa;",
+      getGoogleStyle());
 
   verifyGoogleFormat(
       "TypeSpecDecl* TypeSpecDecl::Create(ASTContext& C, DeclContext* DC,\n"
@@ -4636,6 +4651,26 @@ TEST_F(FormatTest, BreakStringLiterals) {
       "\"slashes\"",
       format("\"split/pathat/slashes\"", getLLVMStyleWithColumns(10)));
 
+  EXPECT_EQ(
+      "\"split/\"\n"
+      "\"pathat/\"\n"
+      "\"slashes\"",
+      format("\"split/pathat/slashes\"", getLLVMStyleWithColumns(10)));
+  EXPECT_EQ("\"split at \"\n"
+            "\"spaces/at/\"\n"
+            "\"slashes.at.any$\"\n"
+            "\"non-alphanumeric%\"\n"
+            "\"1111111111characte\"\n"
+            "\"rs\"",
+            format("\"split at "
+                   "spaces/at/"
+                   "slashes.at."
+                   "any$non-"
+                   "alphanumeric%"
+                   "1111111111characte"
+                   "rs\"",
+                   getLLVMStyleWithColumns(20)));
+
   FormatStyle AlignLeft = getLLVMStyleWithColumns(12);
   AlignLeft.AlignEscapedNewlinesLeft = true;
   EXPECT_EQ(
@@ -4781,6 +4816,12 @@ TEST_F(FormatTest, ConfigurableIndentWidth) {
                "        call(),\n"
                "};",
                EightIndent);
+}
+
+TEST_F(FormatTest, ConfigurableFunctionDeclarationIndentAfterType) {
+  verifyFormat("void\n"
+               "f();",
+               getLLVMStyleWithColumns(8));
 }
 
 TEST_F(FormatTest, ConfigurableUseOfTab) {
@@ -4950,6 +4991,7 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE_BOOL(PointerBindsToType);
   CHECK_PARSE_BOOL(SpacesInBracedLists);
   CHECK_PARSE_BOOL(UseTab);
+  CHECK_PARSE_BOOL(IndentFunctionDeclarationAfterType);
 
   CHECK_PARSE("AccessModifierOffset: -1234", AccessModifierOffset, -1234);
   CHECK_PARSE("ColumnLimit: 1234", ColumnLimit, 1234u);

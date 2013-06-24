@@ -221,7 +221,6 @@ void EmitAssemblyHelper::CreatePasses(TargetMachine *TM) {
   PMBuilder.OptLevel = OptLevel;
   PMBuilder.SizeLevel = CodeGenOpts.OptimizeSize;
 
-  PMBuilder.DisableSimplifyLibCalls = !CodeGenOpts.SimplifyLibCalls;
   PMBuilder.DisableUnitAtATime = !CodeGenOpts.UnitAtATime;
   PMBuilder.DisableUnrollLoops = !CodeGenOpts.UnrollLoops;
 
@@ -529,6 +528,7 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action, raw_ostream *OS) {
                       Action != Backend_EmitLL);
   TargetMachine *TM = CreateTargetMachine(UsesCodeGen);
   if (UsesCodeGen && !TM) return;
+  llvm::OwningPtr<TargetMachine> TMOwner(CodeGenOpts.DisableFree ? 0 : TM);
   CreatePasses(TM);
 
   switch (Action) {

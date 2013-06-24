@@ -2005,7 +2005,8 @@ ExprResult Sema::ActOnIdExpression(Scope *S,
       MightBeImplicitMember = true;
     else
       MightBeImplicitMember = isa<FieldDecl>(R.getFoundDecl()) ||
-                              isa<IndirectFieldDecl>(R.getFoundDecl());
+                              isa<IndirectFieldDecl>(R.getFoundDecl()) ||
+                              isa<MSPropertyDecl>(R.getFoundDecl());
 
     if (MightBeImplicitMember)
       return BuildPossibleImplicitMemberExpr(SS, TemplateKWLoc,
@@ -3799,7 +3800,8 @@ Sema::getVariadicCallType(FunctionDecl *FDecl, const FunctionProtoType *Proto,
       if (CXXMethodDecl *Method = dyn_cast_or_null<CXXMethodDecl>(FDecl))
         if (Method->isInstance())
           return VariadicMethod;
-    }
+    } else if (Fn && Fn->getType() == Context.BoundMemberTy)
+      return VariadicMethod;
     return VariadicFunction;
   }
   return VariadicDoesNotApply;
@@ -4021,6 +4023,8 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc,
 
 static void DiagnoseCalleeStaticArrayParam(Sema &S, ParmVarDecl *PVD) {
   TypeLoc TL = PVD->getTypeSourceInfo()->getTypeLoc();
+  if (DecayedTypeLoc DTL = TL.getAs<DecayedTypeLoc>())
+    TL = DTL.getOriginalLoc();
   if (ArrayTypeLoc ATL = TL.getAs<ArrayTypeLoc>())
     S.Diag(PVD->getLocation(), diag::note_callee_static_array)
       << ATL.getLocalSourceRange();
@@ -4465,7 +4469,10 @@ Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
     if (BuiltinID)
       return CheckBuiltinFunctionCall(BuiltinID, TheCall);
   } else if (NDecl) {
-    if (CheckBlockCall(NDecl, TheCall, Proto))
+    if (CheckPointerCall(NDecl, TheCall, Proto))
+      return ExprError();
+  } else {
+    if (CheckOtherCall(TheCall, Proto))
       return ExprError();
   }
 

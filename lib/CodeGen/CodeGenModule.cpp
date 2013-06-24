@@ -190,6 +190,11 @@ void CodeGenModule::Release() {
       (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
     EmitModuleLinkOptions();
   }
+  if (CodeGenOpts.DwarfVersion)
+    // We actually want the latest version when there are conflicts.
+    // We can change from Warning to Latest if such mode is supported.
+    getModule().addModuleFlag(llvm::Module::Warning, "Dwarf Version",
+                              CodeGenOpts.DwarfVersion);
 
   SimplifyPersonality();
 
@@ -716,14 +721,6 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD,
 
   if (!IsIncompleteFunction)
     SetLLVMFunctionAttributes(FD, getTypes().arrangeGlobalDeclaration(GD), F);
-
-  if (getCXXABI().HasThisReturn(GD)) {
-    llvm::Type *RetTy = F->getReturnType();
-    assert(!F->arg_empty() &&
-           F->arg_begin()->getType()->canLosslesslyBitCastTo(RetTy) &&
-           "unexpected this return");
-    F->addAttribute(1, llvm::Attribute::Returned);
-  }
 
   // Only a few attributes are set on declarations; these may later be
   // overridden by a definition.
