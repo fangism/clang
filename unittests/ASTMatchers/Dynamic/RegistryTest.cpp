@@ -39,14 +39,14 @@ public:
   template <class T>
   Matcher<T> constructMatcher(StringRef MatcherName, Diagnostics *Error) {
     return Registry::constructMatcher(MatcherName, SourceRange(), Args(), Error)
-        .getTypedMatcher<T>();
+        .template getTypedMatcher<T>();
   }
 
   template <class T>
   Matcher<T> constructMatcher(StringRef MatcherName, const VariantValue &Arg1,
                               Diagnostics *Error) {
     return Registry::constructMatcher(MatcherName, SourceRange(), Args(Arg1),
-                                      Error).getTypedMatcher<T>();
+                                      Error).template getTypedMatcher<T>();
   }
 
   template <class T>
@@ -54,7 +54,7 @@ public:
                               const VariantValue &Arg2, Diagnostics *Error) {
     return Registry::constructMatcher(MatcherName, SourceRange(),
                                       Args(Arg1, Arg2), Error)
-        .getTypedMatcher<T>();
+        .template getTypedMatcher<T>();
   }
 };
 
