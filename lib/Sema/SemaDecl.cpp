@@ -8732,17 +8732,19 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D) {
   const FunctionDecl *PossibleZeroParamPrototype = 0;
   if (ShouldWarnAboutMissingPrototype(FD, PossibleZeroParamPrototype)) {
     Diag(FD->getLocation(), diag::warn_missing_prototype) << FD;
-  
+
     if (PossibleZeroParamPrototype) {
-      // We found a declaration that is not a prototype, 
+      // We found a declaration that is not a prototype,
       // but that could be a zero-parameter prototype
-      TypeSourceInfo* TI = PossibleZeroParamPrototype->getTypeSourceInfo();
-      TypeLoc TL = TI->getTypeLoc();
-      if (FunctionNoProtoTypeLoc FTL = TL.getAs<FunctionNoProtoTypeLoc>())
-        Diag(PossibleZeroParamPrototype->getLocation(), 
-             diag::note_declaration_not_a_prototype)
-          << PossibleZeroParamPrototype 
-          << FixItHint::CreateInsertion(FTL.getRParenLoc(), "void");
+      if (TypeSourceInfo *TI =
+              PossibleZeroParamPrototype->getTypeSourceInfo()) {
+        TypeLoc TL = TI->getTypeLoc();
+        if (FunctionNoProtoTypeLoc FTL = TL.getAs<FunctionNoProtoTypeLoc>())
+          Diag(PossibleZeroParamPrototype->getLocation(),
+               diag::note_declaration_not_a_prototype)
+            << PossibleZeroParamPrototype
+            << FixItHint::CreateInsertion(FTL.getRParenLoc(), "void");
+      }
     }
   }
 
@@ -9612,7 +9614,7 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
     Redecl = NotForRedeclaration;
 
   LookupResult Previous(*this, Name, NameLoc, LookupTagName, Redecl);
-
+  bool FriendSawTagOutsideEnclosingNamespace = false;
   if (Name && SS.isNotEmpty()) {
     // We have a nested-name tag ('struct foo::bar').
 
@@ -9705,8 +9707,11 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
       while (F.hasNext()) {
         NamedDecl *ND = F.next();
         DeclContext *DC = ND->getDeclContext()->getRedeclContext();
-        if (DC->isFileContext() && !EnclosingNS->Encloses(ND->getDeclContext()))
+        if (DC->isFileContext() &&
+            !EnclosingNS->Encloses(ND->getDeclContext())) {
           F.erase();
+          FriendSawTagOutsideEnclosingNamespace = true;
+        }
       }
       F.done();
     }
@@ -10206,7 +10211,8 @@ CreateNewDecl:
   // the tag name visible.
   if (TUK == TUK_Friend)
     New->setObjectOfFriendDecl(/* PreviouslyDeclared = */ !Previous.empty() ||
-                               getLangOpts().MicrosoftExt);
+                               (!FriendSawTagOutsideEnclosingNamespace &&
+                                getLangOpts().MicrosoftExt));
 
   // Set the access specifier.
   if (!Invalid && SearchDC->isRecord())
@@ -10746,8 +10752,8 @@ bool Sema::CheckNontrivialField(FieldDecl *FD) {
   assert(FD);
   assert(getLangOpts().CPlusPlus && "valid check only for C++");
 
-  if (FD->isInvalidDecl())
-    return true;
+  if (FD->isInvalidDecl() || FD->getType()->isDependentType())
+    return false;
 
   QualType EltTy = Context.getBaseElementType(FD->getType());
   if (const RecordType *RT = EltTy->getAs<RecordType>()) {

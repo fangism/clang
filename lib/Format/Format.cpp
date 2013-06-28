@@ -266,8 +266,8 @@ public:
     State.Column = FirstIndent;
     State.NextToken = RootToken;
     State.Stack.push_back(
-        ParenState(FirstIndent, FirstIndent, /*AvoidBinPacking=*/ false,
-                   /*NoLineBreak=*/ false));
+        ParenState(FirstIndent, FirstIndent, /*AvoidBinPacking=*/false,
+                   /*NoLineBreak=*/false));
     State.LineContainsContinuedForLoopSection = false;
     State.ParenLevel = 0;
     State.StartOfStringLiteral = 0;
@@ -276,7 +276,7 @@ public:
     State.IgnoreStackForComparison = false;
 
     // The first token has already been indented and thus consumed.
-    moveStateToNextToken(State, /*DryRun=*/ false);
+    moveStateToNextToken(State, /*DryRun=*/false);
 
     // If everything fits on a single line, just put it there.
     unsigned ColumnLimit = Style.ColumnLimit;
@@ -480,7 +480,7 @@ private:
   /// \brief Appends the next token to \p State and updates information
   /// necessary for indentation.
   ///
-  /// Puts the token on the current line if \p Newline is \c true and adds a
+  /// Puts the token on the current line if \p Newline is \c false and adds a
   /// line break and necessary indentation otherwise.
   ///
   /// If \p DryRun is \c false, also creates and stores the required
@@ -955,8 +955,8 @@ private:
         // State already examined with lower penalty.
         continue;
 
-      addNextStateToQueue(Penalty, Node, /*NewLine=*/ false);
-      addNextStateToQueue(Penalty, Node, /*NewLine=*/ true);
+      addNextStateToQueue(Penalty, Node, /*NewLine=*/false);
+      addNextStateToQueue(Penalty, Node, /*NewLine=*/true);
     }
 
     if (Queue.empty())

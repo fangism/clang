@@ -374,7 +374,7 @@ void Sema::DiagnoseSentinelCalls(NamedDecl *D, SourceLocation Loc,
   // the sentinel, and the args after the sentinel, complain.
   if (Args.size() < numFormalParams + numArgsAfterSentinel + 1) {
     Diag(Loc, diag::warn_not_enough_argument) << D->getDeclName();
-    Diag(D->getLocation(), diag::note_sentinel_here) << calleeType;
+    Diag(D->getLocation(), diag::note_sentinel_here) << int(calleeType);
     return;
   }
 
@@ -400,12 +400,12 @@ void Sema::DiagnoseSentinelCalls(NamedDecl *D, SourceLocation Loc,
     NullValue = "(void*) 0";
 
   if (MissingNilLoc.isInvalid())
-    Diag(Loc, diag::warn_missing_sentinel) << calleeType;
+    Diag(Loc, diag::warn_missing_sentinel) << int(calleeType);
   else
     Diag(MissingNilLoc, diag::warn_missing_sentinel) 
-      << calleeType
+      << int(calleeType)
       << FixItHint::CreateInsertion(MissingNilLoc, ", " + NullValue);
-  Diag(D->getLocation(), diag::note_sentinel_here) << calleeType;
+  Diag(D->getLocation(), diag::note_sentinel_here) << int(calleeType);
 }
 
 SourceRange Sema::getExprRange(Expr *E) const {
@@ -7874,28 +7874,6 @@ inline QualType Sema::CheckLogicalOperands( // C99 6.5.[13,14]
   return Context.BoolTy;
 }
 
-/// IsReadonlyProperty - Verify that otherwise a valid l-value expression
-/// is a read-only property; return true if so. A readonly property expression
-/// depends on various declarations and thus must be treated specially.
-///
-static bool IsReadonlyProperty(Expr *E, Sema &S) {
-  const ObjCPropertyRefExpr *PropExpr = dyn_cast<ObjCPropertyRefExpr>(E);
-  if (!PropExpr) return false;
-  if (PropExpr->isImplicitProperty()) return false;
-
-  ObjCPropertyDecl *PDecl = PropExpr->getExplicitProperty();
-  QualType BaseType = PropExpr->isSuperReceiver() ? 
-                            PropExpr->getSuperReceiverType() :  
-                            PropExpr->getBase()->getType();
-      
-  if (const ObjCObjectPointerType *OPT =
-      BaseType->getAsObjCInterfacePointerType())
-    if (ObjCInterfaceDecl *IFace = OPT->getInterfaceDecl())
-      if (S.isPropertyReadonly(PDecl, IFace))
-        return true;
-  return false;
-}
-
 static bool IsReadonlyMessage(Expr *E, Sema &S) {
   const MemberExpr *ME = dyn_cast<MemberExpr>(E);
   if (!ME) return false;
@@ -7939,9 +7917,7 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   SourceLocation OrigLoc = Loc;
   Expr::isModifiableLvalueResult IsLV = E->isModifiableLvalue(S.Context,
                                                               &Loc);
-  if (IsLV == Expr::MLV_Valid && IsReadonlyProperty(E, S))
-    IsLV = Expr::MLV_ReadonlyProperty;
-  else if (IsLV == Expr::MLV_ClassTemporary && IsReadonlyMessage(E, S))
+  if (IsLV == Expr::MLV_ClassTemporary && IsReadonlyMessage(E, S))
     IsLV = Expr::MLV_InvalidMessageExpression;
   if (IsLV == Expr::MLV_Valid)
     return false;
@@ -8024,7 +8000,6 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   case Expr::MLV_DuplicateVectorComponents:
     Diag = diag::err_typecheck_duplicate_vector_components_not_mlvalue;
     break;
-  case Expr::MLV_ReadonlyProperty:
   case Expr::MLV_NoSetterProperty:
     llvm_unreachable("readonly properties should be processed differently");
   case Expr::MLV_InvalidMessageExpression:
@@ -8706,7 +8681,20 @@ static void checkObjCPointerIntrospection(Sema &S, ExprResult &L, ExprResult &R,
   // looks for code trying to introspect into tagged pointers, which
   // code should generally never do.
   if (ObjCPointerExpr && isa<IntegerLiteral>(OtherExpr->IgnoreParenCasts())) {
-    S.Diag(OpLoc, diag::warn_objc_pointer_masking)
+    unsigned Diag = diag::warn_objc_pointer_masking;
+    // Determine if we are introspecting the result of performSelectorXXX.
+    const Expr *Ex = ObjCPointerExpr->IgnoreParenCasts();
+    // Special case messages to -performSelector and friends, which
+    // can return non-pointer values boxed in a pointer value.
+    // Some clients may wish to silence warnings in this subcase.
+    if (const ObjCMessageExpr *ME = dyn_cast<ObjCMessageExpr>(Ex)) {
+      Selector S = ME->getSelector();
+      StringRef SelArg0 = S.getNameForSlot(0);
+      if (SelArg0.startswith("performSelector"))
+        Diag = diag::warn_objc_pointer_masking_performSelector;
+    }
+    
+    S.Diag(OpLoc, Diag)
       << ObjCPointerExpr->getSourceRange();
   }
 }
@@ -10882,7 +10870,8 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
 
     if (!AlreadyInstantiated || Func->isConstexpr()) {
       if (isa<CXXRecordDecl>(Func->getDeclContext()) &&
-          cast<CXXRecordDecl>(Func->getDeclContext())->isLocalClass())
+          cast<CXXRecordDecl>(Func->getDeclContext())->isLocalClass() &&
+          ActiveTemplateInstantiations.size())
         PendingLocalImplicitInstantiations.push_back(
             std::make_pair(Func, PointOfInstantiation));
       else if (Func->isConstexpr())
@@ -12213,12 +12202,49 @@ ExprResult RebuildUnknownAnyExpr::VisitCallExpr(CallExpr *E) {
   assert(E->getObjectKind() == OK_Ordinary);
 
   // Rebuild the function type, replacing the result type with DestType.
-  if (const FunctionProtoType *Proto = dyn_cast<FunctionProtoType>(FnType))
-    DestType = S.Context.getFunctionType(DestType, Proto->getArgTypes(),
+  const FunctionProtoType *Proto = dyn_cast<FunctionProtoType>(FnType);
+  if (Proto) {
+    // __unknown_anytype(...) is a special case used by the debugger when
+    // it has no idea what a function's signature is.
+    //
+    // We want to build this call essentially under the K&R
+    // unprototyped rules, but making a FunctionNoProtoType in C++
+    // would foul up all sorts of assumptions.  However, we cannot
+    // simply pass all arguments as variadic arguments, nor can we
+    // portably just call the function under a non-variadic type; see
+    // the comment on IR-gen's TargetInfo::isNoProtoCallVariadic.
+    // However, it turns out that in practice it is generally safe to
+    // call a function declared as "A foo(B,C,D);" under the prototype
+    // "A foo(B,C,D,...);".  The only known exception is with the
+    // Windows ABI, where any variadic function is implicitly cdecl
+    // regardless of its normal CC.  Therefore we change the parameter
+    // types to match the types of the arguments.
+    //
+    // This is a hack, but it is far superior to moving the
+    // corresponding target-specific code from IR-gen to Sema/AST.
+
+    ArrayRef<QualType> ParamTypes = Proto->getArgTypes();
+    SmallVector<QualType, 8> ArgTypes;
+    if (ParamTypes.empty() && Proto->isVariadic()) { // the special case
+      ArgTypes.reserve(E->getNumArgs());
+      for (unsigned i = 0, e = E->getNumArgs(); i != e; ++i) {
+        Expr *Arg = E->getArg(i);
+        QualType ArgType = Arg->getType();
+        if (E->isLValue()) {
+          ArgType = S.Context.getLValueReferenceType(ArgType);
+        } else if (E->isXValue()) {
+          ArgType = S.Context.getRValueReferenceType(ArgType);
+        }
+        ArgTypes.push_back(ArgType);
+      }
+      ParamTypes = ArgTypes;
+    }
+    DestType = S.Context.getFunctionType(DestType, ParamTypes,
                                          Proto->getExtProtoInfo());
-  else
+  } else {
     DestType = S.Context.getFunctionNoProtoType(DestType,
                                                 FnType->getExtInfo());
+  }
 
   // Rebuild the appropriate pointer-to-function type.
   switch (Kind) { 
@@ -12351,6 +12377,8 @@ ExprResult RebuildUnknownAnyExpr::resolveDecl(Expr *E, ValueDecl *VD) {
     return ExprError();
   }
 
+  // Modifying the declaration like this is friendly to IR-gen but
+  // also really dangerous.
   VD->setType(DestType);
   E->setType(Type);
   E->setValueKind(ValueKind);

@@ -42,7 +42,6 @@
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/MutexGuard.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/PathV1.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdio>
@@ -84,10 +83,10 @@ namespace {
     /// \brief The file in which the precompiled preamble is stored.
     std::string PreambleFile;
 
-    /// \brief Temporary files that should be removed when the ASTUnit is 
+    /// \brief Temporary files that should be removed when the ASTUnit is
     /// destroyed.
-    SmallVector<llvm::sys::Path, 4> TemporaryFiles;
-    
+    SmallVector<std::string, 4> TemporaryFiles;
+
     /// \brief Erase temporary files.
     void CleanTemporaryFiles();
 
@@ -166,13 +165,13 @@ static const std::string &getPreambleFile(const ASTUnit *AU) {
 
 void OnDiskData::CleanTemporaryFiles() {
   for (unsigned I = 0, N = TemporaryFiles.size(); I != N; ++I)
-    TemporaryFiles[I].eraseFromDisk();
-  TemporaryFiles.clear(); 
+    llvm::sys::fs::remove(TemporaryFiles[I]);
+  TemporaryFiles.clear();
 }
 
 void OnDiskData::CleanPreambleFile() {
   if (!PreambleFile.empty()) {
-    llvm::sys::Path(PreambleFile).eraseFromDisk();
+    llvm::sys::fs::remove(PreambleFile);
     PreambleFile.clear();
   }
 }
@@ -201,7 +200,7 @@ void ASTUnit::CleanTemporaryFiles() {
   getOnDiskData(this).CleanTemporaryFiles();
 }
 
-void ASTUnit::addTemporaryFile(const llvm::sys::Path &TempFile) {
+void ASTUnit::addTemporaryFile(StringRef TempFile) {
   getOnDiskData(this).TemporaryFiles.push_back(TempFile);
 }
 
@@ -884,7 +883,15 @@ void AddTopLevelDeclarationToHash(Decl *D, unsigned &Hash) {
       Hash = llvm::HashString(NameStr, Hash);
     }
     return;
-  }  
+  }
+
+  if (ImportDecl *ImportD = dyn_cast<ImportDecl>(D)) {
+    if (Module *Mod = ImportD->getImportedModule()) {
+      std::string ModName = Mod->getFullModuleName();
+      Hash = llvm::HashString(ModName, Hash);
+    }
+    return;
+  }
 }
 
 class TopLevelDeclTrackerConsumer : public ASTConsumer {
@@ -1229,36 +1236,17 @@ error:
 
 /// \brief Simple function to retrieve a path for a preamble precompiled header.
 static std::string GetPreamblePCHPath() {
-  // FIXME: This is lame; sys::Path should provide this function (in particular,
-  // it should know how to find the temporary files dir).
-  // FIXME: This is really lame. I copied this code from the Driver!
   // FIXME: This is a hack so that we can override the preamble file during
   // crash-recovery testing, which is the only case where the preamble files
-  // are not necessarily cleaned up. 
+  // are not necessarily cleaned up.
   const char *TmpFile = ::getenv("CINDEXTEST_PREAMBLE_FILE");
   if (TmpFile)
     return TmpFile;
-  
-  std::string Error;
-  const char *TmpDir = ::getenv("TMPDIR");
-  if (!TmpDir)
-    TmpDir = ::getenv("TEMP");
-  if (!TmpDir)
-    TmpDir = ::getenv("TMP");
-#ifdef LLVM_ON_WIN32
-  if (!TmpDir)
-    TmpDir = ::getenv("USERPROFILE");
-#endif
-  if (!TmpDir)
-    TmpDir = "/tmp";
-  llvm::sys::Path P(TmpDir);
-  P.createDirectoryOnDisk(true);
-  P.appendComponent("preamble");
-  P.appendSuffix("pch");
-  if (P.makeUnique(/*reuse_current=*/false, /*ErrMsg*/0))
-    return std::string();
-  
-  return P.str();
+
+  SmallString<128> Path;
+  llvm::sys::fs::unique_file("preamble-%%%%%%.pch", Path);
+
+  return Path.str();
 }
 
 /// \brief Compute the preamble for the main file, providing the source buffer
@@ -1559,11 +1547,11 @@ llvm::MemoryBuffer *ASTUnit::getMainBufferWithPrecompiledPreamble(
   memset(const_cast<char*>(PreambleBuffer->getBufferStart()) + Preamble.size(), 
          ' ', PreambleReservedSize - Preamble.size() - 1);
   const_cast<char*>(PreambleBuffer->getBufferEnd())[-1] = '\n';  
-  
+
   // Remap the main source file to the preamble buffer.
-  llvm::sys::PathWithStatus MainFilePath(FrontendOpts.Inputs[0].getFile());
-  PreprocessorOpts.addRemappedFile(MainFilePath.str(), PreambleBuffer);
-  
+  StringRef MainFilePath = FrontendOpts.Inputs[0].getFile();
+  PreprocessorOpts.addRemappedFile(MainFilePath, PreambleBuffer);
+
   // Tell the compiler invocation to generate a temporary precompiled header.
   FrontendOpts.ProgramAction = frontend::GeneratePCH;
   // FIXME: Generate the precompiled header into memory?
@@ -1588,7 +1576,7 @@ llvm::MemoryBuffer *ASTUnit::getMainBufferWithPrecompiledPreamble(
   Clang->setTarget(TargetInfo::CreateTargetInfo(Clang->getDiagnostics(),
                                                 &Clang->getTargetOpts()));
   if (!Clang->hasTarget()) {
-    llvm::sys::Path(FrontendOpts.OutputFile).eraseFromDisk();
+    llvm::sys::fs::remove(FrontendOpts.OutputFile);
     Preamble.clear();
     PreambleRebuildCounter = DefaultPreambleRebuildInterval;
     PreprocessorOpts.eraseRemappedFile(
@@ -1626,7 +1614,7 @@ llvm::MemoryBuffer *ASTUnit::getMainBufferWithPrecompiledPreamble(
   OwningPtr<PrecompilePreambleAction> Act;
   Act.reset(new PrecompilePreambleAction(*this));
   if (!Act->BeginSourceFile(*Clang.get(), Clang->getFrontendOpts().Inputs[0])) {
-    llvm::sys::Path(FrontendOpts.OutputFile).eraseFromDisk();
+    llvm::sys::fs::remove(FrontendOpts.OutputFile);
     Preamble.clear();
     PreambleRebuildCounter = DefaultPreambleRebuildInterval;
     PreprocessorOpts.eraseRemappedFile(
@@ -1641,7 +1629,7 @@ llvm::MemoryBuffer *ASTUnit::getMainBufferWithPrecompiledPreamble(
     // The preamble PCH failed (e.g. there was a module loading fatal error),
     // so no precompiled header was generated. Forget that we even tried.
     // FIXME: Should we leave a note for ourselves to try again?
-    llvm::sys::Path(FrontendOpts.OutputFile).eraseFromDisk();
+    llvm::sys::fs::remove(FrontendOpts.OutputFile);
     Preamble.clear();
     TopLevelDeclsInPreamble.clear();
     PreambleRebuildCounter = DefaultPreambleRebuildInterval;
@@ -2480,7 +2468,6 @@ void ASTUnit::CodeComplete(StringRef File, unsigned Line, unsigned Column,
   // preamble.
   llvm::MemoryBuffer *OverrideMainBuffer = 0;
   if (!getPreambleFile(this).empty()) {
-    using llvm::sys::FileStatus;
     std::string CompleteFilePath(File);
     uint64_t CompleteFileID;
 

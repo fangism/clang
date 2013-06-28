@@ -31,7 +31,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/Host.h"
-#include "llvm/Support/PathV1.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <sys/stat.h>
@@ -109,7 +109,7 @@ static void addDirectoryList(const ArgList &Args,
     return;
 
   StringRef::size_type Delim;
-  while ((Delim = Dirs.find(llvm::sys::PathSeparator)) != StringRef::npos) {
+  while ((Delim = Dirs.find(llvm::sys::EnvPathSeparator)) != StringRef::npos) {
     if (Delim == 0) { // Leading colon.
       if (CombinedArg) {
         CmdArgs.push_back(Args.MakeArgString(std::string(ArgName) + "."));
@@ -344,32 +344,28 @@ void Clang::AddPreprocessingOptions(Compilation &C,
 
       bool FoundPTH = false;
       bool FoundPCH = false;
-      llvm::sys::Path P(A->getValue());
-      bool Exists;
+      SmallString<128> P(A->getValue());
+      // We want the files to have a name like foo.h.pch. Add a dummy extension
+      // so that replace_extension does the right thing.
+      P += ".dummy";
       if (UsePCH) {
-        P.appendSuffix("pch");
-        if (!llvm::sys::fs::exists(P.str(), Exists) && Exists)
+        llvm::sys::path::replace_extension(P, "pch");
+        if (llvm::sys::fs::exists(P.str()))
           FoundPCH = true;
-        else
-          P.eraseSuffix();
       }
 
       if (!FoundPCH) {
-        P.appendSuffix("pth");
-        if (!llvm::sys::fs::exists(P.str(), Exists) && Exists)
+        llvm::sys::path::replace_extension(P, "pth");
+        if (llvm::sys::fs::exists(P.str()))
           FoundPTH = true;
-        else
-          P.eraseSuffix();
       }
 
       if (!FoundPCH && !FoundPTH) {
-        P.appendSuffix("gch");
-        if (!llvm::sys::fs::exists(P.str(), Exists) && Exists) {
+        llvm::sys::path::replace_extension(P, "gch");
+        if (llvm::sys::fs::exists(P.str())) {
           FoundPCH = UsePCH;
           FoundPTH = !UsePCH;
         }
-        else
-          P.eraseSuffix();
       }
 
       if (FoundPCH || FoundPTH) {
@@ -532,6 +528,7 @@ static std::string getARMTargetCPU(const ArgList &Args,
     .Cases("armv7s", "armv7-s", "swift")
     .Cases("armv7r", "armv7-r", "cortex-r4")
     .Cases("armv7m", "armv7-m", "cortex-m3")
+    .Cases("armv8", "armv8a", "armv8-a", "cortex-a53")
     .Case("ep9312", "ep9312")
     .Case("iwmmxt", "iwmmxt")
     .Case("xscale", "xscale")
@@ -593,6 +590,14 @@ static void addFPUArgs(const Driver &D, const Arg *A, const ArgList &Args,
     CmdArgs.push_back("+vfp3");
     CmdArgs.push_back("-target-feature");
     CmdArgs.push_back("-neon");
+  } else if (FPU == "fp-armv8") {
+    CmdArgs.push_back("-target-feature");
+    CmdArgs.push_back("+v8fp");
+  } else if (FPU == "neon-fp-armv8") {
+    CmdArgs.push_back("-target-feature");
+    CmdArgs.push_back("+v8fp");
+    CmdArgs.push_back("-target-feature");
+    CmdArgs.push_back("+neon");
   } else if (FPU == "neon") {
     CmdArgs.push_back("-target-feature");
     CmdArgs.push_back("+neon");
@@ -1634,8 +1639,7 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC, const ArgList &Args)
                                    options::OPT_fno_sanitize_blacklist)) {
     if (BLArg->getOption().matches(options::OPT_fsanitize_blacklist)) {
       std::string BLPath = BLArg->getValue();
-      bool BLExists = false;
-      if (!llvm::sys::fs::exists(BLPath, BLExists) && BLExists)
+      if (llvm::sys::fs::exists(BLPath))
         BlacklistFile = BLPath;
       else
         D.Diag(diag::err_drv_no_such_file) << BLPath;
@@ -1644,9 +1648,8 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC, const ArgList &Args)
     // If no -fsanitize-blacklist option is specified, try to look up for
     // blacklist in the resource directory.
     std::string BLPath;
-    bool BLExists = false;
     if (getDefaultBlacklistForKind(D, Kind, BLPath) &&
-        !llvm::sys::fs::exists(BLPath, BLExists) && BLExists)
+        llvm::sys::fs::exists(BLPath))
       BlacklistFile = BLPath;
   }
 
@@ -2186,7 +2189,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(A->getValue());
   }
 
-  if (Arg *A = Args.getLastArg(options::OPT_fpcc_struct_return, options::OPT_freg_struct_return)) {
+  if (Arg *A = Args.getLastArg(options::OPT_fpcc_struct_return,
+                               options::OPT_freg_struct_return)) {
     if (getToolChain().getTriple().getArch() != llvm::Triple::x86) {
       D.Diag(diag::err_drv_unsupported_opt_for_target)
         << A->getSpelling() << getToolChain().getTriple().str();
@@ -2611,6 +2615,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         break;
       }
     }
+  } else {
+    Args.ClaimAllArgs(options::OPT_ccc_arcmt_check);
+    Args.ClaimAllArgs(options::OPT_ccc_arcmt_modify);
+    Args.ClaimAllArgs(options::OPT_ccc_arcmt_migrate);
   }
 
   if (const Arg *A = Args.getLastArg(options::OPT_ccc_objcmt_migrate)) {
@@ -3396,24 +3404,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // -fvectorize is default.
   if (Args.hasFlag(options::OPT_fvectorize, VectorizeAliasOption,
-                   options::OPT_fno_vectorize, true)) {
-    CmdArgs.push_back("-backend-option");
+                   options::OPT_fno_vectorize, true))
     CmdArgs.push_back("-vectorize-loops");
-  }
 
   // -fno-slp-vectorize is default.
   if (Args.hasFlag(options::OPT_fslp_vectorize,
-                   options::OPT_fno_slp_vectorize, false)) {
-    CmdArgs.push_back("-backend-option");
+                   options::OPT_fno_slp_vectorize, false))
     CmdArgs.push_back("-vectorize-slp");
-  }
 
   // -fno-slp-vectorize-aggressive is default.
   if (Args.hasFlag(options::OPT_fslp_vectorize_aggressive,
-                   options::OPT_fno_slp_vectorize_aggressive, false)) {
-    CmdArgs.push_back("-backend-option");
+                   options::OPT_fno_slp_vectorize_aggressive, false))
     CmdArgs.push_back("-vectorize-slp-aggressive");
-  }
 
   if (Arg *A = Args.getLastArg(options::OPT_fshow_overloads_EQ))
     A->render(Args, CmdArgs);

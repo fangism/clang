@@ -871,6 +871,7 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
                                      MacroBuilder &Builder) const {
   // Target identification.
   Builder.defineMacro("__ppc__");
+  Builder.defineMacro("__PPC__");
   Builder.defineMacro("_ARCH_PPC");
   Builder.defineMacro("__powerpc__");
   Builder.defineMacro("__POWERPC__");
@@ -878,8 +879,7 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("_ARCH_PPC64");
     Builder.defineMacro("__powerpc64__");
     Builder.defineMacro("__ppc64__");
-  } else {
-    Builder.defineMacro("__ppc__");
+    Builder.defineMacro("__PPC64__");
   }
 
   // Target properties.
@@ -3681,7 +3681,7 @@ public:
                                  bool Enabled) const {
     if (Name == "soft-float" || Name == "soft-float-abi" ||
         Name == "vfp2" || Name == "vfp3" || Name == "vfp4" || Name == "neon" ||
-        Name == "d16" || Name == "neonfp") {
+        Name == "d16" || Name == "neonfp" || Name == "v8fp") {
       Features[Name] = Enabled;
     } else
       return false;
@@ -3750,6 +3750,7 @@ public:
       .Case("swift", "7S")
       .Cases("cortex-m3", "cortex-m4", "7M")
       .Case("cortex-m0", "6M")
+      .Case("cortex-a53", "8A")
       .Default(0);
   }
   static const char *getCPUProfile(StringRef Name) {

@@ -39,7 +39,6 @@
 #include "llvm/Support/LockFileManager.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/PathV1.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/Timer.h"
@@ -446,7 +445,7 @@ void CompilerInstance::clearOutputFiles(bool EraseFiles) {
         }
       }
     } else if (!it->Filename.empty() && EraseFiles)
-      llvm::sys::Path(it->Filename).eraseFromDisk();
+      llvm::sys::fs::remove(it->Filename);
 
   }
   OutputFiles.clear();
@@ -510,9 +509,8 @@ CompilerInstance::createOutputFile(StringRef OutputPath,
   } else if (InFile == "-") {
     OutFile = "-";
   } else if (!Extension.empty()) {
-    llvm::sys::Path Path(InFile);
-    Path.eraseSuffix();
-    Path.appendSuffix(Extension);
+    SmallString<128> Path(InFile);
+    llvm::sys::path::replace_extension(Path, Extension);
     OutFile = Path.str();
   } else {
     OutFile = "-";
@@ -521,34 +519,50 @@ CompilerInstance::createOutputFile(StringRef OutputPath,
   OwningPtr<llvm::raw_fd_ostream> OS;
   std::string OSFile;
 
-  if (UseTemporary && OutFile != "-") {
-    // Only create the temporary if the parent directory exists (or create
-    // missing directories is true) and we can actually write to OutPath,
-    // otherwise we want to fail early.
-    SmallString<256> AbsPath(OutputPath);
-    llvm::sys::fs::make_absolute(AbsPath);
-    llvm::sys::Path OutPath(AbsPath);
-    bool ParentExists = false;
-    if (llvm::sys::fs::exists(llvm::sys::path::parent_path(AbsPath.str()),
-                              ParentExists))
-      ParentExists = false;
-    bool Exists;
-    if ((CreateMissingDirectories || ParentExists) &&
-        ((llvm::sys::fs::exists(AbsPath.str(), Exists) || !Exists) ||
-         (OutPath.isRegularFile() &&
-          llvm::sys::fs::can_write(AbsPath.c_str())))) {
-      // Create a temporary file.
-      SmallString<128> TempPath;
-      TempPath = OutFile;
-      TempPath += "-%%%%%%%%";
-      int fd;
-      if (llvm::sys::fs::unique_file(TempPath.str(), fd, TempPath,
-                                     /*makeAbsolute=*/false, 0664)
-          == llvm::errc::success) {
-        OS.reset(new llvm::raw_fd_ostream(fd, /*shouldClose=*/true));
-        OSFile = TempFile = TempPath.str();
+  if (UseTemporary) {
+    if (OutFile == "-")
+      UseTemporary = false;
+    else {
+      llvm::sys::fs::file_status Status;
+      llvm::sys::fs::status(OutputPath, Status);
+      if (llvm::sys::fs::exists(Status)) {
+        // Fail early if we can't write to the final destination.
+        if (!llvm::sys::fs::can_write(OutputPath))
+          return 0;
+
+        // Don't use a temporary if the output is a special file. This handles
+        // things like '-o /dev/null'
+        if (!llvm::sys::fs::is_regular_file(Status))
+          UseTemporary = false;
       }
     }
+  }
+
+  if (UseTemporary) {
+    SmallString<256> AbsPath(OutputPath);
+    llvm::sys::fs::make_absolute(AbsPath);
+
+    // If the parent directory doesn't exist and we can't create it, fail.
+    bool ParentExists =
+        llvm::sys::fs::exists(llvm::sys::path::parent_path(AbsPath.str()));
+    if (!CreateMissingDirectories && !ParentExists) {
+      Error = "Parent directory doesn't exist";
+      return 0;
+    }
+
+    // Create a temporary file.
+    SmallString<128> TempPath;
+    TempPath = OutFile;
+    TempPath += "-%%%%%%%%";
+    int fd;
+    if (!llvm::sys::fs::unique_file(TempPath.str(), fd, TempPath,
+                                   /*makeAbsolute=*/false, 0664)) {
+      OS.reset(new llvm::raw_fd_ostream(fd, /*shouldClose=*/true));
+      OSFile = TempFile = TempPath.str();
+    }
+    // If we failed to create the temporary, fallback to writing to the file
+    // directly. This handles the corner case where we cannot write to the
+    // directory, but can write to the file.
   }
 
   if (!OS) {
@@ -897,7 +911,7 @@ static void compileModule(CompilerInstance &ImportingInstance,
   // doesn't make sense for all clients, so clean this up manually.
   Instance.clearOutputFiles(/*EraseFiles=*/true);
   if (!TempModuleMapFileName.empty())
-    llvm::sys::Path(TempModuleMapFileName).eraseFromDisk();
+    llvm::sys::fs::remove(TempModuleMapFileName.str());
 
   // We've rebuilt a module. If we're allowed to generate or update the global
   // module index, record that fact in the importing compiler instance.

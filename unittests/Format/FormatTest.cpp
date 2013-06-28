@@ -756,7 +756,7 @@ TEST_F(FormatTest, RemovesTrailingWhitespaceOfComments) {
 }
 
 TEST_F(FormatTest, UnderstandsBlockComments) {
-  verifyFormat("f(/*test=*/ true);");
+  verifyFormat("f(/*noSpaceAfterParameterNamingComment=*/true);");
   EXPECT_EQ(
       "f(aaaaaaaaaaaaaaaaaaaaaaaaa, /* Trailing comment for aa... */\n"
       "  bbbbbbbbbbbbbbbbbbbbbbbbb);",
@@ -4309,6 +4309,10 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
   verifyFormat("throw [self errorFor:a];");
   verifyFormat("@throw [self errorFor:a];");
 
+  verifyFormat("[(id)foo bar:(id)baz quux:(id)snorf];");
+  verifyFormat("[(id)foo bar:(id) ? baz : quux];");
+  verifyFormat("4 > 4 ? (id)a : (id)baz;");
+
   // This tests that the formatter doesn't break after "backing" but before ":",
   // which would be at 80 columns.
   verifyFormat(
@@ -4419,6 +4423,9 @@ TEST_F(FormatTest, ObjCSnippets) {
   verifyFormat("@property(assign, nonatomic) CGFloat hoverAlpha;");
   verifyFormat("@property(assign, getter=isEditable) BOOL editable;");
   verifyGoogleFormat("@property(assign, getter=isEditable) BOOL editable;");
+
+  verifyFormat("@import foo.bar;\n"
+               "@import baz;");
 }
 
 TEST_F(FormatTest, ObjCLiterals) {

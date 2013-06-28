@@ -1080,7 +1080,8 @@ static bool shouldTryToOverload(Sema &S, FunctionDecl *New, FunctionDecl *Old,
     // or non-static member function). Add it now, on the assumption that this
     // is a redeclaration of OldMethod.
     unsigned NewQuals = NewMethod->getTypeQualifiers();
-    if (NewMethod->isConstexpr() && !isa<CXXConstructorDecl>(NewMethod))
+    if (!S.getLangOpts().CPlusPlus1y && NewMethod->isConstexpr() &&
+        !isa<CXXConstructorDecl>(NewMethod))
       NewQuals |= Qualifiers::Const;
     if (OldMethod->getTypeQualifiers() != NewQuals)
       return true;
@@ -3230,10 +3231,14 @@ Sema::DiagnoseMultipleUserDefinedConversion(Expr *From, QualType ToType) {
     Diag(From->getLocStart(),
          diag::err_typecheck_ambiguous_condition)
           << From->getType() << ToType << From->getSourceRange();
-  else if (OvResult == OR_No_Viable_Function && !CandidateSet.empty())
-    Diag(From->getLocStart(),
-         diag::err_typecheck_nonviable_condition)
-    << From->getType() << ToType << From->getSourceRange();
+  else if (OvResult == OR_No_Viable_Function && !CandidateSet.empty()) {
+    if (!RequireCompleteType(From->getLocStart(), ToType,
+                          diag::err_typecheck_nonviable_condition_incomplete,
+                             From->getType(), From->getSourceRange()))
+      Diag(From->getLocStart(),
+           diag::err_typecheck_nonviable_condition)
+           << From->getType() << From->getSourceRange() << ToType;
+  }
   else
     return false;
   CandidateSet.NoteCandidates(*this, OCD_AllCandidates, From);

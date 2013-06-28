@@ -2499,9 +2499,6 @@ public:
                              ObjCMethodDecl *MethodDecl,
                              bool IsProtocolMethodDecl);
 
-  bool isPropertyReadonly(ObjCPropertyDecl *PropertyDecl,
-                          ObjCInterfaceDecl *IDecl);
-
   typedef llvm::SmallPtrSet<Selector, 8> SelectorSet;
   typedef llvm::DenseMap<Selector, ObjCMethodDecl*> ProtocolsMethodsMap;
 
@@ -4932,12 +4929,12 @@ public:
                              Decl **Params, unsigned NumParams,
                              SourceLocation RAngleLoc);
 
-  /// \brief The context in which we are checking a template parameter
-  /// list.
+  /// \brief The context in which we are checking a template parameter list.
   enum TemplateParamListContext {
     TPC_ClassTemplate,
     TPC_FunctionTemplate,
     TPC_ClassTemplateMember,
+    TPC_FriendClassTemplate,
     TPC_FriendFunctionTemplate,
     TPC_FriendFunctionTemplateDefinition,
     TPC_TypeAliasTemplate
@@ -6427,9 +6424,6 @@ public:
 
   void DiagnoseClassExtensionDupMethods(ObjCCategoryDecl *CAT,
                                         ObjCInterfaceDecl *ID);
-
-  void MatchOneProtocolPropertiesInClass(Decl *CDecl,
-                                         ObjCProtocolDecl *PDecl);
 
   Decl *ActOnAtEnd(Scope *S, SourceRange AtEnd,
                    Decl **allMethods = 0, unsigned allNum = 0,

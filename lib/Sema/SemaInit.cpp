@@ -5348,13 +5348,15 @@ static void performLifetimeExtension(Expr *Init, const ValueDecl *ExtendingD) {
              I != E; ++I) {
           if (I->isUnnamedBitfield())
             continue;
+          Expr *SubInit = ILE->getInit(Index);
           if (I->getType()->isReferenceType())
-            performReferenceExtension(ILE->getInit(Index), ExtendingD);
-          else if (isa<InitListExpr>(ILE->getInit(Index)))
+            performReferenceExtension(SubInit, ExtendingD);
+          else if (isa<InitListExpr>(SubInit) ||
+                   isa<CXXStdInitializerListExpr>(SubInit))
             // This may be either aggregate-initialization of a member or
             // initialization of a std::initializer_list object. Either way,
             // we should recursively lifetime-extend that initializer.
-            performLifetimeExtension(ILE->getInit(Index), ExtendingD);
+            performLifetimeExtension(SubInit, ExtendingD);
           ++Index;
         }
       }
@@ -6251,9 +6253,14 @@ bool InitializationSequence::Diagnose(Sema &S,
       break;
 
     case OR_No_Viable_Function:
-      S.Diag(Kind.getLocation(), diag::err_typecheck_nonviable_condition)
-        << Args[0]->getType() << DestType.getNonReferenceType()
-        << Args[0]->getSourceRange();
+      if (!S.RequireCompleteType(Kind.getLocation(),
+                                 DestType.getNonReferenceType(),
+                          diag::err_typecheck_nonviable_condition_incomplete,
+                               Args[0]->getType(), Args[0]->getSourceRange()))
+        S.Diag(Kind.getLocation(), diag::err_typecheck_nonviable_condition)
+          << Args[0]->getType() << Args[0]->getSourceRange()
+          << DestType.getNonReferenceType();
+
       FailedCandidateSet.NoteCandidates(S, OCD_AllCandidates, Args);
       break;
 

@@ -1140,6 +1140,19 @@ void Sema::CheckImplementationIvars(ObjCImplementationDecl *ImpDecl,
         Diag(ClsIvar->getLocation(), diag::note_previous_definition);
         continue;
       }
+      // Check class extensions (unnamed categories) for duplicate ivars.
+      for (ObjCInterfaceDecl::visible_extensions_iterator
+           Ext = IDecl->visible_extensions_begin(),
+           ExtEnd = IDecl->visible_extensions_end();
+         Ext != ExtEnd; ++Ext) {
+        ObjCCategoryDecl *CDecl = *Ext;
+        if (const ObjCIvarDecl *ClsExtIvar = 
+            CDecl->getIvarDecl(ImplIvar->getIdentifier())) {
+          Diag(ImplIvar->getLocation(), diag::err_duplicate_ivar_declaration); 
+          Diag(ClsExtIvar->getLocation(), diag::note_previous_definition);
+          continue;
+        }
+      }
       // Instance ivar to Implementation's DeclContext.
       ImplIvar->setLexicalDeclContext(ImpDecl);
       IDecl->makeDeclVisibleInContext(ImplIvar);
@@ -1486,8 +1499,8 @@ static bool checkMethodFamilyMismatch(Sema &S, ObjCMethodDecl *impl,
     reasonSelector = R_NonObjectReturn;
   }
 
-  S.Diag(impl->getLocation(), errorID) << familySelector << reasonSelector;
-  S.Diag(decl->getLocation(), noteID) << familySelector << reasonSelector;
+  S.Diag(impl->getLocation(), errorID) << int(familySelector) << int(reasonSelector);
+  S.Diag(decl->getLocation(), noteID) << int(familySelector) << int(reasonSelector);
 
   return true;
 }

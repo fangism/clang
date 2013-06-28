@@ -404,6 +404,17 @@ void Sema::CheckExtraCXXDefaultArguments(Declarator &D) {
   }
 }
 
+static bool functionDeclHasDefaultArgument(const FunctionDecl *FD) {
+  for (unsigned NumParams = FD->getNumParams(); NumParams > 0; --NumParams) {
+    const ParmVarDecl *PVD = FD->getParamDecl(NumParams-1);
+    if (!PVD->hasDefaultArg())
+      return false;
+    if (!PVD->hasInheritedDefaultArg())
+      return true;
+  }
+  return false;
+}
+
 /// MergeCXXFunctionDecl - Merge two declarations of the same C++
 /// function, once we already know that they have the same
 /// type. Subroutine of MergeFunctionDecl. Returns true if there was an
@@ -574,6 +585,17 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
   if (New->isConstexpr() != Old->isConstexpr()) {
     Diag(New->getLocation(), diag::err_constexpr_redecl_mismatch)
       << New << New->isConstexpr();
+    Diag(Old->getLocation(), diag::note_previous_declaration);
+    Invalid = true;
+  }
+
+  // C++11 [dcl.fct.default]p4: If a friend declaration specifies a default
+  // argument expression, that declaration shall be a deﬁnition and shall be
+  // the only declaration of the function or function template in the
+  // translation unit.
+  if (Old->getFriendObjectKind() == Decl::FOK_Undeclared &&
+      functionDeclHasDefaultArgument(Old)) {
+    Diag(New->getLocation(), diag::err_friend_decl_with_def_arg_redeclared);
     Diag(Old->getLocation(), diag::note_previous_declaration);
     Invalid = true;
   }
@@ -1935,19 +1957,20 @@ Sema::ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS, Declarator &D,
     if (MSPropertyAttr) {
       Member = HandleMSProperty(S, cast<CXXRecordDecl>(CurContext), Loc, D,
                                 BitWidth, InitStyle, AS, MSPropertyAttr);
+      if (!Member)
+        return 0;
       isInstField = false;
     } else {
       Member = HandleField(S, cast<CXXRecordDecl>(CurContext), Loc, D,
                                 BitWidth, InitStyle, AS);
+      assert(Member && "HandleField never returns null");
     }
-    assert(Member && "HandleField never returns null");
   } else {
     assert(InitStyle == ICIS_NoInit || D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_static);
 
     Member = HandleDeclarator(S, D, TemplateParameterLists);
-    if (!Member) {
+    if (!Member)
       return 0;
-    }
 
     // Non-instance-fields can't have a bitfield.
     if (BitWidth) {
@@ -11376,6 +11399,18 @@ NamedDecl *Sema::ActOnFriendFunctionDecl(Scope *S, Declarator &D,
       FD = FTD->getTemplatedDecl();
     else
       FD = cast<FunctionDecl>(ND);
+
+    // C++11 [dcl.fct.default]p4: If a friend declaration specifies a
+    // default argument expression, that declaration shall be a definition
+    // and shall be the only declaration of the function or function
+    // template in the translation unit.
+    if (functionDeclHasDefaultArgument(FD)) {
+      if (FunctionDecl *OldFD = FD->getPreviousDecl()) {
+        Diag(FD->getLocation(), diag::err_friend_decl_with_def_arg_redeclared);
+        Diag(OldFD->getLocation(), diag::note_previous_declaration);
+      } else if (!D.isFunctionDefinition())
+        Diag(FD->getLocation(), diag::err_friend_decl_with_def_arg_must_be_def);
+    }
 
     // Mark templated-scope function declarations as unsupported.
     if (FD->getNumTemplateParameterLists())
