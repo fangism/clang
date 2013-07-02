@@ -30,6 +30,8 @@ public:
   virtual FormatToken *setPosition(unsigned Position) = 0;
 };
 
+namespace {
+
 class ScopedDeclarationState {
 public:
   ScopedDeclarationState(UnwrappedLine &Line, std::vector<bool> &Stack,
@@ -114,6 +116,8 @@ private:
   FormatToken *Token;
 };
 
+} // end anonymous namespace
+
 class ScopedLineState {
 public:
   ScopedLineState(UnwrappedLineParser &Parser,
@@ -145,6 +149,8 @@ private:
   UnwrappedLine *PreBlockLine;
 };
 
+namespace {
+
 class IndexedTokenSource : public FormatTokenSource {
 public:
   IndexedTokenSource(ArrayRef<FormatToken *> Tokens)
@@ -169,6 +175,8 @@ private:
   ArrayRef<FormatToken *> Tokens;
   int Position;
 };
+
+} // end anonymous namespace
 
 UnwrappedLineParser::UnwrappedLineParser(const FormatStyle &Style,
                                          ArrayRef<FormatToken *> Tokens,
@@ -247,7 +255,14 @@ void UnwrappedLineParser::calculateBraceTypes() {
   SmallVector<unsigned, 8> LBraceStack;
   assert(Tok->Tok.is(tok::l_brace));
   do {
-    FormatToken *NextTok = Tokens->getNextToken();
+    // Get next none-comment token.
+    FormatToken *NextTok;
+    unsigned ReadTokens = 0;
+    do {
+      NextTok = Tokens->getNextToken();
+      ++ReadTokens;
+    } while (NextTok->is(tok::comment));
+
     switch (Tok->Tok.getKind()) {
     case tok::l_brace:
       LBraceStack.push_back(Position);
@@ -285,7 +300,7 @@ void UnwrappedLineParser::calculateBraceTypes() {
       break;
     }
     Tok = NextTok;
-    ++Position;
+    Position += ReadTokens;
   } while (Tok->Tok.isNot(tok::eof));
   // Assume other blocks for all unclosed opening braces.
   for (unsigned i = 0, e = LBraceStack.size(); i != e; ++i) {

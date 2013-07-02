@@ -553,7 +553,8 @@ void CXXNameMangler::mangleName(const NamedDecl *ND) {
   // is that of the containing namespace, or the translation unit.
   // FIXME: This is a hack; extern variables declared locally should have
   // a proper semantic declaration context!
-  if (isa<FunctionDecl>(DC) && ND->hasLinkage() && !isLambda(ND))
+  if ((isa<FunctionDecl>(DC) || isa<ObjCMethodDecl>(DC)) &&
+      ND->hasLinkage() && !isLambda(ND))
     while (!DC->isNamespace() && !DC->isTranslationUnit())
       DC = getEffectiveParentContext(DC);
   else if (GetLocalClassDecl(ND)) {
@@ -1272,11 +1273,6 @@ void CXXNameMangler::mangleLocalName(const NamedDecl *ND) {
   //                 _ <entity name>
   // <discriminator> := _ <non-negative number>
   const DeclContext *DC = getEffectiveDeclContext(ND);
-  if (isa<ObjCMethodDecl>(DC) && isa<FunctionDecl>(ND)) {
-    // Don't add objc method name mangling to locally declared function
-    mangleUnqualifiedName(ND);
-    return;
-  }
 
   Out << 'Z';
 
@@ -1416,15 +1412,22 @@ void CXXNameMangler::manglePrefix(const DeclContext *DC, bool NoFunction) {
     return;
 
   if (const BlockDecl *Block = dyn_cast<BlockDecl>(DC)) {
-    // The symbol we're adding a prefix for isn't externally
-    // visible; make up something sane.
-    // FIXME: This isn't always true!
-    SmallString<16> BlockPrefix;
-    BlockPrefix += "__block_prefix_internal";
-    unsigned Number = Context.getBlockId(Block, false);
+    // Reflect the lambda mangling rules, except that we don't have an
+    // actual function declaration.
+    if (NoFunction)
+      return;
+
+    manglePrefix(getEffectiveParentContext(DC), NoFunction);
+    // If we have a block mangling number, use it.
+    unsigned Number = Block->getBlockManglingNumber();
+    // Otherwise, just make up a number. It doesn't matter what it is because
+    // the symbol in question isn't externally visible.
+    if (!Number)
+      Number = Context.getBlockId(Block, false);
+    Out << "Ub";
     if (Number > 1)
-      BlockPrefix += llvm::utostr_32(Number - 2);
-    Out << BlockPrefix.size() << BlockPrefix;
+      Out << Number - 2;
+    Out << '_';
     return;
   } else if (isa<CapturedDecl>(DC)) {
     // Skip CapturedDecl context.

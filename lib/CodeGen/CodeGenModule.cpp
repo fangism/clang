@@ -515,11 +515,7 @@ void CodeGenModule::EmitCtorList(const CtorList &Fns, const char *GlobalName) {
 
 llvm::GlobalValue::LinkageTypes
 CodeGenModule::getFunctionLinkage(GlobalDecl GD) {
-  return getFunctionLinkage(cast<FunctionDecl>(GD.getDecl()));
-}
-
-llvm::GlobalValue::LinkageTypes
-CodeGenModule::getFunctionLinkage(const FunctionDecl *D) {
+  const FunctionDecl *D = cast<FunctionDecl>(GD.getDecl());
   GVALinkage Linkage = getContext().GetGVALinkageForFunction(D);
 
   if (Linkage == GVA_Internal)
@@ -721,6 +717,14 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD,
 
   if (!IsIncompleteFunction)
     SetLLVMFunctionAttributes(FD, getTypes().arrangeGlobalDeclaration(GD), F);
+
+  if (getCXXABI().HasThisReturn(GD)) {
+    assert(!F->arg_empty() &&
+           F->arg_begin()->getType()
+             ->canLosslesslyBitCastTo(F->getReturnType()) &&
+           "unexpected this return");
+    F->addAttribute(1, llvm::Attribute::Returned);
+  }
 
   // Only a few attributes are set on declarations; these may later be
   // overridden by a definition.
@@ -1789,7 +1793,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
 
   // Set the llvm linkage type as appropriate.
   llvm::GlobalValue::LinkageTypes Linkage = 
-    GetLLVMLinkageVarDefinition(D, GV);
+    GetLLVMLinkageVarDefinition(D, GV->isConstant());
   GV->setLinkage(Linkage);
   if (Linkage == llvm::GlobalVariable::CommonLinkage)
     // common vars aren't constant even if declared const.
@@ -1820,8 +1824,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
 }
 
 llvm::GlobalValue::LinkageTypes
-CodeGenModule::GetLLVMLinkageVarDefinition(const VarDecl *D,
-                                           llvm::GlobalVariable *GV) {
+CodeGenModule::GetLLVMLinkageVarDefinition(const VarDecl *D, bool isConstant) {
   GVALinkage Linkage = getContext().GetGVALinkageForVariable(D);
   if (Linkage == GVA_Internal)
     return llvm::Function::InternalLinkage;
@@ -1836,7 +1839,7 @@ CodeGenModule::GetLLVMLinkageVarDefinition(const VarDecl *D,
     // http://msdn.microsoft.com/en-us/library/5tkz6s71.aspx
     return llvm::GlobalVariable::WeakODRLinkage;
   } else if (D->hasAttr<WeakAttr>()) {
-    if (GV->isConstant())
+    if (isConstant)
       return llvm::GlobalVariable::WeakODRLinkage;
     else
       return llvm::GlobalVariable::WeakAnyLinkage;
