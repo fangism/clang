@@ -514,7 +514,10 @@ private:
     if (Newline) {
       State.Stack.back().ContainsLineBreak = true;
       if (Current.is(tok::r_brace)) {
-        State.Column = Line.Level * Style.IndentWidth;
+        if (Current.BlockKind == BK_BracedInit)
+          State.Column = State.Stack[State.Stack.size() - 2].LastSpace;
+        else
+          State.Column = Line.Level * Style.IndentWidth;
       } else if (Current.is(tok::string_literal) &&
                  State.StartOfStringLiteral != 0) {
         State.Column = State.StartOfStringLiteral;
@@ -536,7 +539,9 @@ private:
                  State.Stack.back().VariablePos != 0) {
         State.Column = State.Stack.back().VariablePos;
       } else if (Previous.ClosesTemplateDeclaration ||
-                 (Current.Type == TT_StartOfName && State.ParenLevel == 0 &&
+                 ((Current.Type == TT_StartOfName ||
+                   Current.is(tok::kw_operator)) &&
+                  State.ParenLevel == 0 &&
                   (!Style.IndentFunctionDeclarationAfterType ||
                    Line.StartsDefinition))) {
         State.Column = State.Stack.back().Indent;
@@ -667,10 +672,24 @@ private:
         State.Stack.back().LastSpace = State.Column;
       else if (Previous.Type == TT_InheritanceColon)
         State.Stack.back().Indent = State.Column;
-      else if (Previous.opensScope() && !Current.FakeLParens.empty())
-        // If this function has multiple parameters or a binary expression
-        // parameter, indent nested calls from the start of the first parameter.
-        State.Stack.back().LastSpace = State.Column;
+      else if (Previous.opensScope()) {
+        // If a function has multiple parameters (including a single parameter
+        // that is a binary expression) or a trailing call, indent all
+        // parameters from the opening parenthesis. This avoids confusing
+        // indents like:
+        //   OuterFunction(InnerFunctionCall(
+        //       ParameterToInnerFunction),
+        //                 SecondParameterToOuterFunction);
+        bool HasMultipleParameters = !Current.FakeLParens.empty();
+        bool HasTrailingCall = false;
+        if (Previous.MatchingParen) {
+          const FormatToken *Next = Previous.MatchingParen->getNextNonComment();
+          if (Next && Next->isOneOf(tok::period, tok::arrow))
+            HasTrailingCall = true;
+        }
+        if (HasMultipleParameters || HasTrailingCall)
+          State.Stack.back().LastSpace = State.Column;
+      }
     }
 
     return moveStateToNextToken(State, DryRun);
@@ -1111,8 +1130,9 @@ private:
          (Previous.ClosesTemplateDeclaration && State.ParenLevel == 0)))
       return true;
 
-    if (Current.Type == TT_StartOfName && Line.MightBeFunctionDecl &&
-        State.Stack.back().BreakBeforeParameter && State.ParenLevel == 0)
+    if ((Current.Type == TT_StartOfName || Current.is(tok::kw_operator)) &&
+        Line.MightBeFunctionDecl && State.Stack.back().BreakBeforeParameter &&
+        State.ParenLevel == 0)
       return true;
     return false;
   }
