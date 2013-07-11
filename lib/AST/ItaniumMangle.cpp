@@ -56,6 +56,13 @@ static const DeclContext *getEffectiveDeclContext(const Decl *D) {
             = dyn_cast_or_null<ParmVarDecl>(RD->getLambdaContextDecl()))
         return ContextParam->getDeclContext();
   }
+
+  // Perform the same check for block literals.
+  if (const BlockDecl *BD = dyn_cast<BlockDecl>(D)) {
+    if (ParmVarDecl *ContextParam
+          = dyn_cast_or_null<ParmVarDecl>(BD->getBlockManglingContextDecl()))
+      return ContextParam->getDeclContext();
+  }
   
   const DeclContext *DC = D->getDeclContext();
   if (const CapturedDecl *CD = dyn_cast<CapturedDecl>(DC))
@@ -99,7 +106,8 @@ static const unsigned UnknownArity = ~0U;
 
 class ItaniumMangleContext : public MangleContext {
   llvm::DenseMap<const TagDecl *, uint64_t> AnonStructIds;
-  unsigned Discriminator;
+  typedef std::pair<const DeclContext*, IdentifierInfo*> DiscriminatorKeyTy;
+  llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl*, unsigned> Uniquifier;
   
 public:
@@ -112,11 +120,6 @@ public:
       uint64_t>::iterator, bool> Result =
       AnonStructIds.insert(std::make_pair(TD, AnonStructIds.size()));
     return Result.first->second;
-  }
-
-  void startNewFunction() {
-    MangleContext::startNewFunction();
-    mangleInitDiscriminator();
   }
 
   /// @name Mangler Entry Points
@@ -153,21 +156,33 @@ public:
   void mangleItaniumThreadLocalInit(const VarDecl *D, raw_ostream &);
   void mangleItaniumThreadLocalWrapper(const VarDecl *D, raw_ostream &);
 
-  void mangleInitDiscriminator() {
-    Discriminator = 0;
-  }
-
   bool getNextDiscriminator(const NamedDecl *ND, unsigned &disc) {
-    // Lambda closure types with external linkage (indicated by a 
-    // non-zero lambda mangling number) have their own numbering scheme, so
-    // they do not need a discriminator.
+    // Lambda closure types are already numbered.
     if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(ND))
-      if (RD->isLambda() && RD->getLambdaManglingNumber() > 0)
+      if (RD->isLambda())
         return false;
-        
+
+    // Anonymous tags are already numbered.
+    if (const TagDecl *Tag = dyn_cast<TagDecl>(ND)) {
+      if (Tag->getName().empty() && !Tag->getTypedefNameForAnonDecl())
+        return false;
+    }
+
+    // Use the canonical number for externally visible decls.
+    if (ND->isExternallyVisible()) {
+      unsigned discriminator = getASTContext().getManglingNumber(ND);
+      if (discriminator == 1)
+        return false;
+      disc = discriminator - 2;
+      return true;
+    }
+
+    // Make up a reasonable number for internal decls.
     unsigned &discriminator = Uniquifier[ND];
-    if (!discriminator)
-      discriminator = ++Discriminator;
+    if (!discriminator) {
+      const DeclContext *DC = getEffectiveDeclContext(ND);
+      discriminator = ++Discriminator[std::make_pair(DC, ND->getIdentifier())];
+    }
     if (discriminator == 1)
       return false;
     disc = discriminator-2;
@@ -1141,11 +1156,11 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
       }
     }
 
-    int UnnamedMangle = Context.getASTContext().getUnnamedTagManglingNumber(TD);
-    if (UnnamedMangle != -1) {
+    if (TD->isExternallyVisible()) {
+      unsigned UnnamedMangle = getASTContext().getManglingNumber(TD);
       Out << "Ut";
-      if (UnnamedMangle != 0)
-        Out << llvm::utostr(UnnamedMangle - 1);
+      if (UnnamedMangle > 1)
+        Out << llvm::utostr(UnnamedMangle - 2);
       Out << '_';
       break;
     }
@@ -1300,7 +1315,6 @@ void CXXNameMangler::mangleLocalName(const Decl *D) {
     // <entity name> will of course contain a <closure-type-name>: Its 
     // numbering will be local to the particular argument in which it appears
     // -- other default arguments do not affect its encoding.
-    bool SkipDiscriminator = false;
     const CXXRecordDecl *CXXRD = dyn_cast<CXXRecordDecl>(RD);
     if (CXXRD->isLambda()) {
       if (const ParmVarDecl *Parm
@@ -1312,7 +1326,6 @@ void CXXNameMangler::mangleLocalName(const Decl *D) {
           if (Num > 1)
             mangleNumber(Num - 2);
           Out << '_';
-          SkipDiscriminator = true;
         }
       }
     }
@@ -1328,24 +1341,35 @@ void CXXNameMangler::mangleLocalName(const Decl *D) {
       const NamedDecl *ND = cast<NamedDecl>(D);
       mangleNestedName(ND, getEffectiveDeclContext(ND), true /*NoFunction*/);
     }
-
-    if (!SkipDiscriminator) {
-      unsigned disc;
-      if (Context.getNextDiscriminator(RD, disc)) {
-        if (disc < 10)
-          Out << '_' << disc;
-        else
-          Out << "__" << disc << '_';
+  } else if (const BlockDecl *BD = dyn_cast<BlockDecl>(D)) {
+    // Mangle a block in a default parameter; see above explanation for
+    // lambdas.
+    if (const ParmVarDecl *Parm
+            = dyn_cast_or_null<ParmVarDecl>(BD->getBlockManglingContextDecl())) {
+      if (const FunctionDecl *Func
+            = dyn_cast<FunctionDecl>(Parm->getDeclContext())) {
+        Out << 'd';
+        unsigned Num = Func->getNumParams() - Parm->getFunctionScopeIndex();
+        if (Num > 1)
+          mangleNumber(Num - 2);
+        Out << '_';
       }
     }
-    
-    return;
+
+    mangleUnqualifiedBlock(BD);
+  } else {
+    mangleUnqualifiedName(cast<NamedDecl>(D));
   }
 
-  if (const BlockDecl *BD = dyn_cast<BlockDecl>(D))
-    mangleUnqualifiedBlock(BD);
-  else
-    mangleUnqualifiedName(cast<NamedDecl>(D));
+  if (const NamedDecl *ND = dyn_cast<NamedDecl>(RD ? RD : D)) {
+    unsigned disc;
+    if (Context.getNextDiscriminator(ND, disc)) {
+      if (disc < 10)
+        Out << '_' << disc;
+      else
+        Out << "__" << disc << '_';
+    }
+  }
 }
 
 void CXXNameMangler::mangleBlockForPrefix(const BlockDecl *Block) {

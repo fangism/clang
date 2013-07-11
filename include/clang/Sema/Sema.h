@@ -716,7 +716,7 @@ public:
   /// \param[out] ManglingContextDecl - Returns the ManglingContextDecl
   /// associated with the context, if relevant.
   MangleNumberingContext *getCurrentMangleNumberContext(
-    DeclContext *DC,
+    const DeclContext *DC,
     Decl *&ManglingContextDecl);
 
 
@@ -3219,6 +3219,8 @@ public:
                           UnaryOperatorKind Opc, Expr *Input);
   ExprResult ActOnUnaryOp(Scope *S, SourceLocation OpLoc,
                           tok::TokenKind Op, Expr *Input);
+
+  QualType CheckAddressOfOperand(ExprResult &Operand, SourceLocation OpLoc);
 
   ExprResult CreateUnaryExprOrTypeTraitExpr(TypeSourceInfo *TInfo,
                                             SourceLocation OpLoc,
