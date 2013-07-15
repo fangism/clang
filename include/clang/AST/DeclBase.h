@@ -295,8 +295,6 @@ protected:
   friend class ASTReader;
   friend class LinkageComputer;
 
-  template<typename decl_type> friend class Redeclarable;
-
 private:
   void CheckAccessDeclContext() const;
 
@@ -826,7 +824,7 @@ public:
   /// class, but in the semantic context of the actual entity.  This property
   /// applies only to a specific decl object;  other redeclarations of the
   /// same entity may not (and probably don't) share this property.
-  void setObjectOfFriendDecl(bool PerformFriendInjection = false) {
+  void setObjectOfFriendDecl(bool PreviouslyDeclared) {
     unsigned OldNS = IdentifierNamespace;
     assert((OldNS & (IDNS_Tag | IDNS_Ordinary |
                      IDNS_TagFriend | IDNS_OrdinaryFriend)) &&
@@ -835,20 +833,15 @@ public:
                        IDNS_TagFriend | IDNS_OrdinaryFriend)) &&
            "namespace includes other than ordinary or tag");
 
-    Decl *Prev = getPreviousDecl();
     IdentifierNamespace = 0;
     if (OldNS & (IDNS_Tag | IDNS_TagFriend)) {
       IdentifierNamespace |= IDNS_TagFriend;
-      if (PerformFriendInjection || 
-          (Prev && Prev->getIdentifierNamespace() & IDNS_Tag))
-        IdentifierNamespace |= IDNS_Tag | IDNS_Type;
+      if (PreviouslyDeclared) IdentifierNamespace |= IDNS_Tag | IDNS_Type;
     }
 
     if (OldNS & (IDNS_Ordinary | IDNS_OrdinaryFriend)) {
       IdentifierNamespace |= IDNS_OrdinaryFriend;
-      if (PerformFriendInjection ||
-          (Prev && Prev->getIdentifierNamespace() & IDNS_Ordinary))
-        IdentifierNamespace |= IDNS_Ordinary;
+      if (PreviouslyDeclared) IdentifierNamespace |= IDNS_Ordinary;
     }
   }
 
@@ -991,6 +984,7 @@ protected:
   mutable Decl *LastDecl;
 
   friend class ExternalASTSource;
+  friend class ASTDeclReader;
   friend class ASTWriter;
 
   /// \brief Build up a chain of declarations.
@@ -1446,12 +1440,20 @@ public:
     return const_cast<DeclContext*>(this)->lookup(Name);
   }
 
+  /// \brief Find the declarations with the given name that are visible
+  /// within this context; don't attempt to retrieve anything from an
+  /// external source.
+  lookup_result noload_lookup(DeclarationName Name);
+
   /// \brief A simplistic name lookup mechanism that performs name lookup
   /// into this declaration context without consulting the external source.
   ///
   /// This function should almost never be used, because it subverts the
   /// usual relationship between a DeclContext and the external source.
   /// See the ASTImporter for the (few, but important) use cases.
+  ///
+  /// FIXME: This is very inefficient; replace uses of it with uses of
+  /// noload_lookup.
   void localUncachedLookup(DeclarationName Name,
                            SmallVectorImpl<NamedDecl *> &Results);
 
@@ -1573,6 +1575,8 @@ private:
   friend class DependentDiagnostic;
   StoredDeclsMap *CreateStoredDeclsMap(ASTContext &C) const;
 
+  template<decl_iterator (DeclContext::*Begin)() const,
+           decl_iterator (DeclContext::*End)() const>
   void buildLookupImpl(DeclContext *DCtx);
   void makeDeclVisibleInContextWithFlags(NamedDecl *D, bool Internal,
                                          bool Rediscoverable);

@@ -2757,15 +2757,8 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, bool Operator,
       // If the only declaration here is an ordinary friend, consider
       // it only if it was declared in an associated classes.
       if (D->getIdentifierNamespace() == Decl::IDNS_OrdinaryFriend) {
-        bool DeclaredInAssociatedClass = false;
-        for (Decl *DI = D; DI; DI = D->getPreviousDecl()) {
-          DeclContext *LexDC = DI->getLexicalDeclContext();
-          if (AssociatedClasses.count(cast<CXXRecordDecl>(LexDC))) {
-            DeclaredInAssociatedClass = true;
-            break;
-          }
-        }
-        if (!DeclaredInAssociatedClass)
+        DeclContext *LexDC = D->getLexicalDeclContext();
+        if (!AssociatedClasses.count(cast<CXXRecordDecl>(LexDC)))
           continue;
       }
 
@@ -3616,7 +3609,7 @@ static void AddKeywordsToConsumer(Sema &SemaRef,
 
   if (CCC.WantTypeSpecifiers) {
     // Add type-specifier keywords to the set of results.
-    const char *CTypeSpecs[] = {
+    static const char *const CTypeSpecs[] = {
       "char", "const", "double", "enum", "float", "int", "long", "short",
       "signed", "struct", "union", "unsigned", "void", "volatile", 
       "_Complex", "_Imaginary",
@@ -3624,7 +3617,7 @@ static void AddKeywordsToConsumer(Sema &SemaRef,
       "extern", "inline", "static", "typedef"
     };
 
-    const unsigned NumCTypeSpecs = sizeof(CTypeSpecs) / sizeof(CTypeSpecs[0]);
+    const unsigned NumCTypeSpecs = llvm::array_lengthof(CTypeSpecs);
     for (unsigned I = 0; I != NumCTypeSpecs; ++I)
       Consumer.addKeywordResult(CTypeSpecs[I]);
 
@@ -3668,10 +3661,10 @@ static void AddKeywordsToConsumer(Sema &SemaRef,
     }
 
     if (SemaRef.getLangOpts().CPlusPlus) {
-      const char *CXXExprs[] = {
+      static const char *const CXXExprs[] = {
         "delete", "new", "operator", "throw", "typeid"
       };
-      const unsigned NumCXXExprs = sizeof(CXXExprs) / sizeof(CXXExprs[0]);
+      const unsigned NumCXXExprs = llvm::array_lengthof(CXXExprs);
       for (unsigned I = 0; I != NumCXXExprs; ++I)
         Consumer.addKeywordResult(CXXExprs[I]);
 
@@ -3695,9 +3688,9 @@ static void AddKeywordsToConsumer(Sema &SemaRef,
   if (CCC.WantRemainingKeywords) {
     if (SemaRef.getCurFunctionOrMethodDecl() || SemaRef.getCurBlock()) {
       // Statements.
-      const char *CStmts[] = {
+      static const char *const CStmts[] = {
         "do", "else", "for", "goto", "if", "return", "switch", "while" };
-      const unsigned NumCStmts = sizeof(CStmts) / sizeof(CStmts[0]);
+      const unsigned NumCStmts = llvm::array_lengthof(CStmts);
       for (unsigned I = 0; I != NumCStmts; ++I)
         Consumer.addKeywordResult(CStmts[I]);
 
