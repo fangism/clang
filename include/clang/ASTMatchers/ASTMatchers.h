@@ -626,6 +626,21 @@ const internal::VariadicDynCastAllOfMatcher<Stmt, InitListExpr> initListExpr;
 ///   matches \code using X::x \endcode
 const internal::VariadicDynCastAllOfMatcher<Decl, UsingDecl> usingDecl;
 
+/// \brief Matches unresolved using value declarations.
+///
+/// Given
+/// \code
+///   template<typename X>
+///   class C : private X {
+///     using X::x;
+///   };
+/// \endcode
+/// unresolvedUsingValueDecl()
+///   matches \code using X::x \endcode
+const internal::VariadicDynCastAllOfMatcher<
+  Decl,
+  UnresolvedUsingValueDecl> unresolvedUsingValueDecl;
+
 /// \brief Matches constructor call expressions (including implicit ones).
 ///
 /// Example matches string(ptr, n) and ptr within arguments of f
@@ -2905,7 +2920,9 @@ AST_TYPE_MATCHER(ComplexType, complexType);
 ///   matches "int b[7]"
 ///
 /// Usable as: Matcher<ArrayType>, Matcher<ComplexType>
-AST_TYPELOC_TRAVERSE_MATCHER(hasElementType, getElement);
+AST_TYPELOC_TRAVERSE_MATCHER(
+    hasElementType, getElement,
+    AST_POLYMORPHIC_SUPPORTED_TYPES_2(ArrayType, ComplexType));
 
 /// \brief Matches C arrays with a specified constant size.
 ///
@@ -3012,7 +3029,8 @@ AST_TYPE_MATCHER(AtomicType, atomicType);
 ///  matches "_Atomic(int) i"
 ///
 /// Usable as: Matcher<AtomicType>
-AST_TYPELOC_TRAVERSE_MATCHER(hasValueType, getValue);
+AST_TYPELOC_TRAVERSE_MATCHER(hasValueType, getValue,
+                             AST_POLYMORPHIC_SUPPORTED_TYPES_1(AtomicType));
 
 /// \brief Matches types nodes representing C++11 auto types.
 ///
@@ -3040,7 +3058,8 @@ AST_TYPE_MATCHER(AutoType, autoType);
 ///   matches "auto a"
 ///
 /// Usable as: Matcher<AutoType>
-AST_TYPE_TRAVERSE_MATCHER(hasDeducedType, getDeducedType);
+AST_TYPE_TRAVERSE_MATCHER(hasDeducedType, getDeducedType,
+                          AST_POLYMORPHIC_SUPPORTED_TYPES_1(AutoType));
 
 /// \brief Matches \c FunctionType nodes.
 ///
@@ -3077,7 +3096,8 @@ AST_TYPE_MATCHER(ParenType, parenType);
 /// \c ptr_to_func but not \c ptr_to_array.
 ///
 /// Usable as: Matcher<ParenType>
-AST_TYPE_TRAVERSE_MATCHER(innerType, getInnerType);
+AST_TYPE_TRAVERSE_MATCHER(innerType, getInnerType,
+                          AST_POLYMORPHIC_SUPPORTED_TYPES_1(ParenType));
 
 /// \brief Matches block pointer types, i.e. types syntactically represented as
 /// "void (^)(int)".
@@ -3171,7 +3191,10 @@ AST_TYPE_MATCHER(RValueReferenceType, rValueReferenceType);
 ///
 /// Usable as: Matcher<BlockPointerType>, Matcher<MemberPointerType>,
 ///   Matcher<PointerType>, Matcher<ReferenceType>
-AST_TYPELOC_TRAVERSE_MATCHER(pointee, getPointee);
+AST_TYPELOC_TRAVERSE_MATCHER(
+    pointee, getPointee,
+    AST_POLYMORPHIC_SUPPORTED_TYPES_4(BlockPointerType, MemberPointerType,
+                                      PointerType, ReferenceType));
 
 /// \brief Matches typedef types.
 ///

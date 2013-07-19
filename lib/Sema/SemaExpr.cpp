@@ -4624,7 +4624,7 @@ Sema::BuildCompoundLiteralExpr(SourceLocation LParenLoc, TypeSourceInfo *TInfo,
   LiteralExpr = Result.get();
 
   bool isFileScope = getCurFunctionOrMethodDecl() == 0;
-  if (isFileScope) { // 6.5.2.5p3
+  if (!getLangOpts().CPlusPlus && isFileScope) { // 6.5.2.5p3
     if (CheckForConstantInitializer(LiteralExpr, literalType))
       return ExprError();
   }
@@ -11970,7 +11970,7 @@ void Sema::DiagnoseAssignmentAsCondition(Expr *E) {
       Selector Sel = ME->getSelector();
 
       // self = [<foo> init...]
-      if (isSelfExpr(Op->getLHS()) && Sel.getNameForSlot(0).startswith("init"))
+      if (isSelfExpr(Op->getLHS()) && ME->getMethodFamily() == OMF_init)
         diagnostic = diag::warn_condition_is_idiomatic_assignment;
 
       // <foo> = [<bar> nextObject]

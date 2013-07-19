@@ -402,6 +402,38 @@ bool edit::rewriteToObjCProperty(const ObjCMethodDecl *Getter,
   return true;
 }
 
+bool edit::rewriteToObjCInterfaceDecl(const ObjCInterfaceDecl *IDecl,
+                  llvm::SmallVectorImpl<ObjCProtocolDecl*> &ConformingProtocols,
+                  const NSAPI &NS, Commit &commit) {
+  const ObjCList<ObjCProtocolDecl> &Protocols = IDecl->getReferencedProtocols();
+  std::string ClassString;
+  SourceLocation EndLoc =
+    IDecl->getSuperClass() ? IDecl->getSuperClassLoc() : IDecl->getLocation();
+  
+  if (Protocols.empty()) {
+    ClassString = '<';
+    for (unsigned i = 0, e = ConformingProtocols.size(); i != e; i++) {
+      ClassString += ConformingProtocols[i]->getNameAsString();
+      if (i != (e-1))
+        ClassString += ", ";
+    }
+    ClassString += "> ";
+  }
+  else {
+    ClassString = ", ";
+    for (unsigned i = 0, e = ConformingProtocols.size(); i != e; i++) {
+      ClassString += ConformingProtocols[i]->getNameAsString();
+      if (i != (e-1))
+        ClassString += ", ";
+    }
+    ObjCInterfaceDecl::protocol_loc_iterator PL = IDecl->protocol_loc_end() - 1;
+    EndLoc = *PL;
+  }
+  
+  commit.insertAfterToken(EndLoc, ClassString);
+  return true;
+}
+
 /// \brief Returns true if the immediate message arguments of \c Msg should not
 /// be rewritten because it will interfere with the rewrite of the parent
 /// message expression. e.g.

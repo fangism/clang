@@ -3150,11 +3150,14 @@ public:
                               const CXXScopeSpec *SS = 0,
                               NamedDecl *FoundD = 0);
   ExprResult
-  BuildAnonymousStructUnionMemberReference(const CXXScopeSpec &SS,
-                                           SourceLocation nameLoc,
-                                           IndirectFieldDecl *indirectField,
-                                           Expr *baseObjectExpr = 0,
-                                      SourceLocation opLoc = SourceLocation());
+  BuildAnonymousStructUnionMemberReference(
+      const CXXScopeSpec &SS,
+      SourceLocation nameLoc,
+      IndirectFieldDecl *indirectField,
+      DeclAccessPair FoundDecl = DeclAccessPair::make(0, AS_none),
+      Expr *baseObjectExpr = 0,
+      SourceLocation opLoc = SourceLocation());
+
   ExprResult BuildPossibleImplicitMemberExpr(const CXXScopeSpec &SS,
                                              SourceLocation TemplateKWLoc,
                                              LookupResult &R,
@@ -6448,9 +6451,8 @@ public:
                                         ObjCInterfaceDecl *ID);
 
   Decl *ActOnAtEnd(Scope *S, SourceRange AtEnd,
-                   Decl **allMethods = 0, unsigned allNum = 0,
-                   Decl **allProperties = 0, unsigned pNum = 0,
-                   DeclGroupPtrTy *allTUVars = 0, unsigned tuvNum = 0);
+                   ArrayRef<Decl *> allMethods = None,
+                   ArrayRef<DeclGroupPtrTy> allTUVars = None);
 
   Decl *ActOnProperty(Scope *S, SourceLocation AtLoc,
                       SourceLocation LParenLoc,
@@ -7496,7 +7498,10 @@ private:
   bool CheckObjCString(Expr *Arg);
 
   ExprResult CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
+
+  bool CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall);
   bool CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
+
   bool CheckMipsBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
 
   bool SemaBuiltinVAStart(CallExpr *TheCall);

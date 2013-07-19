@@ -467,9 +467,8 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
       std::string Err;
       std::string Script = StringRef(*it).rsplit('.').first;
       Script += ".sh";
-      llvm::raw_fd_ostream ScriptOS(Script.c_str(), Err,
-                                    llvm::raw_fd_ostream::F_Excl |
-                                    llvm::raw_fd_ostream::F_Binary);
+      llvm::raw_fd_ostream ScriptOS(
+          Script.c_str(), Err, llvm::sys::fs::F_Excl | llvm::sys::fs::F_Binary);
       if (!Err.empty()) {
         Diag(clang::diag::note_drv_command_failed_diag_msg)
           << "Error generating run script: " + Script + " " + Err;
@@ -1570,8 +1569,7 @@ std::string Driver::GetProgramPath(const char *Name,
   // attempting to use this prefix when looking for program paths.
   for (Driver::prefix_list::const_iterator it = PrefixDirs.begin(),
        ie = PrefixDirs.end(); it != ie; ++it) {
-    bool IsDirectory;
-    if (!llvm::sys::fs::is_directory(*it, IsDirectory) && IsDirectory) {
+    if (llvm::sys::fs::is_directory(*it)) {
       SmallString<128> P(*it);
       llvm::sys::path::append(P, TargetSpecificExecutable);
       if (llvm::sys::fs::can_execute(Twine(P)))
