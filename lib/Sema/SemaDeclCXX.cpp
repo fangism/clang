@@ -1490,8 +1490,7 @@ void Sema::ActOnBaseSpecifiers(Decl *ClassDecl, CXXBaseSpecifier **Bases,
     return;
 
   AdjustDeclIfTemplate(ClassDecl);
-  AttachBaseSpecifiers(cast<CXXRecordDecl>(ClassDecl),
-                       (CXXBaseSpecifier**)(Bases), NumBases);
+  AttachBaseSpecifiers(cast<CXXRecordDecl>(ClassDecl), Bases, NumBases);
 }
 
 /// \brief Determine whether the type \p Derived is a C++ class that is
@@ -3346,7 +3345,7 @@ bool Sema::SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
 
   for (unsigned i = 0; i < Initializers.size(); i++) {
     CXXCtorInitializer *Member = Initializers[i];
-    
+
     if (Member->isBaseInitializer())
       Info.AllBaseFields[Member->getBaseClass()->getAs<RecordType>()] = Member;
     else
@@ -3367,12 +3366,28 @@ bool Sema::SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
 
     if (CXXCtorInitializer *Value
         = Info.AllBaseFields.lookup(VBase->getType()->getAs<RecordType>())) {
+      // [class.base.init]p7, per DR257:
+      //   A mem-initializer where the mem-initializer-id names a virtual base
+      //   class is ignored during execution of a constructor of any class that
+      //   is not the most derived class.
+      if (ClassDecl->isAbstract()) {
+        // FIXME: Provide a fixit to remove the base specifier. This requires
+        // tracking the location of the associated comma for a base specifier.
+        Diag(Value->getSourceLocation(), diag::warn_abstract_vbase_init_ignored)
+          << VBase->getType() << ClassDecl;
+        DiagnoseAbstractType(ClassDecl);
+      }
+
       Info.AllToInit.push_back(Value);
-    } else if (!AnyErrors) {
+    } else if (!AnyErrors && !ClassDecl->isAbstract()) {
+      // [class.base.init]p8, per DR257:
+      //   If a given [...] base class is not named by a mem-initializer-id
+      //   [...] and the entity is not a virtual base class of an abstract
+      //   class, then [...] the entity is default-initialized.
       bool IsInheritedVirtualBase = !DirectVBases.count(VBase);
       CXXCtorInitializer *CXXBaseInit;
       if (BuildImplicitBaseInitializer(*this, Constructor, Info.IIK,
-                                       VBase, IsInheritedVirtualBase, 
+                                       VBase, IsInheritedVirtualBase,
                                        CXXBaseInit)) {
         HadError = true;
         continue;
@@ -3911,6 +3926,12 @@ void Sema::DiagnoseAbstractType(const CXXRecordDecl *RD) {
   // Check if we've already emitted the list of pure virtual functions
   // for this class.
   if (PureVirtualClassDiagSet && PureVirtualClassDiagSet->count(RD))
+    return;
+
+  // If the diagnostic is suppressed, don't emit the notes. We're only
+  // going to emit them once, so try to attach them to a diagnostic we're
+  // actually going to show.
+  if (Diags.isLastDiagnosticIgnored())
     return;
 
   CXXFinalOverriderMap FinalOverriders;
@@ -5055,10 +5076,17 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD, CXXSpecialMember CSM,
         SMI.shouldDeleteForBase(BI))
       return true;
 
-  for (CXXRecordDecl::base_class_iterator BI = RD->vbases_begin(),
-                                          BE = RD->vbases_end(); BI != BE; ++BI)
-    if (SMI.shouldDeleteForBase(BI))
-      return true;
+  // Defect report (no number yet): do not consider virtual bases of
+  // constructors of abstract classes, since we are not going to construct
+  // them. This is an extension of DR257 into the C++11 behavior for special
+  // members.
+  if (!RD->isAbstract() || !SMI.IsConstructor) {
+    for (CXXRecordDecl::base_class_iterator BI = RD->vbases_begin(),
+                                            BE = RD->vbases_end();
+         BI != BE; ++BI)
+      if (SMI.shouldDeleteForBase(BI))
+        return true;
+  }
 
   for (CXXRecordDecl::field_iterator FI = RD->field_begin(),
                                      FE = RD->field_end(); FI != FE; ++FI)
@@ -6728,7 +6756,7 @@ Decl *Sema::ActOnUsingDeclaration(Scope *S,
                                   CXXScopeSpec &SS,
                                   UnqualifiedId &Name,
                                   AttributeList *AttrList,
-                                  bool IsTypeName,
+                                  bool HasTypenameKeyword,
                                   SourceLocation TypenameLoc) {
   assert(S->getFlags() & Scope::DeclScope && "Invalid Scope.");
 
@@ -6784,7 +6812,7 @@ Decl *Sema::ActOnUsingDeclaration(Scope *S,
   NamedDecl *UD = BuildUsingDeclaration(S, AS, UsingLoc, SS,
                                         TargetNameInfo, AttrList,
                                         /* IsInstantiation */ false,
-                                        IsTypeName, TypenameLoc);
+                                        HasTypenameKeyword, TypenameLoc);
   if (UD)
     PushOnScopeChains(UD, S, /*AddToContext*/ false);
 
@@ -7021,9 +7049,10 @@ void Sema::HideUsingShadowDecl(Scope *S, UsingShadowDecl *Shadow) {
 
 class UsingValidatorCCC : public CorrectionCandidateCallback {
 public:
-  UsingValidatorCCC(bool IsTypeName, bool IsInstantiation)
-      : IsTypeName(IsTypeName), IsInstantiation(IsInstantiation) {}
-  
+  UsingValidatorCCC(bool HasTypenameKeyword, bool IsInstantiation)
+      : HasTypenameKeyword(HasTypenameKeyword),
+        IsInstantiation(IsInstantiation) {}
+
   virtual bool ValidateCandidate(const TypoCorrection &Candidate) {
     if (NamedDecl *ND = Candidate.getCorrectionDecl()) {
       if (isa<NamespaceDecl>(ND))
@@ -7034,9 +7063,9 @@ public:
       if (droppedSpecifier)
         return false;
       else if (isa<TypeDecl>(ND))
-        return IsTypeName || !IsInstantiation;
+        return HasTypenameKeyword || !IsInstantiation;
       else
-        return !IsTypeName;
+        return !HasTypenameKeyword;
     } else {
       // Keywords are not valid here.
       return false;
@@ -7044,7 +7073,7 @@ public:
   }
 
 private:
-  bool IsTypeName;
+  bool HasTypenameKeyword;
   bool IsInstantiation;
 };
 
@@ -7059,7 +7088,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
                                        const DeclarationNameInfo &NameInfo,
                                        AttributeList *AttrList,
                                        bool IsInstantiation,
-                                       bool IsTypeName,
+                                       bool HasTypenameKeyword,
                                        SourceLocation TypenameLoc) {
   assert(!SS.isInvalid() && "Invalid CXXScopeSpec.");
   SourceLocation IdentLoc = NameInfo.getLoc();
@@ -7094,7 +7123,8 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
   }
 
   // Check for invalid redeclarations.
-  if (CheckUsingDeclRedeclaration(UsingLoc, IsTypeName, SS, IdentLoc, Previous))
+  if (CheckUsingDeclRedeclaration(UsingLoc, HasTypenameKeyword,
+                                  SS, IdentLoc, Previous))
     return 0;
 
   // Check for bad qualifiers.
@@ -7105,7 +7135,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
   NamedDecl *D;
   NestedNameSpecifierLoc QualifierLoc = SS.getWithLocInContext(Context);
   if (!LookupContext) {
-    if (IsTypeName) {
+    if (HasTypenameKeyword) {
       // FIXME: not all declaration name kinds are legal here
       D = UnresolvedUsingTypenameDecl::Create(Context, CurContext,
                                               UsingLoc, TypenameLoc,
@@ -7117,7 +7147,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
     }
   } else {
     D = UsingDecl::Create(Context, CurContext, UsingLoc, QualifierLoc,
-                          NameInfo, IsTypeName);
+                          NameInfo, HasTypenameKeyword);
   }
   D->setAccess(AS);
   CurContext->addDecl(D);
@@ -7159,7 +7189,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
 
   // Try to correct typos if possible.
   if (R.empty()) {
-    UsingValidatorCCC CCC(IsTypeName, IsInstantiation);
+    UsingValidatorCCC CCC(HasTypenameKeyword, IsInstantiation);
     if (TypoCorrection Corrected = CorrectTypo(R.getLookupNameInfo(),
                                                R.getLookupKind(), S, &SS, CCC)){
       // We reject any correction for which ND would be NULL.
@@ -7190,7 +7220,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
     return UD;
   }
 
-  if (IsTypeName) {
+  if (HasTypenameKeyword) {
     // If we asked for a typename and got a non-type decl, error out.
     if (!R.getAsSingle<TypeDecl>()) {
       Diag(IdentLoc, diag::err_using_typename_non_type);
@@ -7231,7 +7261,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
 
 /// Additional checks for a using declaration referring to a constructor name.
 bool Sema::CheckInheritingConstructorUsingDecl(UsingDecl *UD) {
-  assert(!UD->isTypeName() && "expecting a constructor name");
+  assert(!UD->hasTypename() && "expecting a constructor name");
 
   const Type *SourceType = UD->getQualifier()->getAsType();
   assert(SourceType &&
@@ -7252,7 +7282,7 @@ bool Sema::CheckInheritingConstructorUsingDecl(UsingDecl *UD) {
 
   if (BaseIt == BaseE) {
     // Did not find SourceType in the bases.
-    Diag(UD->getUsingLocation(),
+    Diag(UD->getUsingLoc(),
          diag::err_using_decl_constructor_not_in_direct_base)
       << UD->getNameInfo().getSourceRange()
       << QualType(SourceType, 0) << TargetClass;
@@ -7269,7 +7299,7 @@ bool Sema::CheckInheritingConstructorUsingDecl(UsingDecl *UD) {
 /// redeclaration.  Note that this is checking only for the using decl
 /// itself, not for any ill-formedness among the UsingShadowDecls.
 bool Sema::CheckUsingDeclRedeclaration(SourceLocation UsingLoc,
-                                       bool isTypeName,
+                                       bool HasTypenameKeyword,
                                        const CXXScopeSpec &SS,
                                        SourceLocation NameLoc,
                                        const LookupResult &Prev) {
@@ -7292,7 +7322,7 @@ bool Sema::CheckUsingDeclRedeclaration(SourceLocation UsingLoc,
     bool DTypename;
     NestedNameSpecifier *DQual;
     if (UsingDecl *UD = dyn_cast<UsingDecl>(D)) {
-      DTypename = UD->isTypeName();
+      DTypename = UD->hasTypename();
       DQual = UD->getQualifier();
     } else if (UnresolvedUsingValueDecl *UD
                  = dyn_cast<UnresolvedUsingValueDecl>(D)) {
@@ -7306,7 +7336,7 @@ bool Sema::CheckUsingDeclRedeclaration(SourceLocation UsingLoc,
 
     // using decls differ if one says 'typename' and the other doesn't.
     // FIXME: non-dependent using decls?
-    if (isTypeName != DTypename) continue;
+    if (HasTypenameKeyword != DTypename) continue;
 
     // using decls differ if they name different scopes (but note that
     // template instantiation can cause this check to trigger when it
@@ -9991,9 +10021,7 @@ void Sema::DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
 }
 
 bool Sema::isImplicitlyDeleted(FunctionDecl *FD) {
-  return FD->isDeleted() && 
-         (FD->isDefaulted() || FD->isImplicit()) &&
-         isa<CXXMethodDecl>(FD);
+  return FD->isDeleted() && FD->isDefaulted() && isa<CXXMethodDecl>(FD);
 }
 
 /// \brief Mark the call operator of the given lambda closure type as "used".
@@ -10998,13 +11026,10 @@ Decl *Sema::ActOnTemplatedFriendTag(Scope *S, SourceLocation FriendLoc,
   bool isExplicitSpecialization = false;
   bool Invalid = false;
 
-  if (TemplateParameterList *TemplateParams
-        = MatchTemplateParametersToScopeSpecifier(TagLoc, NameLoc, SS,
-                                                  TempParamLists.data(),
-                                                  TempParamLists.size(),
-                                                  /*friend*/ true,
-                                                  isExplicitSpecialization,
-                                                  Invalid)) {
+  if (TemplateParameterList *TemplateParams =
+          MatchTemplateParametersToScopeSpecifier(
+              TagLoc, NameLoc, SS, TempParamLists, /*friend*/ true,
+              isExplicitSpecialization, Invalid)) {
     if (TemplateParams->size() > 0) {
       // This is a declaration of a class template.
       if (Invalid)

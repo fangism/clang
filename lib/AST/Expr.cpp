@@ -1929,6 +1929,9 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
   case GenericSelectionExprClass:
     return cast<GenericSelectionExpr>(this)->getResultExpr()->
       isUnusedResultAWarning(WarnE, Loc, R1, R2, Ctx);
+  case ChooseExprClass:
+    return cast<ChooseExpr>(this)->getChosenSubExpr()->
+      isUnusedResultAWarning(WarnE, Loc, R1, R2, Ctx);
   case UnaryOperatorClass: {
     const UnaryOperator *UO = cast<UnaryOperator>(this);
 
@@ -2072,17 +2075,24 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     return false;
 
   case CXXTemporaryObjectExprClass:
-  case CXXConstructExprClass:
+  case CXXConstructExprClass: {
+    if (const CXXRecordDecl *Type = getType()->getAsCXXRecordDecl()) {
+      if (Type->hasAttr<WarnUnusedAttr>()) {
+        WarnE = this;
+        Loc = getLocStart();
+        R1 = getSourceRange();
+        return true;
+      }
+    }
     return false;
+  }
 
   case ObjCMessageExprClass: {
     const ObjCMessageExpr *ME = cast<ObjCMessageExpr>(this);
     if (Ctx.getLangOpts().ObjCAutoRefCount &&
         ME->isInstanceMessage() &&
         !ME->getType()->isVoidType() &&
-        ME->getSelector().getIdentifierInfoForSlot(0) &&
-        ME->getSelector().getIdentifierInfoForSlot(0)
-                                               ->getName().startswith("init")) {
+        ME->getMethodFamily() == OMF_init) {
       WarnE = this;
       Loc = getExprLoc();
       R1 = ME->getSourceRange();
@@ -2297,6 +2307,12 @@ Expr* Expr::IgnoreParens() {
         continue;
       }
     }
+    if (ChooseExpr* P = dyn_cast<ChooseExpr>(E)) {
+      if (!P->isConditionDependent()) {
+        E = P->getChosenSubExpr();
+        continue;
+      }
+    }
     return E;
   }
 }
@@ -2306,25 +2322,10 @@ Expr* Expr::IgnoreParens() {
 Expr *Expr::IgnoreParenCasts() {
   Expr *E = this;
   while (true) {
-    if (ParenExpr* P = dyn_cast<ParenExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    }
+    E = E->IgnoreParens();
     if (CastExpr *P = dyn_cast<CastExpr>(E)) {
       E = P->getSubExpr();
       continue;
-    }
-    if (UnaryOperator* P = dyn_cast<UnaryOperator>(E)) {
-      if (P->getOpcode() == UO_Extension) {
-        E = P->getSubExpr();
-        continue;
-      }
-    }
-    if (GenericSelectionExpr* P = dyn_cast<GenericSelectionExpr>(E)) {
-      if (!P->isResultDependent()) {
-        E = P->getResultExpr();
-        continue;
-      }
     }
     if (MaterializeTemporaryExpr *Materialize 
                                       = dyn_cast<MaterializeTemporaryExpr>(E)) {
@@ -2347,22 +2348,10 @@ Expr *Expr::IgnoreParenCasts() {
 Expr *Expr::IgnoreParenLValueCasts() {
   Expr *E = this;
   while (true) {
-    if (ParenExpr *P = dyn_cast<ParenExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    } else if (CastExpr *P = dyn_cast<CastExpr>(E)) {
+    E = E->IgnoreParens();
+    if (CastExpr *P = dyn_cast<CastExpr>(E)) {
       if (P->getCastKind() == CK_LValueToRValue) {
         E = P->getSubExpr();
-        continue;
-      }
-    } else if (UnaryOperator* P = dyn_cast<UnaryOperator>(E)) {
-      if (P->getOpcode() == UO_Extension) {
-        E = P->getSubExpr();
-        continue;
-      }
-    } else if (GenericSelectionExpr* P = dyn_cast<GenericSelectionExpr>(E)) {
-      if (!P->isResultDependent()) {
-        E = P->getResultExpr();
         continue;
       }
     } else if (MaterializeTemporaryExpr *Materialize 
@@ -2382,10 +2371,7 @@ Expr *Expr::IgnoreParenLValueCasts() {
 Expr *Expr::ignoreParenBaseCasts() {
   Expr *E = this;
   while (true) {
-    if (ParenExpr *P = dyn_cast<ParenExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    }
+    E = E->IgnoreParens();
     if (CastExpr *CE = dyn_cast<CastExpr>(E)) {
       if (CE->getCastKind() == CK_DerivedToBase ||
           CE->getCastKind() == CK_UncheckedDerivedToBase ||
@@ -2402,25 +2388,10 @@ Expr *Expr::ignoreParenBaseCasts() {
 Expr *Expr::IgnoreParenImpCasts() {
   Expr *E = this;
   while (true) {
-    if (ParenExpr *P = dyn_cast<ParenExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    }
+    E = E->IgnoreParens();
     if (ImplicitCastExpr *P = dyn_cast<ImplicitCastExpr>(E)) {
       E = P->getSubExpr();
       continue;
-    }
-    if (UnaryOperator* P = dyn_cast<UnaryOperator>(E)) {
-      if (P->getOpcode() == UO_Extension) {
-        E = P->getSubExpr();
-        continue;
-      }
-    }
-    if (GenericSelectionExpr* P = dyn_cast<GenericSelectionExpr>(E)) {
-      if (!P->isResultDependent()) {
-        E = P->getResultExpr();
-        continue;
-      }
     }
     if (MaterializeTemporaryExpr *Materialize 
                                       = dyn_cast<MaterializeTemporaryExpr>(E)) {
@@ -2450,10 +2421,7 @@ Expr *Expr::IgnoreConversionOperator() {
 Expr *Expr::IgnoreParenNoopCasts(ASTContext &Ctx) {
   Expr *E = this;
   while (true) {
-    if (ParenExpr *P = dyn_cast<ParenExpr>(E)) {
-      E = P->getSubExpr();
-      continue;
-    }
+    E = E->IgnoreParens();
 
     if (CastExpr *P = dyn_cast<CastExpr>(E)) {
       // We ignore integer <-> casts that are of the same width, ptr<->ptr and
@@ -2471,20 +2439,6 @@ Expr *Expr::IgnoreParenNoopCasts(ASTContext &Ctx) {
            SE->getType()->isIntegralType(Ctx)) &&
           Ctx.getTypeSize(E->getType()) == Ctx.getTypeSize(SE->getType())) {
         E = SE;
-        continue;
-      }
-    }
-
-    if (UnaryOperator* P = dyn_cast<UnaryOperator>(E)) {
-      if (P->getOpcode() == UO_Extension) {
-        E = P->getSubExpr();
-        continue;
-      }
-    }
-
-    if (GenericSelectionExpr* P = dyn_cast<GenericSelectionExpr>(E)) {
-      if (!P->isResultDependent()) {
-        E = P->getResultExpr();
         continue;
       }
     }
@@ -2730,7 +2684,9 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef) const {
     return cast<GenericSelectionExpr>(this)->getResultExpr()
       ->isConstantInitializer(Ctx, IsForRef);
   case ChooseExprClass:
-    return cast<ChooseExpr>(this)->getChosenSubExpr(Ctx)
+    if (cast<ChooseExpr>(this)->isConditionDependent())
+      return false;
+    return cast<ChooseExpr>(this)->getChosenSubExpr()
       ->isConstantInitializer(Ctx, IsForRef);
   case UnaryOperatorClass: {
     const UnaryOperator* Exp = cast<UnaryOperator>(this);
@@ -2889,7 +2845,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx) const {
         HasSideEffects(Ctx);
 
   case ChooseExprClass:
-    return cast<ChooseExpr>(this)->getChosenSubExpr(Ctx)->HasSideEffects(Ctx);
+    return cast<ChooseExpr>(this)->getChosenSubExpr()->HasSideEffects(Ctx);
 
   case CXXDefaultArgExprClass:
     return cast<CXXDefaultArgExpr>(this)->getExpr()->HasSideEffects(Ctx);
@@ -3084,7 +3040,13 @@ Expr::isNullPointerConstant(ASTContext &Ctx,
     return PE->getSubExpr()->isNullPointerConstant(Ctx, NPC);
   } else if (const GenericSelectionExpr *GE =
                dyn_cast<GenericSelectionExpr>(this)) {
+    if (GE->isResultDependent())
+      return NPCK_NotNull;
     return GE->getResultExpr()->isNullPointerConstant(Ctx, NPC);
+  } else if (const ChooseExpr *CE = dyn_cast<ChooseExpr>(this)) {
+    if (CE->isConditionDependent())
+      return NPCK_NotNull;
+    return CE->getChosenSubExpr()->isNullPointerConstant(Ctx, NPC);
   } else if (const CXXDefaultArgExpr *DefaultArg
                = dyn_cast<CXXDefaultArgExpr>(this)) {
     // See through default argument expressions.
@@ -3567,10 +3529,6 @@ StringRef ObjCBridgedCastExpr::getBridgeKindName() const {
   }
 
   llvm_unreachable("Invalid BridgeKind!");
-}
-
-bool ChooseExpr::isConditionTrue(const ASTContext &C) const {
-  return getCond()->EvaluateKnownConstInt(C) != 0;
 }
 
 ShuffleVectorExpr::ShuffleVectorExpr(ASTContext &C, ArrayRef<Expr*> args,

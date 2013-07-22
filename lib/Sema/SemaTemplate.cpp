@@ -1120,8 +1120,7 @@ Sema::CheckClassTemplate(Scope *S, unsigned TagSpec, TagUseKind TUK,
       NewClass->setAccess(PrevClassTemplate->getAccess());
     }
 
-    NewTemplate->setObjectOfFriendDecl(/* PreviouslyDeclared = */
-                                       PrevClassTemplate != NULL);
+    NewTemplate->setObjectOfFriendDecl();
 
     // Friend templates are visible in fairly strange ways.
     if (!CurContext->isDependentContext()) {
@@ -1320,7 +1319,6 @@ bool Sema::CheckTemplateParameterList(TemplateParameterList *NewParams,
       } else if (OldTypeParm && OldTypeParm->hasDefaultArgument()) {
         // Merge the default argument from the old declaration to the
         // new declaration.
-        SawDefaultArgument = true;
         NewTypeParm->setDefaultArgument(OldTypeParm->getDefaultArgumentInfo(),
                                         true);
         PreviousDefaultArgLoc = OldTypeParm->getDefaultArgumentLoc();
@@ -1357,7 +1355,7 @@ bool Sema::CheckTemplateParameterList(TemplateParameterList *NewParams,
         if (!NewNonTypeParm->isPackExpansion())
           SawParameterPack = true;
       } else if (OldNonTypeParm && OldNonTypeParm->hasDefaultArgument() &&
-          NewNonTypeParm->hasDefaultArgument()) {
+                 NewNonTypeParm->hasDefaultArgument()) {
         OldDefaultLoc = OldNonTypeParm->getDefaultArgumentLoc();
         NewDefaultLoc = NewNonTypeParm->getDefaultArgumentLoc();
         SawDefaultArgument = true;
@@ -1366,7 +1364,6 @@ bool Sema::CheckTemplateParameterList(TemplateParameterList *NewParams,
       } else if (OldNonTypeParm && OldNonTypeParm->hasDefaultArgument()) {
         // Merge the default argument from the old declaration to the
         // new declaration.
-        SawDefaultArgument = true;
         // FIXME: We need to create a new kind of "default argument"
         // expression that points to a previous non-type template
         // parameter.
@@ -1414,7 +1411,6 @@ bool Sema::CheckTemplateParameterList(TemplateParameterList *NewParams,
       } else if (OldTemplateParm && OldTemplateParm->hasDefaultArgument()) {
         // Merge the default argument from the old declaration to the
         // new declaration.
-        SawDefaultArgument = true;
         // FIXME: We need to create a new kind of "default argument" expression
         // that points to a previous template template parameter.
         NewTemplateParm->setDefaultArgument(
@@ -1587,8 +1583,6 @@ static SourceRange getRangeOfTypeInNestedNameSpecifier(ASTContext &Context,
 /// \param ParamLists the template parameter lists, from the outermost to the
 /// innermost template parameter lists.
 ///
-/// \param NumParamLists the number of template parameter lists in ParamLists.
-///
 /// \param IsFriend Whether to apply the slightly different rules for
 /// matching template parameters to scope specifiers in friend
 /// declarations.
@@ -1602,15 +1596,10 @@ static SourceRange getRangeOfTypeInNestedNameSpecifier(ASTContext &Context,
 /// template) or may have no template parameters (if we're declaring a
 /// template specialization), or may be NULL (if what we're declaring isn't
 /// itself a template).
-TemplateParameterList *
-Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
-                                              SourceLocation DeclLoc,
-                                              const CXXScopeSpec &SS,
-                                          TemplateParameterList **ParamLists,
-                                              unsigned NumParamLists,
-                                              bool IsFriend,
-                                              bool &IsExplicitSpecialization,
-                                              bool &Invalid) {
+TemplateParameterList *Sema::MatchTemplateParametersToScopeSpecifier(
+    SourceLocation DeclStartLoc, SourceLocation DeclLoc, const CXXScopeSpec &SS,
+    ArrayRef<TemplateParameterList *> ParamLists, bool IsFriend,
+    bool &IsExplicitSpecialization, bool &Invalid) {
   IsExplicitSpecialization = false;
   Invalid = false;
   
@@ -1783,7 +1772,7 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
     //   unspecialized, except that the declaration shall not explicitly 
     //   specialize a class member template if its en- closing class templates 
     //   are not explicitly specialized as well.
-    if (ParamIdx < NumParamLists) {
+    if (ParamIdx < ParamLists.size()) {
       if (ParamLists[ParamIdx]->size() == 0) {
         if (SawNonEmptyTemplateParameterList) {
           Diag(DeclLoc, diag::err_specialize_member_of_template)
@@ -1801,8 +1790,8 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
       // here, then it's an explicit specialization.
       if (TypeIdx == NumTypes - 1)
         IsExplicitSpecialization = true;
-      
-      if (ParamIdx < NumParamLists) {
+
+      if (ParamIdx < ParamLists.size()) {
         if (ParamLists[ParamIdx]->size() > 0) {
           // The header has template parameters when it shouldn't. Complain.
           Diag(ParamLists[ParamIdx]->getTemplateLoc(), 
@@ -1823,7 +1812,7 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
       if (!IsFriend) {
         // We don't have a template header, but we should.
         SourceLocation ExpectedTemplateLoc;
-        if (NumParamLists > 0)
+        if (!ParamLists.empty())
           ExpectedTemplateLoc = ParamLists[0]->getTemplateLoc();
         else
           ExpectedTemplateLoc = DeclStartLoc;
@@ -1842,15 +1831,15 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
       // assume that empty parameter lists are supposed to match this
       // template-id.
       if (IsFriend && T->isDependentType()) {
-        if (ParamIdx < NumParamLists &&
+        if (ParamIdx < ParamLists.size() &&
             DependsOnTemplateParameters(T, ParamLists[ParamIdx]))
           ExpectedTemplateParams = 0;
         else 
           continue;
       }
 
-      if (ParamIdx < NumParamLists) {
-        // Check the template parameter list, if we can.        
+      if (ParamIdx < ParamLists.size()) {
+        // Check the template parameter list, if we can.
         if (ExpectedTemplateParams &&
             !TemplateParameterListsAreEqual(ParamLists[ParamIdx],
                                             ExpectedTemplateParams,
@@ -1877,25 +1866,25 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
   // If there were at least as many template-ids as there were template
   // parameter lists, then there are no template parameter lists remaining for
   // the declaration itself.
-  if (ParamIdx >= NumParamLists)
+  if (ParamIdx >= ParamLists.size())
     return 0;
 
   // If there were too many template parameter lists, complain about that now.
-  if (ParamIdx < NumParamLists - 1) {
+  if (ParamIdx < ParamLists.size() - 1) {
     bool HasAnyExplicitSpecHeader = false;
     bool AllExplicitSpecHeaders = true;
-    for (unsigned I = ParamIdx; I != NumParamLists - 1; ++I) {
+    for (unsigned I = ParamIdx, E = ParamLists.size() - 1; I != E; ++I) {
       if (ParamLists[I]->size() == 0)
         HasAnyExplicitSpecHeader = true;
       else
         AllExplicitSpecHeaders = false;
     }
-    
+
     Diag(ParamLists[ParamIdx]->getTemplateLoc(),
-         AllExplicitSpecHeaders? diag::warn_template_spec_extra_headers
-                               : diag::err_template_spec_extra_headers)
-      << SourceRange(ParamLists[ParamIdx]->getTemplateLoc(),
-                     ParamLists[NumParamLists - 2]->getRAngleLoc());
+         AllExplicitSpecHeaders ? diag::warn_template_spec_extra_headers
+                                : diag::err_template_spec_extra_headers)
+        << SourceRange(ParamLists[ParamIdx]->getTemplateLoc(),
+                       ParamLists[ParamLists.size() - 2]->getRAngleLoc());
 
     // If there was a specialization somewhere, such that 'template<>' is
     // not required, and there were any 'template<>' headers, note where the
@@ -1919,8 +1908,7 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
   //   unspecialized, except that the declaration shall not explicitly 
   //   specialize a class member template if its en- closing class templates 
   //   are not explicitly specialized as well.
-  if (ParamLists[NumParamLists - 1]->size() == 0 && 
-      SawNonEmptyTemplateParameterList) {
+  if (ParamLists.back()->size() == 0 && SawNonEmptyTemplateParameterList) {
     Diag(DeclLoc, diag::err_specialize_member_of_template)
       << ParamLists[ParamIdx]->getSourceRange();
     Invalid = true;
@@ -1930,7 +1918,7 @@ Sema::MatchTemplateParametersToScopeSpecifier(SourceLocation DeclStartLoc,
   
   // Return the last template parameter list, which corresponds to the
   // entity being declared.
-  return ParamLists[NumParamLists - 1];
+  return ParamLists.back();
 }
 
 void Sema::NoteAllFoundTemplates(TemplateName Name) {
@@ -5247,15 +5235,10 @@ Sema::ActOnClassTemplateSpecialization(Scope *S, unsigned TagSpec,
   // FIXME: We probably shouldn't complain about these headers for
   // friend declarations.
   bool Invalid = false;
-  TemplateParameterList *TemplateParams
-    = MatchTemplateParametersToScopeSpecifier(TemplateNameLoc, 
-                                              TemplateNameLoc,
-                                              SS,
-                                              TemplateParameterLists.data(),
-                                              TemplateParameterLists.size(),
-                                              TUK == TUK_Friend,
-                                              isExplicitSpecialization,
-                                              Invalid);
+  TemplateParameterList *TemplateParams =
+      MatchTemplateParametersToScopeSpecifier(
+          TemplateNameLoc, TemplateNameLoc, SS, TemplateParameterLists,
+          TUK == TUK_Friend, isExplicitSpecialization, Invalid);
   if (Invalid)
     return true;
 
@@ -5926,13 +5909,13 @@ Sema::CheckDependentFunctionTemplateSpecialization(FunctionDecl *FD,
 ///
 /// \param Previous the set of declarations that may be specialized by
 /// this function specialization.
-bool
-Sema::CheckFunctionTemplateSpecialization(FunctionDecl *FD,
-                                 TemplateArgumentListInfo *ExplicitTemplateArgs,
-                                          LookupResult &Previous) {
+bool Sema::CheckFunctionTemplateSpecialization(
+    FunctionDecl *FD, TemplateArgumentListInfo *ExplicitTemplateArgs,
+    LookupResult &Previous) {
   // The set of function template specializations that could match this
   // explicit function template specialization.
   UnresolvedSet<8> Candidates;
+  TemplateSpecCandidateSet FailedCandidates(FD->getLocation());
 
   DeclContext *FDLookupContext = FD->getDeclContext()->getRedeclContext();
   for (LookupResult::iterator I = Previous.begin(), E = Previous.end();
@@ -5970,13 +5953,16 @@ Sema::CheckFunctionTemplateSpecialization(FunctionDecl *FD,
       // Perform template argument deduction to determine whether we may be
       // specializing this template.
       // FIXME: It is somewhat wasteful to build
-      TemplateDeductionInfo Info(FD->getLocation());
+      TemplateDeductionInfo Info(FailedCandidates.getLocation());
       FunctionDecl *Specialization = 0;
       if (TemplateDeductionResult TDK
             = DeduceTemplateArguments(FunTmpl, ExplicitTemplateArgs, FT,
                                       Specialization, Info)) {
-        // FIXME: Template argument deduction failed; record why it failed, so
+        // Template argument deduction failed; record why it failed, so
         // that we can provide nifty diagnostics.
+        FailedCandidates.addCandidate()
+            .set(FunTmpl->getTemplatedDecl(),
+                 MakeDeductionFailureInfo(Context, TDK, Info));
         (void)TDK;
         continue;
       }
@@ -5987,14 +5973,14 @@ Sema::CheckFunctionTemplateSpecialization(FunctionDecl *FD,
   }
 
   // Find the most specialized function template.
-  UnresolvedSetIterator Result
-    = getMostSpecialized(Candidates.begin(), Candidates.end(),
-                         TPOC_Other, 0, FD->getLocation(),
-                  PDiag(diag::err_function_template_spec_no_match)
-                    << FD->getDeclName(),
-                  PDiag(diag::err_function_template_spec_ambiguous)
-                    << FD->getDeclName() << (ExplicitTemplateArgs != 0),
-                  PDiag(diag::note_function_template_spec_matched));
+  UnresolvedSetIterator Result = getMostSpecialized(
+      Candidates.begin(), Candidates.end(), FailedCandidates, TPOC_Other, 0,
+      FD->getLocation(),
+      PDiag(diag::err_function_template_spec_no_match) << FD->getDeclName(),
+      PDiag(diag::err_function_template_spec_ambiguous)
+          << FD->getDeclName() << (ExplicitTemplateArgs != 0),
+      PDiag(diag::note_function_template_spec_matched));
+
   if (Result == Candidates.end())
     return true;
 
@@ -6813,6 +6799,7 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
   //  instantiated from the member definition associated with its class
   //  template.
   UnresolvedSet<8> Matches;
+  TemplateSpecCandidateSet FailedCandidates(D.getIdentifierLoc());
   for (LookupResult::iterator P = Previous.begin(), PEnd = Previous.end();
        P != PEnd; ++P) {
     NamedDecl *Prev = *P;
@@ -6832,13 +6819,16 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
     if (!FunTmpl)
       continue;
 
-    TemplateDeductionInfo Info(D.getIdentifierLoc());
+    TemplateDeductionInfo Info(FailedCandidates.getLocation());
     FunctionDecl *Specialization = 0;
     if (TemplateDeductionResult TDK
           = DeduceTemplateArguments(FunTmpl,
                                (HasExplicitTemplateArgs ? &TemplateArgs : 0),
                                     R, Specialization, Info)) {
-      // FIXME: Keep track of almost-matches?
+      // Keep track of almost-matches.
+      FailedCandidates.addCandidate()
+          .set(FunTmpl->getTemplatedDecl(),
+               MakeDeductionFailureInfo(Context, TDK, Info));
       (void)TDK;
       continue;
     }
@@ -6847,12 +6837,12 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
   }
 
   // Find the most specialized function template specialization.
-  UnresolvedSetIterator Result
-    = getMostSpecialized(Matches.begin(), Matches.end(), TPOC_Other, 0,
-                         D.getIdentifierLoc(),
-                     PDiag(diag::err_explicit_instantiation_not_known) << Name,
-                     PDiag(diag::err_explicit_instantiation_ambiguous) << Name,
-                         PDiag(diag::note_explicit_instantiation_candidate));
+  UnresolvedSetIterator Result = getMostSpecialized(
+      Matches.begin(), Matches.end(), FailedCandidates, TPOC_Other, 0,
+      D.getIdentifierLoc(),
+      PDiag(diag::err_explicit_instantiation_not_known) << Name,
+      PDiag(diag::err_explicit_instantiation_ambiguous) << Name,
+      PDiag(diag::note_explicit_instantiation_candidate));
 
   if (Result == Matches.end())
     return true;

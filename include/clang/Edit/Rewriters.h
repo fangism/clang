@@ -17,6 +17,8 @@ namespace clang {
   class ObjCInterfaceDecl;
   class ObjCProtocolDecl;
   class NSAPI;
+  class EnumDecl;
+  class TypedefDecl;
   class ParentMap;
 
 namespace edit {
@@ -29,13 +31,6 @@ bool rewriteToObjCLiteralSyntax(const ObjCMessageExpr *Msg,
                                 const NSAPI &NS, Commit &commit,
                                 const ParentMap *PMap);
   
-bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
-                           const ObjCMethodDecl *Setter,
-                           const NSAPI &NS, Commit &commit);
-bool rewriteToObjCInterfaceDecl(const ObjCInterfaceDecl *IDecl,
-                                llvm::SmallVectorImpl<ObjCProtocolDecl*> &Protocols,
-                                const NSAPI &NS, Commit &commit);
-
 bool rewriteToObjCSubscriptSyntax(const ObjCMessageExpr *Msg,
                                   const NSAPI &NS, Commit &commit);
 
