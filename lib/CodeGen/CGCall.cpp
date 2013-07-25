@@ -1070,8 +1070,20 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
                            CodeGenOpts.UnsafeFPMath ? "true" : "false");
     FuncAttrs.addAttribute("use-soft-float",
                            CodeGenOpts.SoftFloat ? "true" : "false");
-    FuncAttrs.addAttribute("ssp-buffer-size",
+    FuncAttrs.addAttribute("stack-protector-buffer-size",
                            llvm::utostr(CodeGenOpts.SSPBufferSize));
+
+    bool NoFramePointerElimNonLeaf;
+    if (!CodeGenOpts.DisableFPElim) {
+      NoFramePointerElimNonLeaf = false;
+    } else if (CodeGenOpts.OmitLeafFramePointer) {
+      NoFramePointerElimNonLeaf = true;
+    } else {
+      NoFramePointerElimNonLeaf = true;
+    }
+
+    FuncAttrs.addAttribute("no-frame-pointer-elim-non-leaf",
+                           NoFramePointerElimNonLeaf ? "true" : "false");
   }
 
   QualType RetTy = FI.getReturnType();

@@ -590,15 +590,7 @@ void ExprEngine::ProcessMemberDtor(const CFGMemberDtor D,
 
 void ExprEngine::ProcessTemporaryDtor(const CFGTemporaryDtor D,
                                       ExplodedNode *Pred,
-                                      ExplodedNodeSet &Dst) {
-
-  QualType varType = D.getBindTemporaryExpr()->getSubExpr()->getType();
-
-  // FIXME: Inlining of temporary destructors is not supported yet anyway, so we
-  // just put a NULL region for now. This will need to be changed later.
-  VisitCXXDestructor(varType, NULL, D.getBindTemporaryExpr(),
-                     /*IsBase=*/ false, Pred, Dst);
-}
+                                      ExplodedNodeSet &Dst) {}
 
 void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
                        ExplodedNodeSet &DstTop) {
@@ -614,7 +606,6 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     // C++ and ARC stuff we don't support yet.
     case Expr::ObjCIndirectCopyRestoreExprClass:
     case Stmt::CXXDependentScopeMemberExprClass:
-    case Stmt::CXXPseudoDestructorExprClass:
     case Stmt::CXXTryStmtClass:
     case Stmt::CXXTypeidExprClass:
     case Stmt::CXXUuidofExprClass:
@@ -728,6 +719,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::StringLiteralClass:
     case Stmt::ObjCStringLiteralClass:
     case Stmt::CXXBindTemporaryExprClass:
+    case Stmt::CXXPseudoDestructorExprClass:
     case Stmt::SubstNonTypeTemplateParmExprClass:
     case Stmt::CXXNullPtrLiteralExprClass: {
       Bldr.takeNodes(Pred);

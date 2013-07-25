@@ -1756,8 +1756,8 @@ def err_attribute_can_be_applied_only_to_symbol_declaration : Error<
 def err_attributes_are_not_compatible : Error<
   "%0 and %1 attributes are not compatible">;
 def err_attribute_wrong_number_arguments : Error<
-  "attribute %plural{0:takes no arguments|1:takes one argument|"
-  ":requires exactly %0 arguments}0">;
+  "%0 attribute %plural{0:takes no arguments|1:takes one argument|"
+  ":requires exactly %1 arguments}1">;
 def err_attribute_too_many_arguments : Error<
   "attribute takes no more than %0 argument%s0">;
 def err_suppress_autosynthesis : Error<
@@ -1787,8 +1787,9 @@ def err_alignas_mismatch : Error<
   "redeclaration has different alignment requirement (%1 vs %0)">;
 def err_alignas_underaligned : Error<
   "requested alignment is less than minimum alignment of %1 for type %0">;
-def err_attribute_first_argument_not_int_or_bool : Error<
-  "%0 attribute first argument must be of int or bool type">;
+def err_attribute_argument_n_type : Error<
+  "%0 attribute requires parameter %1 to be %select{int or bool|an integer "
+  "constant|a string|an identifier}2">;
 def err_attribute_argument_outof_range : Error<
   "init_priority attribute requires integer constant between "
   "101 and 65535 inclusive">;
@@ -1797,12 +1798,6 @@ def err_init_priority_object_attr : Error<
   "of objects of class type">;
 def err_attribute_argument_vec_type_hint : Error<
   "invalid attribute argument %0 - expecting a vector or vectorizable scalar type">;
-def err_attribute_argument_n_not_int : Error<
-  "'%0' attribute requires parameter %1 to be an integer constant">;
-def err_attribute_argument_n_not_string : Error<
-  "'%0' attribute requires parameter %1 to be a string">;
-def err_attribute_argument_n_not_identifier : Error<
-  "'%0' attribute requires parameter %1 to be an identifier">;
 def err_attribute_argument_out_of_bounds : Error<
   "'%0' attribute parameter %1 is out of bounds">;
 def err_attribute_uuid_malformed_guid : Error<
@@ -1842,8 +1837,6 @@ def err_ext_vector_component_exceeds_length : Error<
   "vector component access exceeds type %0">;
 def err_ext_vector_component_name_illegal : Error<
   "illegal vector component name '%0'">;
-def err_attribute_address_space_not_int : Error<
-  "address space attribute requires an integer constant">;
 def err_attribute_address_space_negative : Error<
   "address space is negative">;
 def err_attribute_address_space_too_high : Error<
@@ -5804,8 +5797,8 @@ def err_literal_operator_params : Error<
 def err_literal_operator_extern_c : Error<
   "literal operator must have C++ linkage">;
 def warn_user_literal_reserved : Warning<
-  "user-defined literal suffixes not starting with '_' are reserved; "
-  "no literal will invoke this operator">,
+  "user-defined literal suffixes not starting with '_' are reserved"
+  "%select{; no literal will invoke this operator|}0">,
   InGroup<UserDefinedLiterals>;
 
 // C++ conversion functions
@@ -6452,16 +6445,22 @@ def err_invalid_astype_of_different_size : Error<
   "invalid reinterpretation: sizes of %0 and %1 must match">;
 def err_static_kernel : Error<
   "kernel functions cannot be declared static">;
-def err_opencl_ptrptr_kernel_arg : Error<
-  "kernel argument cannot be declared as a pointer to a pointer">;
+def err_opencl_ptrptr_kernel_param : Error<
+  "kernel parameter cannot be declared as a pointer to a pointer">;
 def err_static_function_scope : Error<
   "variables in function scope cannot be declared static">;
 def err_opencl_bitfields : Error<
   "bitfields are not supported in OpenCL">;
 def err_opencl_vla : Error<
   "variable length arrays are not supported in OpenCL">;
-def err_event_t_kernel_arg : Error<
-  "the event_t type cannot be used to declare a kernel function argument">;
+def err_bad_kernel_param_type : Error<
+  "%0 cannot be used as the type of a kernel parameter">;
+def err_record_with_pointers_kernel_param : Error<
+  "%select{struct|union}0 kernel parameters may not contain pointers">;
+def note_within_field_of_type : Note<
+  "within field of type %0 declared here">;
+def note_illegal_field_declared_here : Note<
+  "field of illegal %select{type|pointer type}0 %1 declared here">;
 def err_event_t_global_var : Error<
   "the event_t type cannot be used to declare a program scope variable">;
 def err_event_t_struct_field : Error<
@@ -6495,8 +6494,6 @@ def err_omp_var_thread_local : Error<
   "variable %0 cannot be threadprivate because it is thread-local">;
 def err_omp_private_incomplete_type : Error<
   "a private variable with incomplete type %0">;
-def err_omp_directive_nonblock : Error<
-  "directive '#pragma omp %0' bound to nonblock statement">;
 def err_omp_unexpected_clause_value : Error <
   "expected %0 in OpenMP clause '%1'">;
 def err_omp_expected_var_name : Error <
