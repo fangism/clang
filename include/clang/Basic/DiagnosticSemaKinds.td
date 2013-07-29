@@ -859,7 +859,7 @@ def err_inline_namespace_mismatch : Error<
 def err_unexpected_friend : Error<
   "friends can only be classes or functions">;
 def ext_enum_friend : ExtWarn<
-  "enumeration type %0 cannot be a friend">;
+  "befriending enumeration type %0 is a C++11 extension">, InGroup<CXX11>;
 def warn_cxx98_compat_enum_friend : Warning<
   "befriending enumeration type %0 is incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
@@ -1829,6 +1829,7 @@ def err_init_method_bad_return_type : Error<
 def err_attribute_invalid_size : Error<
   "vector size not an integral multiple of component size">;
 def err_attribute_zero_size : Error<"zero vector size">;
+def err_attribute_size_too_large : Error<"vector size too large">;
 def err_typecheck_vector_not_convertable : Error<
   "can't convert between vector values of different size (%0 and %1)">;
 def err_typecheck_ext_vector_not_typedef : Error<

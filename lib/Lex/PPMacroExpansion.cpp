@@ -681,7 +681,7 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
     // TODO: See if this can be generalized to angle brackets for templates
     // inside macro arguments.
 
-    SmallVector<Token, 64> FixedArgTokens;
+    SmallVector<Token, 4> FixedArgTokens;
     unsigned FixedNumArgs = 0;
     SmallVector<SourceRange, 4> ParenHints, InitLists;
     if (!GenerateNewArgTokens(*this, ArgTokens, FixedArgTokens, FixedNumArgs,
@@ -918,6 +918,7 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
            .Case("objc_nonfragile_abi", LangOpts.ObjCRuntime.isNonFragile())
            .Case("objc_property_explicit_atomic", true) // Does clang support explicit "atomic" keyword?
            .Case("objc_weak_class", LangOpts.ObjCRuntime.hasWeakClassImport())
+           .Case("objc_msg_lookup_stret", LangOpts.ObjCRuntime.getKind() == ObjCRuntime::ObjFW)
            .Case("ownership_holds", true)
            .Case("ownership_returns", true)
            .Case("ownership_takes", true)

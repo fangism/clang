@@ -141,3 +141,19 @@ namespace destructors {
     }
   }
 }
+
+void testStaticMaterializeTemporaryExpr() {
+  static const Trivial &ref = getTrivial();
+  clang_analyzer_eval(ref.value == 42); // expected-warning{{TRUE}}
+
+  static const Trivial &directRef = Trivial(42);
+  clang_analyzer_eval(directRef.value == 42); // expected-warning{{TRUE}}
+
+#if __has_feature(cxx_thread_local)
+  thread_local static const Trivial &threadRef = getTrivial();
+  clang_analyzer_eval(threadRef.value == 42); // expected-warning{{TRUE}}
+
+  thread_local static const Trivial &threadDirectRef = Trivial(42);
+  clang_analyzer_eval(threadDirectRef.value == 42); // expected-warning{{TRUE}}
+#endif
+}
