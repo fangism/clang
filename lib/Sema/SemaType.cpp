@@ -1630,8 +1630,9 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *ArraySize,
   if (!ArraySize->isTypeDependent() && !ArraySize->isValueDependent()) {
     llvm::APSInt vecSize(32);
     if (!ArraySize->isIntegerConstantExpr(vecSize, Context)) {
-      Diag(AttrLoc, diag::err_attribute_argument_not_int)
-        << "ext_vector_type" << ArraySize->getSourceRange();
+      Diag(AttrLoc, diag::err_attribute_argument_type)
+        << "ext_vector_type" << AANT_ArgumentIntegerConstant
+        << ArraySize->getSourceRange();
       return QualType();
     }
 
@@ -3847,8 +3848,9 @@ static void HandleAddressSpaceTypeAttribute(QualType &Type,
   llvm::APSInt addrSpace(32);
   if (ASArgExpr->isTypeDependent() || ASArgExpr->isValueDependent() ||
       !ASArgExpr->isIntegerConstantExpr(addrSpace, S.Context)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_argument_not_int)
-      << Attr.getName()->getName() << ASArgExpr->getSourceRange();
+    S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
+      << Attr.getName() << AANT_ArgumentIntegerConstant
+      << ASArgExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
@@ -3943,8 +3945,8 @@ static bool handleObjCOwnershipTypeAttr(TypeProcessingState &state,
     AttrLoc = S.getSourceManager().getImmediateExpansionRange(AttrLoc).first;
 
   if (!attr.getParameterName()) {
-    S.Diag(AttrLoc, diag::err_attribute_argument_n_type)
-      << attr.getName() << 1 << 2 /*string*/;
+    S.Diag(AttrLoc, diag::err_attribute_argument_type)
+      << attr.getName() << AANT_ArgumentString;
     attr.setInvalid();
     return true;
   }
@@ -4079,8 +4081,8 @@ static bool handleObjCGCTypeAttr(TypeProcessingState &state,
 
   // Check the attribute arguments.
   if (!attr.getParameterName()) {
-    S.Diag(attr.getLoc(), diag::err_attribute_argument_n_type)
-      << attr.getName() << 1 << 2 /*string*/;
+    S.Diag(attr.getLoc(), diag::err_attribute_argument_type)
+      << attr.getName() << AANT_ArgumentString;
     attr.setInvalid();
     return true;
   }
@@ -4480,8 +4482,9 @@ static void HandleOpenCLImageAccessAttribute(QualType& CurType,
   llvm::APSInt arg(32);
   if (sizeExpr->isTypeDependent() || sizeExpr->isValueDependent() ||
       !sizeExpr->isIntegerConstantExpr(arg, S.Context)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_argument_not_int)
-      << "opencl_image_access" << sizeExpr->getSourceRange();
+    S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
+      << Attr.getName() << AANT_ArgumentIntegerConstant
+      << sizeExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
@@ -4521,8 +4524,9 @@ static void HandleVectorSizeAttr(QualType& CurType, const AttributeList &Attr,
   llvm::APSInt vecSize(32);
   if (sizeExpr->isTypeDependent() || sizeExpr->isValueDependent() ||
       !sizeExpr->isIntegerConstantExpr(vecSize, S.Context)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_argument_not_int)
-      << "vector_size" << sizeExpr->getSourceRange();
+    S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
+      << Attr.getName() << AANT_ArgumentIntegerConstant
+      << sizeExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
@@ -4599,6 +4603,42 @@ static void HandleExtVectorTypeAttr(QualType &CurType,
     CurType = T;
 }
 
+static bool isPermittedNeonBaseType(QualType &Ty,
+                                    VectorType::VectorKind VecKind,
+                                    bool IsAArch64) {
+  const BuiltinType *BTy = Ty->getAs<BuiltinType>();
+  if (!BTy)
+    return false;
+
+  if (VecKind == VectorType::NeonPolyVector) {
+    if (IsAArch64) {
+      // AArch64 polynomial vectors are unsigned
+      return BTy->getKind() == BuiltinType::UChar ||
+             BTy->getKind() == BuiltinType::UShort;
+    } else {
+      // AArch32 polynomial vector are signed.
+      return BTy->getKind() == BuiltinType::SChar ||
+             BTy->getKind() == BuiltinType::Short;
+    }
+  }
+
+  // Non-polynomial vector types: the usual suspects are allowed, as well as
+  // float64_t on AArch64.
+  if (IsAArch64 && BTy->getKind() == BuiltinType::Double)
+    return true;
+
+  return BTy->getKind() == BuiltinType::SChar ||
+         BTy->getKind() == BuiltinType::UChar ||
+         BTy->getKind() == BuiltinType::Short ||
+         BTy->getKind() == BuiltinType::UShort ||
+         BTy->getKind() == BuiltinType::Int ||
+         BTy->getKind() == BuiltinType::UInt ||
+         BTy->getKind() == BuiltinType::LongLong ||
+         BTy->getKind() == BuiltinType::ULongLong ||
+         BTy->getKind() == BuiltinType::Float ||
+         BTy->getKind() == BuiltinType::Half;
+}
+
 /// HandleNeonVectorTypeAttr - The "neon_vector_type" and
 /// "neon_polyvector_type" attributes are used to create vector types that
 /// are mangled according to ARM's ABI.  Otherwise, these types are identical
@@ -4608,8 +4648,7 @@ static void HandleExtVectorTypeAttr(QualType &CurType,
 /// match one of the standard Neon vector types.
 static void HandleNeonVectorTypeAttr(QualType& CurType,
                                      const AttributeList &Attr, Sema &S,
-                                     VectorType::VectorKind VecKind,
-                                     const char *AttrName) {
+                                     VectorType::VectorKind VecKind) {
   // Check the attribute arguments.
   if (Attr.getNumArgs() != 1) {
     S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
@@ -4622,8 +4661,9 @@ static void HandleNeonVectorTypeAttr(QualType& CurType,
   llvm::APSInt numEltsInt(32);
   if (numEltsExpr->isTypeDependent() || numEltsExpr->isValueDependent() ||
       !numEltsExpr->isIntegerConstantExpr(numEltsInt, S.Context)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_argument_not_int)
-      << AttrName << numEltsExpr->getSourceRange();
+    S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
+      << Attr.getName() << AANT_ArgumentIntegerConstant
+      << numEltsExpr->getSourceRange();
     Attr.setInvalid();
     return;
   }
@@ -4642,9 +4682,14 @@ static void HandleNeonVectorTypeAttr(QualType& CurType,
        BTy->getKind() != BuiltinType::LongLong &&
        BTy->getKind() != BuiltinType::ULongLong &&
        BTy->getKind() != BuiltinType::Float)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_invalid_vector_type) <<CurType;
-    Attr.setInvalid();
-    return;
+    llvm::Triple::ArchType Arch =
+        S.Context.getTargetInfo().getTriple().getArch();
+    if (!isPermittedNeonBaseType(CurType, VecKind,
+                                 Arch == llvm::Triple::aarch64)) {
+      S.Diag(Attr.getLoc(), diag::err_attribute_invalid_vector_type) << CurType;
+      Attr.setInvalid();
+      return;
+    }
   }
   // The total size of the vector must be 64 or 128 bits.
   unsigned typeSize = static_cast<unsigned>(S.Context.getTypeSize(CurType));
@@ -4739,13 +4784,12 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
       break;
     case AttributeList::AT_NeonVectorType:
       HandleNeonVectorTypeAttr(type, attr, state.getSema(),
-                               VectorType::NeonVector, "neon_vector_type");
+                               VectorType::NeonVector);
       attr.setUsedAsTypeAttr();
       break;
     case AttributeList::AT_NeonPolyVectorType:
       HandleNeonVectorTypeAttr(type, attr, state.getSema(),
-                               VectorType::NeonPolyVector,
-                               "neon_polyvector_type");
+                               VectorType::NeonPolyVector);
       attr.setUsedAsTypeAttr();
       break;
     case AttributeList::AT_OpenCLImageAccess:
