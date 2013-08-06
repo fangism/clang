@@ -50,6 +50,7 @@ struct ScalarEnumerationTraits<clang::format::FormatStyle::BraceBreakingStyle> {
     IO.enumCase(Value, "Attach", clang::format::FormatStyle::BS_Attach);
     IO.enumCase(Value, "Linux", clang::format::FormatStyle::BS_Linux);
     IO.enumCase(Value, "Stroustrup", clang::format::FormatStyle::BS_Stroustrup);
+    IO.enumCase(Value, "Allman", clang::format::FormatStyle::BS_Allman);
   }
 };
 
@@ -936,7 +937,7 @@ private:
     State.NextToken = State.NextToken->Next;
 
     if (!Newline && Style.AlwaysBreakBeforeMultilineStrings &&
-        Current.is(tok::string_literal))
+        Current.is(tok::string_literal) && Current.CanBreakBefore)
       return 0;
 
     return breakProtrudingToken(Current, State, DryRun);
@@ -1237,7 +1238,8 @@ private:
         return true;
     }
     if ((Previous.isOneOf(tok::comma, tok::semi) || Current.is(tok::question) ||
-         Current.Type == TT_ConditionalExpr) &&
+         (Current.Type == TT_ConditionalExpr &&
+          !(Current.is(tok::colon) && Previous.is(tok::question)))) &&
         State.Stack.back().BreakBeforeParameter &&
         !Current.isTrailingComment() &&
         !Current.isOneOf(tok::r_paren, tok::r_brace))

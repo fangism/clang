@@ -2921,6 +2921,10 @@ TEST_F(FormatTest, BreaksConditionalExpressions) {
       "                   aaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "                                    : aaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
       "                   aaaaaaaaaaaaa);");
+  verifyFormat(
+      "aaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+      "                   aaaaaaaaaaaaaaaa ?: aaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+      "                   aaaaaaaaaaaaa);");
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                "    ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
                "          aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
@@ -2933,7 +2937,11 @@ TEST_F(FormatTest, BreaksConditionalExpressions) {
                "           : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
                "                 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),\n"
                "       aaaaaaaaaaaaaaaaaaaaaaaaaaa);");
-
+  verifyFormat("aaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+               "           ?: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
+               "                  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),\n"
+               "       aaaaaaaaaaaaaaaaaaaaaaaaaaa);");
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                "    ? aaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                "    : aaaaaaaaaaaaaaaaaaaaaaaaaaa;");
@@ -2976,6 +2984,14 @@ TEST_F(FormatTest, BreaksConditionalExpressions) {
       "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa == aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
       "        ? aaaaaaaaaaaaaaa\n"
       "        : aaaaaaaaaaaaaaa);\n"
+      "}",
+      NoBinPacking);
+  verifyFormat(
+      "void f() {\n"
+      "  g(aaa,\n"
+      "    aaaaaaaaaa == aaaaaaaaaa ? aaaa : aaaaa,\n"
+      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa == aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "        ?: aaaaaaaaaaaaaaa);\n"
       "}",
       NoBinPacking);
 }
@@ -4771,17 +4787,17 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
   verifyFormat(
       "void f() {\n"
       "  if ((self = [super initWithContentRect:contentRect\n"
-      "                               styleMask:styleMask\n"
+      "                               styleMask:styleMask ?: otherMask\n"
       "                                 backing:NSBackingStoreBuffered\n"
       "                                   defer:YES]))");
 
   verifyFormat(
       "[foo checkThatBreakingAfterColonWorksOk:\n"
-      "        [bar ifItDoes:reduceOverallLineLengthLikeInThisCase]];");
+      "         [bar ifItDoes:reduceOverallLineLengthLikeInThisCase]];");
 
   verifyFormat("[myObj short:arg1 // Force line break\n"
-               "          longKeyword:arg2\n"
-               "    evenLongerKeyword:arg3\n"
+               "          longKeyword:arg2 != nil ? arg2 : @\"longKeyword\"\n"
+               "    evenLongerKeyword:arg3 ?: @\"evenLongerKeyword\"\n"
                "                error:arg4];");
   verifyFormat(
       "void f() {\n"
@@ -4818,6 +4834,10 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
       "scoped_nsobject<NSTextField> message(\n"
       "    // The frame will be fixed up when |-setMessageText:| is called.\n"
       "    [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 0, 0)]);");
+  verifyFormat("[self aaaaaa:bbbbbbbbbbbbb\n"
+               "    aaaaaaaaaa:bbbbbbbbbbbbbbbbb\n"
+               "         aaaaa:bbbbbbbbbbb + bbbbbbbbbbbb\n"
+               "          aaaa:bbb];");
 }
 
 TEST_F(FormatTest, ObjCAt) {
@@ -5147,6 +5167,11 @@ TEST_F(FormatTest, BreakStringLiterals) {
                    "aaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaa "
                    "aaaaaaaaaaaaaaaaaaaaaa\");",
                    getGoogleStyle()));
+  EXPECT_EQ("llvm::outs() << \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"\n"
+            "                \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";",
+            format("llvm::outs() << "
+                   "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaa"
+                   "aaaaaaaaaaaaaaaaaaa\";"));
 
   FormatStyle AlignLeft = getLLVMStyleWithColumns(12);
   AlignLeft.AlignEscapedNewlinesLeft = true;
@@ -5426,6 +5451,84 @@ TEST_F(FormatTest, StroustrupBraceBreaking) {
                "  }\n"
                "}\n"
                "}",
+               BreakBeforeBrace);
+}
+
+TEST_F(FormatTest, AllmanBraceBreaking) {
+  FormatStyle BreakBeforeBrace = getLLVMStyle();
+  BreakBeforeBrace.BreakBeforeBraces = FormatStyle::BS_Allman;
+  verifyFormat("namespace a\n"
+               "{\n"
+               "class A\n"
+               "{\n"
+               "  void f()\n"
+               "  {\n"
+               "    if (true)\n"
+               "    {\n"
+               "      a();\n"
+               "      b();\n"
+               "    }\n"
+               "  }\n"
+               "  void g()\n"
+               "  {\n"
+               "    return;\n"
+               "  }\n"
+               "}\n"
+               "}",
+               BreakBeforeBrace);
+
+  verifyFormat("void f()\n"
+               "{\n"
+               "  if (true)\n"
+               "  {\n"
+               "    a();\n"
+               "  }\n"
+               "  else if (false)\n"
+               "  {\n"
+               "    b();\n"
+               "  }\n"
+               "  else\n"
+               "  {\n"
+               "    c();\n"
+               "  }\n"
+               "}\n",
+               BreakBeforeBrace);
+
+  verifyFormat("void f()\n"
+               "{\n"
+               "  for (int i = 0; i < 10; ++i)\n"
+               "  {\n"
+               "    a();\n"
+               "  }\n"
+               "  while (false)\n"
+               "  {\n"
+               "    b();\n"
+               "  }\n"
+               "  do\n"
+               "  {\n"
+               "    c();\n"
+               "  } while (false)\n"
+               "}\n",
+               BreakBeforeBrace);
+
+  verifyFormat("void f(int a)\n"
+               "{\n"
+               "  switch (a)\n"
+               "  {\n"
+               "  case 0:\n"
+               "    break;\n"
+               "  case 1:\n"
+               "  {\n"
+               "    break;\n"
+               "  }\n"
+               "  case 2:\n"
+               "  {\n"
+               "  }\n"
+               "  break;\n"
+               "  default:\n"
+               "    break;\n"
+               "  }\n"
+               "}\n",
                BreakBeforeBrace);
 }
 
