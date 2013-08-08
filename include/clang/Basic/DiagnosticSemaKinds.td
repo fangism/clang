@@ -18,7 +18,12 @@ let CategoryName = "Semantic Issue" in {
 def warn_variables_not_in_loop_body : Warning<
   "variable%select{s| %1|s %1 and %2|s %1, %2, and %3|s %1, %2, %3, and %4}0 "
   "used in loop condition not modified in loop body">,
-  InGroup<DiagGroup<"loop-analysis">>, DefaultIgnore;
+  InGroup<LoopAnalysis>, DefaultIgnore;
+def warn_redundant_loop_iteration : Warning<
+  "variable %0 is %select{decremented|incremented}1 both in the loop header "
+  "and in the loop body">,
+  InGroup<LoopAnalysis>, DefaultIgnore;
+def note_loop_iteration_here : Note<"%select{decremented|incremented}0 here">;
 
 def warn_duplicate_enum_values : Warning<
   "element %0 has been implicitly assigned %1 which another element has "
@@ -4876,7 +4881,10 @@ def note_member_declared_here : Note<
   "member %0 declared here">;
 def err_decrement_bool : Error<"cannot decrement expression of type bool">;
 def warn_increment_bool : Warning<
-  "incrementing expression of type bool is deprecated">, InGroup<Deprecated>;
+  "incrementing expression of type bool is deprecated">,
+  InGroup<DeprecatedIncrementBool>;
+def err_increment_decrement_enum : Error<
+  "cannot %select{decrement|increment}0 expression of enum type %1">;
 def err_catch_incomplete_ptr : Error<
   "cannot catch pointer to incomplete type %0">;
 def err_catch_incomplete_ref : Error<

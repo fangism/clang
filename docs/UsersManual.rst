@@ -895,6 +895,8 @@ are listed below.
       used in conjunction with the ``-fsanitize-undefined-trap-on-error``
       flag. This includes all of the checks listed below other than
       ``unsigned-integer-overflow`` and ``vptr``.
+   -  ``-fsanitize=dataflow``: :doc:`DataFlowSanitizer`, a general data
+      flow analysis.
 
    The following more fine-grained checks are also available:
 
@@ -939,6 +941,15 @@ are listed below.
    -  ``-fsanitize=vptr``: Use of an object whose vptr indicates that
       it is of the wrong dynamic type, or that its lifetime has not
       begun or has ended. Incompatible with ``-fno-rtti``.
+
+   You can turn off or modify checks for certain source files, functions
+   or even variables by providing a special file:
+
+   -  ``-fsanitize-blacklist=/path/to/blacklist/file``: disable or modify
+      sanitizer checks for objects listed in the file. See
+      :doc:`SanitizerSpecialCaseList` for file format description.
+   -  ``-fno-sanitize-blacklist``: don't use blacklist file, if it was
+      specified earlier in the command line.
 
    Experimental features of AddressSanitizer (not ready for widespread
    use, require explicit ``-fsanitize=address``):

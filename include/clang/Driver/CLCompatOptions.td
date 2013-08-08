@@ -83,6 +83,15 @@ def _SLASH_Zs : CLFlag<"Zs">, HelpText<"Syntax-check only">,
 
 // Non-aliases:
 
+def _SLASH_Fo : CLJoined<"Fo">,
+  HelpText<"Set output object file, or directory (ends in / or \\)">,
+  MetaVarName<"<file or directory>">;
+def _SLASH_MD : CLFlag<"MD">,
+  HelpText<"Use DLL run-time">;
+def _SLASH_MDd : CLFlag<"MDd">,
+  HelpText<"Use DLL debug run-time">;
+def _SLASH_MT : CLFlag<"MT">, HelpText<"Use static run-time">;
+def _SLASH_MTd : CLFlag<"MTd">, HelpText<"Use static debug run-time">;
 def _SLASH_Tc : CLJoinedOrSeparate<"Tc">, HelpText<"Specify a C source file">,
   MetaVarName<"<filename>">;
 def _SLASH_TC : CLFlag<"TC">, HelpText<"Treat all source files as C">;
@@ -106,7 +115,6 @@ def _SLASH_Zc_wchar_t : CLIgnoredFlag<"Zc:wchar_t">;
 
 def _SLASH_EH : CLJoined<"EH">;
 def _SLASH_Fd : CLJoined<"Fd">;
-def _SLASH_Fo : CLJoined<"Fo">;
 def _SLASH_fp : CLJoined<"fp">;
 def _SLASH_Gd : CLFlag<"Gd">;
 def _SLASH_GL : CLFlag<"GL">;
@@ -117,14 +125,11 @@ def _SLASH_GS : CLFlag<"GS">;
 def _SLASH_Gy : CLFlag<"Gy">;
 def _SLASH_Gy_ : CLFlag<"Gy-">;
 def _SLASH_GZ : CLFlag<"GZ">;
-def _SLASH_MD : CLFlag<"MD">;
-def _SLASH_MT : CLFlag<"MT">;
-def _SLASH_MDd : CLFlag<"MDd">;
-def _SLASH_MTd : CLFlag<"MTd">;
 def _SLASH_Oi : CLFlag<"Oi">;
 def _SLASH_RTC : CLJoined<"RTC">;
 def _SLASH_showIncludes : CLJoined<"showIncludes">;
 def _SLASH_w : CLJoined<"w">;
+def _SLASH_Za : CLFlag<"Za">;
 def _SLASH_Zc : CLJoined<"Zc:">;
 def _SLASH_ZI : CLFlag<"ZI">;
 def _SLASH_Zi : CLFlag<"Zi">;

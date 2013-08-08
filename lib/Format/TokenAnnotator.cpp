@@ -1059,8 +1059,6 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
 
   if (Right.isOneOf(tok::arrow, tok::period) &&
       Right.Type != TT_DesignatedInitializerPeriod) {
-    if (Line.Type == LT_BuilderTypeCall)
-      return prec::PointerToMember;
     if (Left.isOneOf(tok::r_paren, tok::r_square) && Left.MatchingParen &&
         Left.MatchingParen->ParameterCount > 0)
       return 20; // Should be smaller than breaking at a nested comma.
@@ -1238,7 +1236,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
   if (Tok.isOneOf(tok::arrowstar, tok::periodstar) ||
       Tok.Previous->isOneOf(tok::arrowstar, tok::periodstar))
     return false;
-  if (Tok.Type == TT_BinaryOperator || Tok.Previous->Type == TT_BinaryOperator)
+  if ((Tok.Type == TT_BinaryOperator && !Tok.Previous->is(tok::l_paren)) ||
+      Tok.Previous->Type == TT_BinaryOperator)
     return true;
   if (Tok.Previous->Type == TT_TemplateCloser && Tok.is(tok::l_paren))
     return false;
