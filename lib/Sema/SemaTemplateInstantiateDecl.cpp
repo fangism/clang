@@ -2446,9 +2446,12 @@ TemplateDeclInstantiator::InstantiateClassTemplatePartialSpecialization(
 
   // Substitute into the template arguments of the class template partial
   // specialization.
-  TemplateArgumentListInfo InstTemplateArgs; // no angle locations
-  if (SemaRef.Subst(PartialSpec->getTemplateArgsAsWritten(),
-                    PartialSpec->getNumTemplateArgsAsWritten(),
+  const ASTTemplateArgumentListInfo *TemplArgInfo
+    = PartialSpec->getTemplateArgsAsWritten();
+  TemplateArgumentListInfo InstTemplateArgs(TemplArgInfo->LAngleLoc,
+                                            TemplArgInfo->RAngleLoc);
+  if (SemaRef.Subst(TemplArgInfo->getTemplateArgs(),
+                    TemplArgInfo->NumTemplateArgs,
                     InstTemplateArgs, TemplateArgs))
     return 0;
 
@@ -2571,9 +2574,12 @@ TemplateDeclInstantiator::InstantiateVarTemplatePartialSpecialization(
 
   // Substitute into the template arguments of the variable template partial
   // specialization.
-  TemplateArgumentListInfo InstTemplateArgs; // no angle locations
-  if (SemaRef.Subst(PartialSpec->getTemplateArgsAsWritten(),
-                    PartialSpec->getNumTemplateArgsAsWritten(),
+  const ASTTemplateArgumentListInfo *TemplArgInfo
+    = PartialSpec->getTemplateArgsAsWritten();
+  TemplateArgumentListInfo InstTemplateArgs(TemplArgInfo->LAngleLoc,
+                                            TemplArgInfo->RAngleLoc);
+  if (SemaRef.Subst(TemplArgInfo->getTemplateArgs(),
+                    TemplArgInfo->NumTemplateArgs,
                     InstTemplateArgs, TemplateArgs))
     return 0;
 
@@ -4056,6 +4062,9 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
     if (isa<NonTypeTemplateParmDecl>(D) || isa<TemplateTypeParmDecl>(D) ||
         isa<TemplateTemplateParmDecl>(D))
       return D;
+
+    if (D->isInvalidDecl())
+      return 0;
 
     // If we didn't find the decl, then we must have a label decl that hasn't
     // been found yet.  Lazily instantiate it and return it now.

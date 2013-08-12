@@ -595,6 +595,12 @@ private:
     unsigned ContinuationIndent =
         std::max(State.Stack.back().LastSpace, State.Stack.back().Indent) + 4;
     if (Newline) {
+      // Breaking before the first "<<" is generally not desirable if the LHS is
+      // short.
+      if (Current.is(tok::lessless) && State.Stack.back().FirstLessLess == 0 &&
+          State.Column <= Style.ColumnLimit / 2)
+        ExtraPenalty += Style.PenaltyBreakFirstLessLess;
+
       State.Stack.back().ContainsLineBreak = true;
       if (Current.is(tok::r_brace)) {
         if (Current.BlockKind == BK_BracedInit)
@@ -704,10 +710,6 @@ private:
              Line.MustBeDeclaration))
           State.Stack.back().BreakBeforeParameter = true;
       }
-
-      // Breaking before the first "<<" is generally not desirable.
-      if (Current.is(tok::lessless) && State.Stack.back().FirstLessLess == 0)
-        ExtraPenalty += Style.PenaltyBreakFirstLessLess;
 
     } else {
       if (Current.is(tok::equal) &&
@@ -973,7 +975,7 @@ private:
       // Exempts unterminated string literals from line breaking. The user will
       // likely want to terminate the string before any line breaking is done.
       if (Current.IsUnterminatedLiteral)
-         return 0;
+        return 0;
 
       Token.reset(new BreakableStringLiteral(Current, StartColumn,
                                              Line.InPPDirective, Encoding));
@@ -1228,7 +1230,7 @@ private:
       return true;
     if (!Style.Cpp11BracedListStyle && Current.is(tok::r_brace) &&
         State.Stack.back().BreakBeforeClosingBrace)
-       return true;
+      return true;
     if (Previous.is(tok::semi) && State.LineContainsContinuedForLoopSection)
       return true;
     if (Style.BreakConstructorInitializersBeforeComma) {

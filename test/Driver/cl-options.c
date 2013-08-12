@@ -1,5 +1,7 @@
 // Don't attempt slash switches on msys bash.
 // REQUIRES: shell-preserves-root
+// Exclude gcc-driven clang.
+// REQUIRES: clang-driver
 
 // Note: %s must be preceded by --, otherwise it may be interpreted as a
 // command-line option, e.g. on Mac where %s is commonly under /Users.
@@ -36,6 +38,12 @@
 // RUN: %clang_cl /Od -### -- %s 2>&1 | FileCheck -check-prefix=Od %s
 // Od: -O0
 
+// RUN: %clang_cl /Oi- /Oi -### -- %s 2>&1 | FileCheck -check-prefix=Oi %s
+// Oi-NOT: -fno-builtin
+
+// RUN: %clang_cl /Oi- -### -- %s 2>&1 | FileCheck -check-prefix=Oi_ %s
+// Oi_: -fno-builtin
+
 // RUN: %clang_cl /Os -### -- %s 2>&1 | FileCheck -check-prefix=Os %s
 // Os: -Os
 
@@ -52,6 +60,9 @@
 
 // RUN: %clang_cl /P -### -- %s 2>&1 | FileCheck -check-prefix=P %s
 // P: -E
+
+// RUN: %clang_cl /showIncludes -### -- %s 2>&1 | FileCheck -check-prefix=showIncludes %s
+// showIncludes: --show-includes
 
 // RUN: %clang_cl /Umymacro -### -- %s 2>&1 | FileCheck -check-prefix=U %s
 // RUN: %clang_cl /U mymacro -### -- %s 2>&1 | FileCheck -check-prefix=U %s
@@ -89,6 +100,6 @@
 // Unsupported but parsed options. Check that we don't error on them.
 // (/Zs is for syntax-only)
 // RUN: %clang_cl /Zs /EHsc /Fdfoo /fp:precise /Gd /GL /GL- -- %s 2>&1
-// RUN: %clang_cl /Zs /Gm /Gm- /GS /Gy /Gy- /GZ /Oi -- %s 2>&1
+// RUN: %clang_cl /Zs /Gm /Gm- /GS /Gy /Gy- /GZ -- %s 2>&1
 // RUN: %clang_cl /Zs /RTC1 /wfoo /Zc:wchar_t- -- %s 2>&1
-// RUN: %clang_cl /Zs /ZI /Zi /showIncludes -- %s 2>&1
+// RUN: %clang_cl /Zs /ZI /Zi -- %s 2>&1
