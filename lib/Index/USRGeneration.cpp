@@ -21,7 +21,7 @@ using namespace clang;
 // USR generation.
 //===----------------------------------------------------------------------===//
 
-namespace {
+// namespace {
 class USRGenerator : public ConstDeclVisitor<USRGenerator> {
   SmallVectorImpl<char> &Buf;
   llvm::raw_svector_ostream Out;
@@ -40,7 +40,7 @@ public:
     generatedLoc(false)
   {
     // Add the USR space prefix.
-    Out << index::getUSRSpacePrefix();
+    Out << clang::index::getUSRSpacePrefix();
   }
 
   bool ignoreResults() const { return IgnoreResults; }
@@ -92,29 +92,29 @@ public:
 
   /// Generate a USR for an Objective-C class.
   void GenObjCClass(StringRef cls) {
-    index::generateUSRForObjCClass(cls, Out);
+    clang::index::generateUSRForObjCClass(cls, Out);
   }
   /// Generate a USR for an Objective-C class category.
   void GenObjCCategory(StringRef cls, StringRef cat) {
-    index::generateUSRForObjCCategory(cls, cat, Out);
+    clang::index::generateUSRForObjCCategory(cls, cat, Out);
   }
   /// Generate a USR fragment for an Objective-C instance variable.  The
   /// complete USR can be created by concatenating the USR for the
   /// encompassing class with this USR fragment.
   void GenObjCIvar(StringRef ivar) {
-    index::generateUSRForObjCIvar(ivar, Out);
+    clang::index::generateUSRForObjCIvar(ivar, Out);
   }
   /// Generate a USR fragment for an Objective-C method.
   void GenObjCMethod(StringRef sel, bool isInstanceMethod) {
-    index::generateUSRForObjCMethod(sel, isInstanceMethod, Out);
+    clang::index::generateUSRForObjCMethod(sel, isInstanceMethod, Out);
   }
   /// Generate a USR fragment for an Objective-C property.
   void GenObjCProperty(StringRef prop) {
-    index::generateUSRForObjCProperty(prop, Out);
+    clang::index::generateUSRForObjCProperty(prop, Out);
   }
   /// Generate a USR for an Objective-C protocol.
   void GenObjCProtocol(StringRef prot) {
-    index::generateUSRForObjCProtocol(prot, Out);
+    clang::index::generateUSRForObjCProtocol(prot, Out);
   }
 
   void VisitType(QualType T);
@@ -127,7 +127,7 @@ public:
   bool EmitDeclName(const NamedDecl *D);
 };
 
-} // end anonymous namespace
+// } // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // Generating USRs from ASTS.
@@ -762,6 +762,7 @@ void USRGenerator::VisitTemplateArgument(const TemplateArgument &Arg) {
 //===----------------------------------------------------------------------===//
 // USR generation functions.
 //===----------------------------------------------------------------------===//
+namespace clang {
 
 void index::generateUSRForObjCClass(StringRef Cls, raw_ostream &OS) {
   OS << "objc(cs)" << Cls;
@@ -798,3 +799,5 @@ bool index::generateUSRForDecl(const Decl *D, SmallVectorImpl<char> &Buf) {
   UG.Visit(D);
   return UG.ignoreResults();
 }
+
+}	// end namespace clang
