@@ -5366,6 +5366,62 @@ public:
 } // end anonymous namespace
 
 
+//===----------------------------------------------------------------------===//
+// Xcore ABI Implementation
+//===----------------------------------------------------------------------===//
+namespace {
+class XCoreABIInfo : public DefaultABIInfo {
+public:
+  XCoreABIInfo(CodeGen::CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
+  virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                 CodeGenFunction &CGF) const;
+};
+
+class XcoreTargetCodeGenInfo : public TargetCodeGenInfo {
+public:
+  XcoreTargetCodeGenInfo(CodeGenTypes &CGT)
+    :TargetCodeGenInfo(new XCoreABIInfo(CGT)) {}
+};
+} // end anonymous namespace
+
+llvm::Value *XCoreABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                     CodeGenFunction &CGF) const {
+  ABIArgInfo AI = classifyArgumentType(Ty);
+  CGBuilderTy &Builder = CGF.Builder;
+  llvm::Type *ArgTy = CGT.ConvertType(Ty);
+  if (AI.canHaveCoerceToType() && !AI.getCoerceToType())
+    AI.setCoerceToType(ArgTy);
+
+  // handle the VAList
+  llvm::Value *VAListAddrAsBPP = Builder.CreateBitCast(VAListAddr,
+                                                       CGF.Int8PtrPtrTy);
+  llvm::Value *AP = Builder.CreateLoad(VAListAddrAsBPP);
+  llvm::Value *APN = Builder.CreateConstGEP1_32(AP, 4);
+  Builder.CreateStore(APN, VAListAddrAsBPP);
+
+  // handle the argument
+  llvm::Type *ArgPtrTy = llvm::PointerType::getUnqual(ArgTy);
+  switch (AI.getKind()) {
+  case ABIArgInfo::Expand:
+    llvm_unreachable("Unsupported ABI kind for va_arg");
+  case ABIArgInfo::Ignore:
+    return llvm::UndefValue::get(ArgPtrTy);
+  case ABIArgInfo::Extend:
+  case ABIArgInfo::Direct:
+    return Builder.CreatePointerCast(AP, ArgPtrTy);
+  case ABIArgInfo::Indirect:
+    llvm::Value *ArgAddr;
+    ArgAddr = Builder.CreateBitCast(AP, llvm::PointerType::getUnqual(ArgPtrTy));
+    ArgAddr = Builder.CreateLoad(ArgAddr);
+    return Builder.CreatePointerCast(ArgAddr, ArgPtrTy);
+  }
+  llvm_unreachable("Unknown ABI kind");
+}
+
+//===----------------------------------------------------------------------===//
+// Driver code
+//===----------------------------------------------------------------------===//
+
 const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
   if (TheTargetCodeGenInfo)
     return *TheTargetCodeGenInfo;
@@ -5474,5 +5530,8 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
     return *(TheTargetCodeGenInfo = new HexagonTargetCodeGenInfo(Types));
   case llvm::Triple::sparcv9:
     return *(TheTargetCodeGenInfo = new SparcV9TargetCodeGenInfo(Types));
+  case llvm::Triple::xcore:
+    return *(TheTargetCodeGenInfo = new XcoreTargetCodeGenInfo(Types));
+
   }
 }

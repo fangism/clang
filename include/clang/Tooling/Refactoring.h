@@ -48,9 +48,7 @@ public:
   /// @{
   /// \brief Whether this range overlaps with \p RHS or not.
   bool overlapsWith(Range RHS) const {
-    if ((Offset + Length) <= RHS.Offset || Offset >= (RHS.Offset + RHS.Length))
-      return false;
-    return true;
+    return Offset + Length > RHS.Offset && Offset < RHS.Offset + RHS.Length;
   }
 
   /// \brief Whether this range contains \p RHS or not.
@@ -116,14 +114,6 @@ public:
   /// \brief Returns a human readable string representation.
   std::string toString() const;
 
-  /// \brief Comparator to be able to use Replacement in std::set for uniquing.
-  class Less {
-  public:
-    bool operator()(const Replacement &R1, const Replacement &R2) const;
-  };
-
-  bool operator==(const Replacement &Other) const;
-
  private:
   void setFromSourceLocation(SourceManager &Sources, SourceLocation Start,
                              unsigned Length, StringRef ReplacementText);
@@ -135,9 +125,15 @@ public:
   std::string ReplacementText;
 };
 
+/// \brief Less-than operator between two Replacements.
+bool operator<(const Replacement &LHS, const Replacement &RHS);
+
+/// \brief Equal-to operator between two Replacements.
+bool operator==(const Replacement &LHS, const Replacement &RHS);
+
 /// \brief A set of Replacements.
 /// FIXME: Change to a vector and deduplicate in the RefactoringTool.
-typedef std::set<Replacement, Replacement::Less> Replacements;
+typedef std::set<Replacement> Replacements;
 
 /// \brief Apply all replacements in \p Replaces to the Rewriter \p Rewrite.
 ///
@@ -146,6 +142,15 @@ typedef std::set<Replacement, Replacement::Less> Replacements;
 ///
 /// \returns true if all replacements apply. false otherwise.
 bool applyAllReplacements(const Replacements &Replaces, Rewriter &Rewrite);
+
+/// \brief Apply all replacements in \p Replaces to the Rewriter \p Rewrite.
+///
+/// Replacement applications happen independently of the success of
+/// other applications.
+///
+/// \returns true if all replacements apply. false otherwise.
+bool applyAllReplacements(const std::vector<Replacement> &Replaces,
+                          Rewriter &Rewrite);
 
 /// \brief Applies all replacements in \p Replaces to \p Code.
 ///

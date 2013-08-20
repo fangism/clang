@@ -15,6 +15,7 @@
 #include "clang/Driver/Phases.h"
 #include "clang/Driver/Types.h"
 #include "clang/Driver/Util.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
@@ -42,6 +43,7 @@ namespace driver {
   class Compilation;
   class InputInfo;
   class JobAction;
+  class SanitizerArgs;
   class ToolChain;
 
 /// Driver - Encapsulate logic for constructing compilation processes
@@ -177,6 +179,9 @@ private:
   /// stored in it, and will clean them up when torn down.
   mutable llvm::StringMap<ToolChain *> ToolChains;
 
+  /// Parsed arguments passed to sanitizer tools.
+  mutable llvm::OwningPtr<SanitizerArgs> SanitizerArguments;
+
 private:
   /// TranslateInputArgs - Create a new derived argument list from the input
   /// arguments, after applying the standard argument translations.
@@ -266,7 +271,7 @@ public:
   /// \param TC - The default host tool chain.
   /// \param Args - The input arguments.
   /// \param Actions - The list to store the resulting actions onto.
-  void BuildActions(const ToolChain &TC, const llvm::opt::DerivedArgList &Args,
+  void BuildActions(const ToolChain &TC, llvm::opt::DerivedArgList &Args,
                     const InputList &Inputs, ActionList &Actions) const;
 
   /// BuildUniversalActions - Construct the list of actions to perform
@@ -276,7 +281,7 @@ public:
   /// \param Args - The input arguments.
   /// \param Actions - The list to store the resulting actions onto.
   void BuildUniversalActions(const ToolChain &TC,
-                             const llvm::opt::DerivedArgList &Args,
+                             llvm::opt::DerivedArgList &Args,
                              const InputList &BAInputs,
                              ActionList &Actions) const;
 
@@ -404,6 +409,10 @@ private:
   std::pair<unsigned, unsigned> getIncludeExcludeOptionFlagMasks() const;
 
 public:
+  /// \brief Returns parsed arguments to sanitizer tools.
+  const SanitizerArgs &
+  getOrParseSanitizerArgs(const llvm::opt::ArgList &Args) const;
+
   /// GetReleaseVersion - Parse (([0-9]+)(.([0-9]+)(.([0-9]+)?))?)? and
   /// return the grouped values as integers. Numbers which are not
   /// provided are set to 0.

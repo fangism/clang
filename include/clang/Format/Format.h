@@ -141,6 +141,10 @@ struct FormatStyle {
   /// \brief The number of characters to use for indentation.
   unsigned IndentWidth;
 
+  /// \brief The number of characters to use for indentation of constructor
+  /// initializer lists.
+  unsigned ConstructorInitializerIndentWidth;
+
   /// \brief If \c true, always break after the \c template<...> of a template
   /// declaration.
   bool AlwaysBreakTemplateDeclarations;
@@ -190,8 +194,24 @@ struct FormatStyle {
   /// are not also definitions after the type.
   bool IndentFunctionDeclarationAfterType;
 
+  /// \brief If \c true, spaces will be inserted after every '(' and before
+  /// every ')'.
+  bool SpacesInParentheses;
+
+  /// \brief If \c false, spaces may be inserted into '()'.
+  bool SpaceInEmptyParentheses;
+
+  /// \brief If \c false, spaces may be inserted into C style casts.
+  bool SpacesInCStyleCastParentheses;
+
+  /// \brief If \c true, spaces will be inserted between 'for'/'if'/'while'/...
+  /// and '('.
+  bool SpaceAfterControlStatementKeyword;
+
   bool operator==(const FormatStyle &R) const {
     return AccessModifierOffset == R.AccessModifierOffset &&
+           ConstructorInitializerIndentWidth ==
+               R.ConstructorInitializerIndentWidth &&
            AlignEscapedNewlinesLeft == R.AlignEscapedNewlinesLeft &&
            AlignTrailingComments == R.AlignTrailingComments &&
            AllowAllParametersOfDeclarationOnNextLine ==
@@ -225,7 +245,13 @@ struct FormatStyle {
            Cpp11BracedListStyle == R.Cpp11BracedListStyle &&
            Standard == R.Standard && UseTab == R.UseTab &&
            IndentFunctionDeclarationAfterType ==
-               R.IndentFunctionDeclarationAfterType;
+               R.IndentFunctionDeclarationAfterType &&
+           SpacesInParentheses == R.SpacesInParentheses &&
+           SpaceInEmptyParentheses == R.SpaceInEmptyParentheses &&
+           SpacesInCStyleCastParentheses ==
+               R.SpacesInCStyleCastParentheses &&
+           SpaceAfterControlStatementKeyword ==
+               R.SpaceAfterControlStatementKeyword;
   }
 };
 

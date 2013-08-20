@@ -79,6 +79,8 @@ def err_drv_invalid_libcxx_deployment : Error<
   "invalid deployment target for -stdlib=libc++ (requires %0 or later)">;
 def err_drv_invalid_feature : Error<
   "invalid feature '%0' for CPU '%1'">;
+def err_drv_malformed_sanitizer_blacklist : Error<
+  "malformed sanitizer blacklist: '%0'">;
 
 def err_drv_I_dash_not_supported : Error<
   "'%0' not supported, please use -iquote instead">;
@@ -135,7 +137,7 @@ def warn_drv_assuming_mfloat_abi_is : Warning<
   "unknown platform, assuming -mfloat-abi=%0">;
 def warn_ignoring_ftabstop_value : Warning<
   "ignoring invalid -ftabstop value '%0', using default value %1">;
-def warn_drv_overriding_fo_option : Warning<
+def warn_drv_overriding_joined_option : Warning<
   "overriding '%0%1' option with '%2%3'">,
   InGroup<DiagGroup<"overriding-fo-option">>;
 def warn_drv_overriding_t_option : Warning<

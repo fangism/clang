@@ -72,6 +72,21 @@ UuidAttr *CXXUuidofExpr::GetUuidAttrOfType(QualType QT) {
   return 0;
 }
 
+StringRef CXXUuidofExpr::getUuidAsStringRef(ASTContext &Context) const {
+  StringRef Uuid;
+  if (isTypeOperand())
+    Uuid = CXXUuidofExpr::GetUuidAttrOfType(getTypeOperand())->getGuid();
+  else {
+    // Special case: __uuidof(0) means an all-zero GUID.
+    Expr *Op = getExprOperand();
+    if (!Op->isNullPointerConstant(Context, Expr::NPC_ValueDependentIsNull))
+      Uuid = CXXUuidofExpr::GetUuidAttrOfType(Op->getType())->getGuid();
+    else
+      Uuid = "00000000-0000-0000-0000-000000000000";
+  }
+  return Uuid;
+}
+
 // CXXScalarValueInitExpr
 SourceLocation CXXScalarValueInitExpr::getLocStart() const {
   return TypeInfo ? TypeInfo->getTypeLoc().getBeginLoc() : RParenLoc;
@@ -645,14 +660,14 @@ CXXConstCastExpr *CXXConstCastExpr::CreateEmpty(ASTContext &C) {
 
 CXXFunctionalCastExpr *
 CXXFunctionalCastExpr::Create(ASTContext &C, QualType T, ExprValueKind VK,
-                              TypeSourceInfo *Written, SourceLocation L,
-                              CastKind K, Expr *Op, const CXXCastPath *BasePath,
-                               SourceLocation R) {
+                              TypeSourceInfo *Written, CastKind K, Expr *Op,
+                              const CXXCastPath *BasePath,
+                              SourceLocation L, SourceLocation R) {
   unsigned PathSize = (BasePath ? BasePath->size() : 0);
   void *Buffer = C.Allocate(sizeof(CXXFunctionalCastExpr)
                             + PathSize * sizeof(CXXBaseSpecifier*));
   CXXFunctionalCastExpr *E =
-    new (Buffer) CXXFunctionalCastExpr(T, VK, Written, L, K, Op, PathSize, R);
+    new (Buffer) CXXFunctionalCastExpr(T, VK, Written, K, Op, PathSize, L, R);
   if (PathSize) E->setCastPath(*BasePath);
   return E;
 }
@@ -662,6 +677,14 @@ CXXFunctionalCastExpr::CreateEmpty(ASTContext &C, unsigned PathSize) {
   void *Buffer = C.Allocate(sizeof(CXXFunctionalCastExpr)
                             + PathSize * sizeof(CXXBaseSpecifier*));
   return new (Buffer) CXXFunctionalCastExpr(EmptyShell(), PathSize);
+}
+
+SourceLocation CXXFunctionalCastExpr::getLocStart() const {
+  return getTypeInfoAsWritten()->getTypeLoc().getLocStart();
+}
+
+SourceLocation CXXFunctionalCastExpr::getLocEnd() const {
+  return RParenLoc.isValid() ? RParenLoc : getSubExpr()->getLocEnd();
 }
 
 UserDefinedLiteral::LiteralOperatorKind

@@ -14,6 +14,11 @@ T pi = T(3.1415926535897932385); // expected-note {{template is declared here}}
 template<typename T> 
 CONST T cpi = T(3.1415926535897932385); // expected-note {{template is declared here}}
 
+template<typename T> extern CONST T vc;
+#ifdef CXX11
+// expected-error@-2 {{constexpr variable declaration must be a definition}}
+#endif
+
 namespace use_in_top_level_funcs {
 
   void good() {
@@ -67,7 +72,7 @@ namespace odr_tmpl {
   }
   namespace pvt_cv {
     template<typename T> T v; // expected-note {{previous definition is here}}
-    int v;   // expected-error {{redefinition of 'v' with a different type: 'int' vs 'T'}}
+    int v;   // expected-error {{redefinition of 'v' as different kind of symbol}}
   }
   namespace pvt_cvt {
     template<typename T> T v0; // expected-note {{previous definition is here}}
@@ -102,6 +107,9 @@ namespace odr_tmpl {
 #ifdef CXX11
     template<typename T> extern auto v;   // expected-error {{declaration of variable 'v' with type 'auto' requires an initializer}}
 #endif
+
+    template<typename T> T var = T();     // expected-note {{previous definition is here}}
+    extern int var;                       // expected-error {{redefinition of 'var' as different kind of symbol}}
   }
 
 #ifdef CXX11
@@ -118,7 +126,7 @@ namespace odr_tmpl {
   }
 #endif
   
-}  
+}
 
 namespace explicit_instantiation {
   template<typename T> 
@@ -311,6 +319,15 @@ namespace explicit_specialization {
     template<typename T> T var<T*> = T();     // expected-error {{redefinition of 'var' with a different type: 'T' vs 'auto'}}
 #endif
   }
+}
+
+namespace narrowing {
+  template<typename T> T v = {1234};  // expected-warning {{implicit conversion from 'int' to 'char' changes value from 1234 to}}
+#ifdef CXX11
+  // expected-error@-2 {{constant expression evaluates to 1234 which cannot be narrowed to type 'char'}}\
+  // expected-note@-2 {{override this message by inserting an explicit cast}}
+#endif
+  int k = v<char>;        // expected-note {{in instantiation of variable template specialization 'narrowing::v<char>' requested here}}
 }
 
 namespace use_in_structs {

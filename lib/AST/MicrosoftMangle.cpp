@@ -83,6 +83,7 @@ public:
 
   void mangle(const NamedDecl *D, StringRef Prefix = "\01?");
   void mangleName(const NamedDecl *ND);
+  void mangleDeclaration(const NamedDecl *ND);
   void mangleFunctionEncoding(const FunctionDecl *FD);
   void mangleVariableEncoding(const VarDecl *VD);
   void mangleNumber(int64_t Number);
@@ -317,9 +318,18 @@ void MicrosoftCXXNameMangler::mangleVariableEncoding(const VarDecl *VD) {
   // mangled as 'QAHA' instead of 'PAHB', for example.
   TypeLoc TL = VD->getTypeSourceInfo()->getTypeLoc();
   QualType Ty = TL.getType();
-  if (Ty->isPointerType() || Ty->isReferenceType()) {
+  if (Ty->isPointerType() || Ty->isReferenceType() ||
+      Ty->isMemberPointerType()) {
     mangleType(Ty, TL.getSourceRange(), QMM_Drop);
-    mangleQualifiers(Ty->getPointeeType().getQualifiers(), false);
+    if (PointersAre64Bit)
+      Out << 'E';
+    if (const MemberPointerType *MPT = Ty->getAs<MemberPointerType>()) {
+      mangleQualifiers(MPT->getPointeeType().getQualifiers(), true);
+      // Member pointers are suffixed with a back reference to the member
+      // pointer's class name.
+      mangleName(MPT->getClass()->getAsCXXRecordDecl());
+    } else
+      mangleQualifiers(Ty->getPointeeType().getQualifiers(), false);
   } else if (const ArrayType *AT = getASTContext().getAsArrayType(Ty)) {
     // Global arrays are funny, too.
     mangleDecayedArrayType(AT, true);
@@ -329,11 +339,7 @@ void MicrosoftCXXNameMangler::mangleVariableEncoding(const VarDecl *VD) {
       mangleQualifiers(Ty.getQualifiers(), false);
   } else {
     mangleType(Ty, TL.getSourceRange(), QMM_Drop);
-    mangleQualifiers(Ty.getLocalQualifiers(), Ty->isMemberPointerType());
-    // Member pointers are suffixed with a back reference to the member
-    // pointer's class name.
-    if (const MemberPointerType *MPT = Ty->getAs<MemberPointerType>())
-      mangleName(MPT->getClass()->getAsCXXRecordDecl());
+    mangleQualifiers(Ty.getLocalQualifiers(), false);
   }
 }
 
@@ -855,6 +861,33 @@ MicrosoftCXXNameMangler::mangleExpression(const Expr *E) {
     return;
   }
 
+  const CXXUuidofExpr *UE = 0;
+  if (const UnaryOperator *UO = dyn_cast<UnaryOperator>(E)) {
+    if (UO->getOpcode() == UO_AddrOf)
+      UE = dyn_cast<CXXUuidofExpr>(UO->getSubExpr());
+  } else
+    UE = dyn_cast<CXXUuidofExpr>(E);
+
+  if (UE) {
+    // This CXXUuidofExpr is mangled as-if it were actually a VarDecl from
+    // const __s_GUID _GUID_{lower case UUID with underscores}
+    StringRef Uuid = UE->getUuidAsStringRef(Context.getASTContext());
+    std::string Name = "_GUID_" + Uuid.lower();
+    std::replace(Name.begin(), Name.end(), '-', '_');
+
+    // If we had to peek through an address-of operator, treat this like we are
+    // dealing with a pointer type.  Otherwise, treat it like a const reference.
+    //
+    // N.B. This matches up with the handling of TemplateArgument::Declaration
+    // in mangleTemplateArg
+    if (UE == E)
+      Out << "$E?";
+    else
+      Out << "$1?";
+    Out << Name << "@@3U__s_GUID@@B";
+    return;
+  }
+
   // As bad as this diagnostic is, it's better than crashing.
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
@@ -886,9 +919,11 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
     mangleType(T, SourceRange(), QMM_Escape);
     break;
   }
-  case TemplateArgument::Declaration:
-    mangle(cast<NamedDecl>(TA.getAsDecl()), "$1?");
+  case TemplateArgument::Declaration: {
+    const NamedDecl *ND = cast<NamedDecl>(TA.getAsDecl());
+    mangle(ND, TA.isDeclForReferenceParam() ? "$E?" : "$1?");
     break;
+  }
   case TemplateArgument::Integral:
     mangleIntegerLiteral(TA.getAsIntegral(),
                          TA.getIntegralType()->isBooleanType());
@@ -994,9 +1029,6 @@ void MicrosoftCXXNameMangler::mangleQualifiers(Qualifiers Quals,
       Out << 'A';
     }
   } else {
-    if (PointersAre64Bit)
-      Out << 'E';
-
     if (HasConst && HasVolatile) {
       Out << 'T';
     } else if (HasVolatile) {
@@ -1245,8 +1277,11 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
 
   // If this is a C++ instance method, mangle the CVR qualifiers for the
   // this pointer.
-  if (IsInstMethod)
+  if (IsInstMethod) {
+    if (PointersAre64Bit)
+      Out << 'E';
     mangleQualifiers(Qualifiers::fromCVRMask(Proto->getTypeQuals()), false);
+  }
 
   mangleCallingConvention(T, IsInstMethod);
 
@@ -1264,7 +1299,10 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
     }
     Out << '@';
   } else {
-    mangleType(Proto->getResultType(), Range, QMM_Result);
+    QualType ResultType = Proto->getResultType();
+    if (ResultType->isVoidType())
+      ResultType = ResultType.getUnqualifiedType();
+    mangleType(ResultType, Range, QMM_Result);
   }
 
   // <argument-list> ::= X # void
@@ -1346,8 +1384,6 @@ void MicrosoftCXXNameMangler::mangleFunctionClass(const FunctionDecl *FD) {
         else
           Out << 'Q';
     }
-    if (PointersAre64Bit && !MD->isStatic())
-      Out << 'E';
   } else
     Out << 'Y';
 }
@@ -1535,6 +1571,8 @@ void MicrosoftCXXNameMangler::mangleType(const MemberPointerType *T,
     mangleName(T->getClass()->castAs<RecordType>()->getDecl());
     mangleFunctionType(FPT, NULL, false, true);
   } else {
+    if (PointersAre64Bit && !T->getPointeeType()->isFunctionType())
+      Out << 'E';
     mangleQualifiers(PointeeType.getQualifiers(), true);
     mangleName(T->getClass()->castAs<RecordType>()->getDecl());
     mangleType(PointeeType, Range, QMM_Drop);
@@ -1574,6 +1612,8 @@ void MicrosoftCXXNameMangler::mangleType(const ObjCObjectPointerType *T,
                                          SourceRange Range) {
   // Object pointers never have qualifiers.
   Out << 'A';
+  if (PointersAre64Bit && !T->getPointeeType()->isFunctionType())
+    Out << 'E';
   mangleType(T->getPointeeType(), Range);
 }
 
@@ -1681,13 +1721,9 @@ void MicrosoftCXXNameMangler::mangleType(const BlockPointerType *T,
   mangleFunctionType(pointee->castAs<FunctionProtoType>(), NULL, false, false);
 }
 
-void MicrosoftCXXNameMangler::mangleType(const InjectedClassNameType *T,
-                                         SourceRange Range) {
-  DiagnosticsEngine &Diags = Context.getDiags();
-  unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-    "cannot mangle this injected class name type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+void MicrosoftCXXNameMangler::mangleType(const InjectedClassNameType *,
+                                         SourceRange) {
+  llvm_unreachable("Cannot mangle injected class name type.");
 }
 
 void MicrosoftCXXNameMangler::mangleType(const TemplateSpecializationType *T,

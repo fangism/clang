@@ -331,24 +331,16 @@ void Sema::LookupTemplateName(LookupResult &Found,
         Found.addDecl(Corrected.getCorrectionDecl());
       FilterAcceptableTemplateNames(Found);
       if (!Found.empty()) {
-        std::string CorrectedStr(Corrected.getAsString(getLangOpts()));
-        std::string CorrectedQuotedStr(Corrected.getQuoted(getLangOpts()));
         if (LookupCtx) {
-          bool droppedSpecifier = Corrected.WillReplaceSpecifier() &&
+          std::string CorrectedStr(Corrected.getAsString(getLangOpts()));
+          bool DroppedSpecifier = Corrected.WillReplaceSpecifier() &&
                                   Name.getAsString() == CorrectedStr;
-          Diag(Found.getNameLoc(), diag::err_no_member_template_suggest)
-            << Name << LookupCtx << droppedSpecifier << CorrectedQuotedStr
-            << SS.getRange()
-            << FixItHint::CreateReplacement(Corrected.getCorrectionRange(),
-                                            CorrectedStr);
+          diagnoseTypo(Corrected, PDiag(diag::err_no_member_template_suggest)
+                                    << Name << LookupCtx << DroppedSpecifier
+                                    << SS.getRange());
         } else {
-          Diag(Found.getNameLoc(), diag::err_no_template_suggest)
-            << Name << CorrectedQuotedStr
-            << FixItHint::CreateReplacement(Found.getNameLoc(), CorrectedStr);
+          diagnoseTypo(Corrected, PDiag(diag::err_no_template_suggest) << Name);
         }
-        if (TemplateDecl *Template = Found.getAsSingle<TemplateDecl>())
-          Diag(Template->getLocation(), diag::note_previous_decl)
-            << CorrectedQuotedStr;
       }
     } else {
       Found.setLookupName(Name);
@@ -2280,32 +2272,6 @@ static bool CheckTemplateSpecializationScope(Sema &S, NamedDecl *Specialized,
                                              bool IsPartialSpecialization);
 
 static TemplateSpecializationKind getTemplateSpecializationKind(Decl *D);
-/*
-// Check the new variable specialization against the parsed input.
-//
-// FIXME: Model this against function specializations where
-// a new function declaration is checked against the specialization
-// as candidate for redefinition... (?)
-static bool CheckVariableTemplateSpecializationType() {
-
-  if (ExpectedType is undeduced &&  ParsedType is not undeduced)
-    ExpectedType = dedudeType();
-
-  if (both types are undeduced)
-    ???;
-
-  bool CheckType = !ExpectedType()->
-
-  if (!Context.hasSameType(DI->getType(), ExpectedDI->getType())) {
-    unsigned ErrStr = IsPartialSpecialization ? 2 : 1;
-    Diag(D.getIdentifierLoc(), diag::err_invalid_var_template_spec_type)
-        << ErrStr << VarTemplate << DI->getType() << ExpectedDI->getType();
-    Diag(VarTemplate->getLocation(), diag::note_template_declared_here)
-        << 2 << VarTemplate->getDeclName();
-    return true;
-  }
-}
-*/
 
 DeclResult Sema::ActOnVarTemplateSpecialization(
     Scope *S, VarTemplateDecl *VarTemplate, Declarator &D, TypeSourceInfo *DI,
@@ -2358,13 +2324,6 @@ DeclResult Sema::ActOnVarTemplateSpecialization(
   }
   if (!ExpectedDI)
     return true;
-
-  /*
-  // Check the new variable specialization against the parsed input.
-  // (Attributes are merged later below.)
-  if (CheckVariableTemplateSpecializationType())
-    return true;
-  */
 
   // Find the variable template (partial) specialization declaration that
   // corresponds to these arguments.
@@ -4206,14 +4165,6 @@ CheckTemplateArgumentAddressOfObjectOrFunction(Sema &S,
   if (!DRE) {
     S.Diag(Arg->getLocStart(), diag::err_template_arg_not_decl_ref)
     << Arg->getSourceRange();
-    S.Diag(Param->getLocation(), diag::note_template_param_here);
-    return true;
-  }
-
-  if (!isa<ValueDecl>(DRE->getDecl())) {
-    S.Diag(Arg->getLocStart(),
-           diag::err_template_arg_not_object_or_func_form)
-      << Arg->getSourceRange();
     S.Diag(Param->getLocation(), diag::note_template_param_here);
     return true;
   }

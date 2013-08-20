@@ -24,10 +24,14 @@
 #include "clang/Lex/PPConditionalDirectiveRecord.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "clang/Analysis/DomainSpecific/CocoaConventions.h"
+#include "clang/StaticAnalyzer/Checkers/ObjCRetainCount.h"
+#include "clang/AST/Attr.h"
 #include "llvm/ADT/SmallString.h"
 
 using namespace clang;
 using namespace arcmt;
+using namespace ento::objc_retain;
 
 namespace {
 
@@ -44,7 +48,15 @@ class ObjCMigrateASTConsumer : public ASTConsumer {
   void migrateFactoryMethod(ASTContext &Ctx, ObjCContainerDecl *CDecl,
                             ObjCMethodDecl *OM,
                             ObjCInstanceTypeFamily OIT_Family = OIT_None);
-
+  
+  void migrateCFFunctions(ASTContext &Ctx,
+                          const FunctionDecl *FuncDecl);
+  
+  bool migrateAddFunctionAnnotation(ASTContext &Ctx,
+                                    const FunctionDecl *FuncDecl);
+  
+  void migrateObjCMethodDeclAnnotation(ASTContext &Ctx,
+                                       const ObjCMethodDecl *MethodDecl);
 public:
   std::string MigrateDir;
   bool MigrateLiterals;
@@ -58,6 +70,7 @@ public:
   Preprocessor &PP;
   bool IsOutputFile;
   llvm::SmallPtrSet<ObjCProtocolDecl *, 32> ObjCProtocolDecls;
+  llvm::SmallVector<const FunctionDecl *, 8> CFFunctionIBCandidates;
   
   ObjCMigrateASTConsumer(StringRef migrateDir,
                          bool migrateLiterals,
@@ -487,6 +500,7 @@ static bool rewriteToNSMacroDecl(const EnumDecl *EnumDcl,
 static bool UseNSOptionsMacro(ASTContext &Ctx,
                               const EnumDecl *EnumDcl) {
   bool PowerOfTwo = true;
+  uint64_t MaxPowerOfTwoVal = 0;
   for (EnumDecl::enumerator_iterator EI = EnumDcl->enumerator_begin(),
        EE = EnumDcl->enumerator_end(); EI != EE; ++EI) {
     EnumConstantDecl *Enumerator = (*EI);
@@ -501,10 +515,14 @@ static bool UseNSOptionsMacro(ASTContext &Ctx,
         return true;
     
     uint64_t EnumVal = Enumerator->getInitVal().getZExtValue();
-    if (PowerOfTwo && EnumVal && !llvm::isPowerOf2_64(EnumVal))
-      PowerOfTwo = false;
+    if (PowerOfTwo && EnumVal) {
+      if (!llvm::isPowerOf2_64(EnumVal))
+        PowerOfTwo = false;
+      else if (EnumVal > MaxPowerOfTwoVal)
+        MaxPowerOfTwoVal = EnumVal;
+    }
   }
-  return PowerOfTwo;
+  return PowerOfTwo && (MaxPowerOfTwoVal > 2);
 }
 
 void ObjCMigrateASTConsumer::migrateProtocolConformance(ASTContext &Ctx,   
@@ -709,6 +727,10 @@ void ObjCMigrateASTConsumer::migrateFactoryMethod(ASTContext &Ctx,
   LoweredClassName = StringLoweredClassName;
   
   IdentifierInfo *MethodIdName = OM->getSelector().getIdentifierInfoForSlot(0);
+  // Handle method with no name at its first selector slot; e.g. + (id):(int)x.
+  if (!MethodIdName)
+    return;
+  
   std::string MethodName = MethodIdName->getName();
   if (OIT_Family == OIT_Singleton) {
     StringRef STRefMethodName(MethodName);
@@ -737,6 +759,134 @@ void ObjCMigrateASTConsumer::migrateFactoryMethod(ASTContext &Ctx,
   if (!LoweredMethodName.startswith(ClassNamePostfix))
     return;
   ReplaceWithInstancetype(*this, OM);
+}
+
+static bool IsVoidStarType(QualType Ty) {
+  if (!Ty->isPointerType())
+    return false;
+  
+  while (const TypedefType *TD = dyn_cast<TypedefType>(Ty.getTypePtr()))
+    Ty = TD->getDecl()->getUnderlyingType();
+  
+  // Is the type void*?
+  const PointerType* PT = Ty->getAs<PointerType>();
+  if (PT->getPointeeType().getUnqualifiedType()->isVoidType())
+    return true;
+  return IsVoidStarType(PT->getPointeeType());
+}
+
+static bool
+AuditedType (QualType AT) {
+  if (!AT->isPointerType())
+    return true;
+  if (IsVoidStarType(AT))
+    return false;
+  
+  // FIXME. There isn't much we can say about CF pointer type; or is there?
+  if (ento::coreFoundation::isCFObjectRef(AT))
+    return false;
+  return true;
+}
+
+void ObjCMigrateASTConsumer::migrateCFFunctions(
+                               ASTContext &Ctx,
+                               const FunctionDecl *FuncDecl) {
+  if (FuncDecl->hasAttr<CFAuditedTransferAttr>()) {
+    assert(CFFunctionIBCandidates.empty() &&
+           "Cannot have audited functions inside user "
+           "provided CF_IMPLICIT_BRIDGING_ENABLE");
+    return;
+  }
+  
+  // Finction must be annotated first.
+  bool Audited = migrateAddFunctionAnnotation(Ctx, FuncDecl);
+  if (Audited)
+    CFFunctionIBCandidates.push_back(FuncDecl);
+  else if (!CFFunctionIBCandidates.empty()) {
+    if (!Ctx.Idents.get("CF_IMPLICIT_BRIDGING_ENABLED").hasMacroDefinition()) {
+      CFFunctionIBCandidates.clear();
+      return;
+    }
+    // Insert CF_IMPLICIT_BRIDGING_ENABLE/CF_IMPLICIT_BRIDGING_DISABLED
+    const FunctionDecl *FirstFD = CFFunctionIBCandidates[0];
+    const FunctionDecl *LastFD  =
+      CFFunctionIBCandidates[CFFunctionIBCandidates.size()-1];
+    const char *PragmaString = "\nCF_IMPLICIT_BRIDGING_ENABLED\n";
+    edit::Commit commit(*Editor);
+    commit.insertBefore(FirstFD->getLocStart(), PragmaString);
+    PragmaString = "\nCF_IMPLICIT_BRIDGING_DISABLED\n";
+    SourceLocation EndLoc = LastFD->getLocEnd();
+    // get location just past end of function location.
+    EndLoc = PP.getLocForEndOfToken(EndLoc);
+    Token Tok;
+    // get locaiton of token that comes after end of function.
+    bool Failed = PP.getRawToken(EndLoc, Tok, /*IgnoreWhiteSpace=*/true);
+    if (!Failed)
+      EndLoc = Tok.getLocation();
+    commit.insertAfterToken(EndLoc, PragmaString);
+    Editor->commit(commit);
+    
+    CFFunctionIBCandidates.clear();
+  }
+  // FIXME. Also must insert CF_IMPLICIT_BRIDGING_ENABLE/CF_IMPLICIT_BRIDGING_DISABLED
+  // when leaving current file.
+}
+
+bool ObjCMigrateASTConsumer::migrateAddFunctionAnnotation(
+                                                ASTContext &Ctx,
+                                                const FunctionDecl *FuncDecl) {
+  if (FuncDecl->hasBody())
+    return false;
+  CallEffects CE  = CallEffects::getEffect(FuncDecl);
+  if (!FuncDecl->getAttr<CFReturnsRetainedAttr>() &&
+      !FuncDecl->getAttr<CFReturnsNotRetainedAttr>()) {
+    RetEffect Ret = CE.getReturnValue();
+    const char *AnnotationString = 0;
+    if (Ret.getObjKind() == RetEffect::CF && Ret.isOwned()) {
+      if (Ctx.Idents.get("CF_RETURNS_RETAINED").hasMacroDefinition())
+        AnnotationString = " CF_RETURNS_RETAINED";
+    }
+    else if (Ret.getObjKind() == RetEffect::CF && !Ret.isOwned()) {
+      if (Ctx.Idents.get("CF_RETURNS_NOT_RETAINED").hasMacroDefinition())
+        AnnotationString = " CF_RETURNS_NOT_RETAINED";
+    }
+    if (AnnotationString) {
+      edit::Commit commit(*Editor);
+      commit.insertAfterToken(FuncDecl->getLocEnd(), AnnotationString);
+      Editor->commit(commit);
+    }
+    else if (!AuditedType(FuncDecl->getResultType()))
+      return false;
+  }
+  // At this point result type is either annotated or audited.
+  // Now, how about argument types.
+  llvm::ArrayRef<ArgEffect> AEArgs = CE.getArgs();
+  unsigned i = 0;
+  for (FunctionDecl::param_const_iterator pi = FuncDecl->param_begin(),
+       pe = FuncDecl->param_end(); pi != pe; ++pi, ++i) {
+    ArgEffect AE = AEArgs[i];
+    if (AE == DecRefMsg /*NSConsumed annotated*/ ||
+        AE == DecRef /*CFConsumed annotated*/)
+      continue;
+
+    if (AE != DoNothing && AE != MayEscape)
+      return false;
+    const ParmVarDecl *pd = *pi;
+    QualType AT = pd->getType();
+    if (!AuditedType(AT))
+      return false;
+  }
+  return true;
+}
+
+void ObjCMigrateASTConsumer::migrateObjCMethodDeclAnnotation(
+                                            ASTContext &Ctx,
+                                            const ObjCMethodDecl *MethodDecl) {
+  if (MethodDecl->hasAttr<CFAuditedTransferAttr>() ||
+      MethodDecl->getAttr<CFReturnsRetainedAttr>() ||
+      MethodDecl->getAttr<CFReturnsNotRetainedAttr>() ||
+      MethodDecl->hasBody())
+    return;
 }
 
 namespace {
@@ -777,6 +927,11 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
           if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N))
             migrateNSEnumDecl(Ctx, ED, TD);
       }
+      else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D))
+        migrateCFFunctions(Ctx, FD);
+      else if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(*D))
+        migrateObjCMethodDeclAnnotation(Ctx, MD);
+      
       // migrate methods which can have instancetype as their result type.
       if (ObjCContainerDecl *CDecl = dyn_cast<ObjCContainerDecl>(*D))
         migrateInstanceType(Ctx, CDecl);

@@ -115,7 +115,9 @@ class CGDebugInfo {
   llvm::DIType CreateType(const BlockPointerType *Ty, llvm::DIFile F);
   llvm::DIType CreateType(const FunctionType *Ty, llvm::DIFile F);
   llvm::DIType CreateType(const RecordType *Ty, bool Declaration);
+  llvm::DIType CreateTypeDefinition(const RecordType *Ty);
   llvm::DIType CreateLimitedType(const RecordType *Ty);
+  void CollectContainingType(const CXXRecordDecl *RD, llvm::DICompositeType CT);
   llvm::DIType CreateType(const ObjCInterfaceType *Ty, llvm::DIFile F);
   llvm::DIType CreateType(const ObjCObjectType *Ty, llvm::DIFile F);
   llvm::DIType CreateType(const VectorType *Ty, llvm::DIFile F);
@@ -183,16 +185,15 @@ class CGDebugInfo {
   void CollectRecordLambdaFields(const CXXRecordDecl *CXXDecl,
                                  SmallVectorImpl<llvm::Value *> &E,
                                  llvm::DIType RecordTy);
-  void CollectRecordStaticField(const VarDecl *Var,
-                                SmallVectorImpl<llvm::Value *> &E,
-                                llvm::DIType RecordTy);
+  llvm::DIDerivedType CreateRecordStaticField(const VarDecl *Var,
+                                              llvm::DIType RecordTy);
   void CollectRecordNormalField(const FieldDecl *Field, uint64_t OffsetInBits,
                                 llvm::DIFile F,
                                 SmallVectorImpl<llvm::Value *> &E,
                                 llvm::DIType RecordTy);
   void CollectRecordFields(const RecordDecl *Decl, llvm::DIFile F,
                            SmallVectorImpl<llvm::Value *> &E,
-                           llvm::DIType RecordTy);
+                           llvm::DICompositeType RecordTy);
 
   void CollectVTableInfo(const CXXRecordDecl *Decl,
                          llvm::DIFile F,
@@ -288,7 +289,9 @@ public:
   llvm::DIType getOrCreateInterfaceType(QualType Ty,
                                         SourceLocation Loc);
 
-  void completeFwdDecl(const RecordDecl &TD);
+  void completeType(const RecordDecl *RD);
+  void completeRequiredType(const RecordDecl *RD);
+  void completeClassData(const RecordDecl *RD);
 
 private:
   /// EmitDeclare - Emit call to llvm.dbg.declare for a variable declaration.
@@ -305,9 +308,8 @@ private:
 
   llvm::DIScope getCurrentContextDescriptor(const Decl *Decl);
 
-  /// createRecordFwdDecl - Create a forward decl for a RecordType in a given
-  /// context.
-  llvm::DIType createRecordFwdDecl(const RecordDecl *, llvm::DIDescriptor);
+  /// \brief Create a forward decl for a RecordType in a given context.
+  llvm::DIType getOrCreateRecordFwdDecl(const RecordDecl *, llvm::DIDescriptor);
 
   /// createContextChain - Create a set of decls for the context chain.
   llvm::DIDescriptor createContextChain(const Decl *Decl);
@@ -331,7 +333,7 @@ private:
 
   /// getOrCreateLimitedType - Get the type from the cache or create a new
   /// partial type if necessary.
-  llvm::DIType getOrCreateLimitedType(QualType Ty, llvm::DIFile F);
+  llvm::DIType getOrCreateLimitedType(const RecordType *Ty, llvm::DIFile F);
 
   /// CreateTypeNode - Create type metadata for a source language type.
   llvm::DIType CreateTypeNode(QualType Ty, llvm::DIFile F, bool Declaration);
@@ -339,10 +341,6 @@ private:
   /// getObjCInterfaceDecl - return the underlying ObjCInterfaceDecl
   /// if Ty is an ObjCInterface or a pointer to one.
   ObjCInterfaceDecl* getObjCInterfaceDecl(QualType Ty);
-
-  /// CreateLimitedTypeNode - Create type metadata for a source language
-  /// type, but only partial types for records.
-  llvm::DIType CreateLimitedTypeNode(QualType Ty, llvm::DIFile F);
 
   /// CreateMemberType - Create new member and increase Offset by FType's size.
   llvm::DIType CreateMemberType(llvm::DIFile Unit, QualType FType,
@@ -356,10 +354,13 @@ private:
   /// declaration for the given method definition.
   llvm::DISubprogram getFunctionDeclaration(const Decl *D);
 
-  /// getStaticDataMemberDeclaration - Return debug info descriptor to
-  /// describe in-class static data member declaration for the given
-  /// out-of-class definition.
-  llvm::DIDerivedType getStaticDataMemberDeclaration(const Decl *D);
+  /// Return debug info descriptor to describe in-class static data member
+  /// declaration for the given out-of-class definition.
+  llvm::DIDerivedType
+  getOrCreateStaticDataMemberDeclarationOrNull(const VarDecl *D);
+  llvm::DIDerivedType
+  getOrCreateStaticDataMemberDeclaration(const VarDecl *D,
+                                         llvm::DICompositeType Ctxt);
 
   /// getFunctionName - Get function name for the given FunctionDecl. If the
   /// name is constructred on demand (e.g. C++ destructor) then the name

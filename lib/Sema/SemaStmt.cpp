@@ -291,11 +291,10 @@ sema::CompoundScopeInfo &Sema::getCurCompoundScope() const {
   return getCurFunction()->CompoundScopes.back();
 }
 
-StmtResult
-Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
-                        MultiStmtArg elts, bool isStmtExpr) {
-  unsigned NumElts = elts.size();
-  Stmt **Elts = elts.data();
+StmtResult Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
+                                   ArrayRef<Stmt *> Elts, bool isStmtExpr) {
+  const unsigned NumElts = Elts.size();
+
   // If we're in C89 mode, check that we don't have any decls after stmts.  If
   // so, emit an extension diagnostic.
   if (!getLangOpts().C99 && !getLangOpts().CPlusPlus) {
@@ -332,9 +331,7 @@ Sema::ActOnCompoundStmt(SourceLocation L, SourceLocation R,
       DiagnoseEmptyLoopBody(Elts[i], Elts[i + 1]);
   }
 
-  return Owned(new (Context) CompoundStmt(Context,
-                                          llvm::makeArrayRef(Elts, NumElts),
-                                          L, R));
+  return Owned(new (Context) CompoundStmt(Context, Elts, L, R));
 }
 
 StmtResult
@@ -2611,7 +2608,21 @@ bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
     IgnoreParens().castAs<FunctionProtoTypeLoc>().getResultLoc();
   QualType Deduced;
 
-  if (RetExpr) {
+  if (RetExpr && isa<InitListExpr>(RetExpr)) {
+    //  If the deduction is for a return statement and the initializer is
+    //  a braced-init-list, the program is ill-formed.
+    Diag(RetExpr->getExprLoc(), diag::err_auto_fn_return_init_list);
+    return true;
+  }
+
+  if (FD->isDependentContext()) {
+    // C++1y [dcl.spec.auto]p12:
+    //   Return type deduction [...] occurs when the definition is
+    //   instantiated even if the function body contains a return
+    //   statement with a non-type-dependent operand.
+    assert(AT->isDeduced() && "should have deduced to dependent type");
+    return false;
+  } else if (RetExpr) {
     //  If the deduction is for a return statement and the initializer is
     //  a braced-init-list, the program is ill-formed.
     if (isa<InitListExpr>(RetExpr)) {
@@ -2652,7 +2663,8 @@ bool Sema::DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
   //  the program is ill-formed.
   if (AT->isDeduced() && !FD->isInvalidDecl()) {
     AutoType *NewAT = Deduced->getContainedAutoType();
-    if (!Context.hasSameType(AT->getDeducedType(), NewAT->getDeducedType())) {
+    if (!FD->isDependentContext() &&
+        !Context.hasSameType(AT->getDeducedType(), NewAT->getDeducedType())) {
       Diag(ReturnLoc, diag::err_auto_fn_different_deductions)
         << (AT->isDecltypeAuto() ? 1 : 0)
         << NewAT->getDeducedType() << AT->getDeducedType();
@@ -2696,13 +2708,10 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
 
   // FIXME: Add a flag to the ScopeInfo to indicate whether we're performing
   // deduction.
-  bool HasDependentReturnType = FnRetType->isDependentType();
   if (getLangOpts().CPlusPlus1y) {
     if (AutoType *AT = FnRetType->getContainedAutoType()) {
       FunctionDecl *FD = cast<FunctionDecl>(CurContext);
-      if (CurContext->isDependentContext())
-        HasDependentReturnType = true;
-      else if (DeduceFunctionTypeFromReturnExpr(FD, ReturnLoc, RetValExp, AT)) {
+      if (DeduceFunctionTypeFromReturnExpr(FD, ReturnLoc, RetValExp, AT)) {
         FD->setInvalidDecl();
         return StmtError();
       } else {
@@ -2710,6 +2719,8 @@ Sema::ActOnReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
       }
     }
   }
+
+  bool HasDependentReturnType = FnRetType->isDependentType();
 
   ReturnStmt *Result = 0;
   if (FnRetType->isVoidType()) {
