@@ -60,7 +60,8 @@ public:
   ///
   /// If \p DryRun is \c false, also creates and stores the required
   /// \c Replacement.
-  unsigned addTokenToState(LineState &State, bool Newline, bool DryRun);
+  unsigned addTokenToState(LineState &State, bool Newline, bool DryRun,
+                           unsigned ExtraSpaces = 0);
 
   /// \brief Get the column limit for this line. This is the style's column
   /// limit, potentially reduced for preprocessor definitions.
@@ -82,6 +83,13 @@ private:
   /// tokens) is handled in \c addNextStateToQueue.
   unsigned breakProtrudingToken(const FormatToken &Current, LineState &State,
                                 bool DryRun);
+
+  /// \brief Returns \c true if the next token starts a multiline string
+  /// literal.
+  ///
+  /// This includes implicitly concatenated strings, strings that will be broken
+  /// by clang-format and string literals with escaped newlines.
+  bool NextIsMultilineString(const LineState &State);
 
   FormatStyle Style;
   SourceManager &SourceMgr;

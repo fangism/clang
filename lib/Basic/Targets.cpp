@@ -1538,7 +1538,7 @@ const TargetInfo::AddlRegName AddlRegNames[] = {
 // most of the implementation can be shared.
 class X86TargetInfo : public TargetInfo {
   enum X86SSEEnum {
-    NoSSE, SSE1, SSE2, SSE3, SSSE3, SSE41, SSE42, AVX, AVX2, AVX512
+    NoSSE, SSE1, SSE2, SSE3, SSSE3, SSE41, SSE42, AVX, AVX2, AVX512F
   } SSELevel;
   enum MMX3DNowEnum {
     NoMMX3DNow, MMX, AMD3DNow, AMD3DNowAthlon
@@ -1562,6 +1562,7 @@ class X86TargetInfo : public TargetInfo {
   bool HasRDSEED;
   bool HasFMA;
   bool HasF16C;
+  bool HasAVX512CD, HasAVX512ER, HasAVX512PF;
 
   /// \brief Enumeration of all of the X86 CPUs supported by Clang.
   ///
@@ -1708,13 +1709,20 @@ class X86TargetInfo : public TargetInfo {
     //@}
   } CPU;
 
+  enum FPMathKind {
+    FP_Default,
+    FP_SSE,
+    FP_387
+  } FPMath;
+
 public:
   X86TargetInfo(const llvm::Triple &Triple)
       : TargetInfo(Triple), SSELevel(NoSSE), MMX3DNowLevel(NoMMX3DNow),
         XOPLevel(NoXOP), HasAES(false), HasPCLMUL(false), HasLZCNT(false),
         HasRDRND(false), HasBMI(false), HasBMI2(false), HasPOPCNT(false),
         HasRTM(false), HasPRFCHW(false), HasRDSEED(false), HasFMA(false),
-        HasF16C(false), CPU(CK_Generic) {
+        HasF16C(false), HasAVX512CD(false), HasAVX512ER(false),
+        HasAVX512PF(false), CPU(CK_Generic), FPMath(FP_Default) {
     BigEndian = false;
     LongDoubleFormat = &llvm::APFloat::x87DoubleExtended;
   }
@@ -1761,7 +1769,8 @@ public:
                                  bool Enabled) const;
   virtual void getDefaultFeatures(llvm::StringMap<bool> &Features) const;
   virtual bool hasFeature(StringRef Feature) const;
-  virtual void HandleTargetFeatures(std::vector<std::string> &Features);
+  virtual bool HandleTargetFeatures(std::vector<std::string> &Features,
+                                    DiagnosticsEngine &Diags);
   virtual const char* getABI() const {
     if (getTriple().getArch() == llvm::Triple::x86_64 && SSELevel >= AVX)
       return "avx";
@@ -1893,6 +1902,8 @@ public:
     llvm_unreachable("Unhandled CPU kind");
   }
 
+  virtual bool setFPMath(StringRef Name);
+
   virtual CallingConvCheckResult checkCallingConvention(CallingConv CC) const {
     // We accept all non-ARM calling conventions
     return (CC == CC_X86ThisCall ||
@@ -1907,6 +1918,18 @@ public:
     return MT == CCMT_Member ? CC_X86ThisCall : CC_C;
   }
 };
+
+bool X86TargetInfo::setFPMath(StringRef Name) {
+  if (Name == "387") {
+    FPMath = FP_387;
+    return true;
+  }
+  if (Name == "sse") {
+    FPMath = FP_SSE;
+    return true;
+  }
+  return false;
+}
 
 void X86TargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
   // FIXME: This *really* should not be here.
@@ -1953,7 +1976,7 @@ void X86TargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
     setFeatureEnabled(Features, "ssse3", true);
     break;
   case CK_Corei7:
-    setFeatureEnabled(Features, "sse4", true);
+    setFeatureEnabled(Features, "sse4.2", true);
     break;
   case CK_Corei7AVX:
     setFeatureEnabled(Features, "avx", true);
@@ -1980,7 +2003,10 @@ void X86TargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
     setFeatureEnabled(Features, "fma", true);
     break;
   case CK_KNL:
-    setFeatureEnabled(Features, "avx-512", true);
+    setFeatureEnabled(Features, "avx512f", true);
+    setFeatureEnabled(Features, "avx512cd", true);
+    setFeatureEnabled(Features, "avx512er", true);
+    setFeatureEnabled(Features, "avx512pf", true);
     setFeatureEnabled(Features, "aes", true);
     setFeatureEnabled(Features, "pclmul", true);
     setFeatureEnabled(Features, "lzcnt", true);
@@ -2072,16 +2098,16 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
                                 X86SSEEnum Level, bool Enabled) const {
   if (Enabled) {
     switch (Level) {
-    case AVX512:
-      Features["avx-512"] = true;
+    case AVX512F:
+      Features["avx512f"] = true;
     case AVX2:
       Features["avx2"] = true;
     case AVX:
       Features["avx"] = true;
     case SSE42:
-      Features["popcnt"] = Features["sse42"] = true;
+      Features["popcnt"] = Features["sse4.2"] = true;
     case SSE41:
-      Features["sse41"] = true;
+      Features["sse4.1"] = true;
     case SSSE3:
       Features["ssse3"] = true;
     case SSE3:
@@ -2089,7 +2115,8 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
     case SSE2:
       Features["sse2"] = true;
     case SSE1:
-      setMMXLevel(Features, MMX, Enabled);
+      if (!Features.count("mmx"))
+        setMMXLevel(Features, MMX, Enabled);
       Features["sse"] = true;
     case NoSSE:
       break;
@@ -2109,16 +2136,17 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
   case SSSE3:
     Features["ssse3"] = false;
   case SSE41:
-    Features["sse41"] = false;
+    Features["sse4.1"] = false;
   case SSE42:
-    Features["popcnt"] = Features["sse42"] = false;
+    Features["popcnt"] = Features["sse4.2"] = false;
   case AVX:
     Features["fma"] = Features["avx"] = false;
-    setXOPLevel(Features, SSE4A, false);
+    setXOPLevel(Features, FMA4, false);
   case AVX2:
     Features["avx2"] = false;
-  case AVX512:
-    Features["avx-512"] = false;
+  case AVX512F:
+    Features["avx512f"] = Features["avx512cd"] = Features["avx512er"] =
+      Features["avx512pf"] = false;
   }
 }
 
@@ -2183,12 +2211,8 @@ void X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
                                       bool Enabled) const {
   // FIXME: This *really* should not be here.  We need some way of translating
   // options into llvm subtarget features.
-  if (Name == "sse4" || Name == "sse4.2")
-    Name = "sse42";
-  if (Name == "sse4.1")
-    Name = "sse41";
-  if (Name == "rdrnd")
-    Name = "rdrand";
+  if (Name == "sse4")
+    Name = "sse4.2";
 
   Features[Name] = Enabled;
 
@@ -2202,9 +2226,9 @@ void X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
     setSSELevel(Features, SSE3, Enabled);
   else if (Name == "ssse3")
     setSSELevel(Features, SSSE3, Enabled);
-  else if (Name == "sse42")
+  else if (Name == "sse4.2")
     setSSELevel(Features, SSE42, Enabled);
-  else if (Name == "sse41")
+  else if (Name == "sse4.1")
     setSSELevel(Features, SSE41, Enabled);
   else if (Name == "3dnow")
     setMMXLevel(Features, AMD3DNow, Enabled);
@@ -2220,9 +2244,12 @@ void X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
     setSSELevel(Features, AVX, Enabled);
   else if (Name == "avx2")
     setSSELevel(Features, AVX2, Enabled);
-  else if (Name == "avx-512")
-    setSSELevel(Features, AVX512, Enabled);
-  else if (Name == "fma") {
+  else if (Name == "avx512f")
+    setSSELevel(Features, AVX512F, Enabled);
+  else if (Name == "avx512cd" || Name == "avx512er" || Name == "avx512pf") {
+    if (Enabled)
+      setSSELevel(Features, AVX512F, Enabled);
+  } else if (Name == "fma") {
     if (Enabled)
       setSSELevel(Features, AVX, Enabled);
   } else if (Name == "fma4") {
@@ -2236,7 +2263,8 @@ void X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
 
 /// HandleTargetOptions - Perform initialization based on the user
 /// configured set of features.
-void X86TargetInfo::HandleTargetFeatures(std::vector<std::string> &Features) {
+bool X86TargetInfo::HandleTargetFeatures(std::vector<std::string> &Features,
+                                         DiagnosticsEngine &Diags) {
   // Remember the maximum enabled sselevel.
   for (unsigned i = 0, e = Features.size(); i !=e; ++i) {
     // Ignore disabled features.
@@ -2260,7 +2288,7 @@ void X86TargetInfo::HandleTargetFeatures(std::vector<std::string> &Features) {
       continue;
     }
 
-    if (Feature == "rdrand") {
+    if (Feature == "rdrnd") {
       HasRDRND = true;
       continue;
     }
@@ -2305,13 +2333,28 @@ void X86TargetInfo::HandleTargetFeatures(std::vector<std::string> &Features) {
       continue;
     }
 
+    if (Feature == "avx512cd") {
+      HasAVX512CD = true;
+      continue;
+    }
+
+    if (Feature == "avx512er") {
+      HasAVX512ER = true;
+      continue;
+    }
+
+    if (Feature == "avx512pf") {
+      HasAVX512PF = true;
+      continue;
+    }
+
     assert(Features[i][0] == '+' && "Invalid target feature!");
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
-      .Case("avx-512", AVX512)
+      .Case("avx512f", AVX512F)
       .Case("avx2", AVX2)
       .Case("avx", AVX)
-      .Case("sse42", SSE42)
-      .Case("sse41", SSE41)
+      .Case("sse4.2", SSE42)
+      .Case("sse4.1", SSE41)
       .Case("ssse3", SSSE3)
       .Case("sse3", SSE3)
       .Case("sse2", SSE2)
@@ -2335,12 +2378,23 @@ void X86TargetInfo::HandleTargetFeatures(std::vector<std::string> &Features) {
     XOPLevel = std::max(XOPLevel, XLevel);
   }
 
+  // LLVM doesn't have a separate switch for fpmath, so only accept it if it
+  // matches the selected sse level.
+  if (FPMath == FP_SSE && SSELevel < SSE1) {
+    Diags.Report(diag::err_target_unsupported_fpmath) << "sse";
+    return false;
+  } else if (FPMath == FP_387 && SSELevel >= SSE1) {
+    Diags.Report(diag::err_target_unsupported_fpmath) << "387";
+    return false;
+  }
+
   // Don't tell the backend if we're turning off mmx; it will end up disabling
   // SSE, which we don't want.
   std::vector<std::string>::iterator it;
   it = std::find(Features.begin(), Features.end(), "-mmx");
   if (it != Features.end())
     Features.erase(it);
+  return true;
 }
 
 /// X86TargetInfo::getTargetDefines - Return the set of the X86-specific macro
@@ -2540,9 +2594,16 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   if (HasF16C)
     Builder.defineMacro("__F16C__");
 
+  if (HasAVX512CD)
+    Builder.defineMacro("__AVX512CD__");
+  if (HasAVX512ER)
+    Builder.defineMacro("__AVX512ER__");
+  if (HasAVX512PF)
+    Builder.defineMacro("__AVX512PF__");
+
   // Each case falls through to the previous one here.
   switch (SSELevel) {
-  case AVX512:
+  case AVX512F:
     Builder.defineMacro("__AVX512F__");
   case AVX2:
     Builder.defineMacro("__AVX2__");
@@ -2568,7 +2629,7 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
 
   if (Opts.MicrosoftExt && getTriple().getArch() == llvm::Triple::x86) {
     switch (SSELevel) {
-    case AVX512:
+    case AVX512F:
     case AVX2:
     case AVX:
     case SSE42:
@@ -2612,7 +2673,10 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("aes", HasAES)
       .Case("avx", SSELevel >= AVX)
       .Case("avx2", SSELevel >= AVX2)
-      .Case("avx512", SSELevel >= AVX512)
+      .Case("avx512f", SSELevel >= AVX512F)
+      .Case("avx512cd", HasAVX512CD)
+      .Case("avx512er", HasAVX512ER)
+      .Case("avx512pf", HasAVX512PF)
       .Case("bmi", HasBMI)
       .Case("bmi2", HasBMI2)
       .Case("fma", HasFMA)
@@ -2631,8 +2695,8 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("sse2", SSELevel >= SSE2)
       .Case("sse3", SSELevel >= SSE3)
       .Case("ssse3", SSELevel >= SSSE3)
-      .Case("sse41", SSELevel >= SSE41)
-      .Case("sse42", SSELevel >= SSE42)
+      .Case("sse4.1", SSELevel >= SSE41)
+      .Case("sse4.2", SSELevel >= SSE42)
       .Case("sse4a", XOPLevel >= SSE4A)
       .Case("x86", true)
       .Case("x86_32", getTriple().getArch() == llvm::Triple::x86)
@@ -3245,12 +3309,14 @@ public:
     return Feature == "aarch64" || (Feature == "neon" && FPU == NeonMode);
   }
 
-  virtual void HandleTargetFeatures(std::vector<std::string> &Features) {
+  virtual bool HandleTargetFeatures(std::vector<std::string> &Features,
+                                    DiagnosticsEngine &Diags) {
     FPU = FPUMode;
     for (unsigned i = 0, e = Features.size(); i != e; ++i) {
       if (Features[i] == "+neon")
         FPU = NeonMode;
     }
+    return true;
   }
 
   virtual void getGCCRegNames(const char *const *&Names,
@@ -3386,6 +3452,12 @@ class ARMTargetInfo : public TargetInfo {
 
   std::string ABI, CPU;
 
+  enum {
+    FP_Default,
+    FP_VFP,
+    FP_Neon
+  } FPMath;
+
   unsigned FPU : 4;
 
   unsigned IsAAPCS : 1;
@@ -3430,7 +3502,7 @@ class ARMTargetInfo : public TargetInfo {
 public:
   ARMTargetInfo(const llvm::Triple &Triple)
       : TargetInfo(Triple), ABI("aapcs-linux"), CPU("arm1136j-s"),
-        IsAAPCS(true) {
+        FPMath(FP_Default), IsAAPCS(true) {
     BigEndian = false;
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
@@ -3536,7 +3608,8 @@ public:
     }
   }
 
-  virtual void HandleTargetFeatures(std::vector<std::string> &Features) {
+  virtual bool HandleTargetFeatures(std::vector<std::string> &Features,
+                                    DiagnosticsEngine &Diags) {
     FPU = 0;
     SoftFloat = SoftFloatABI = false;
     for (unsigned i = 0, e = Features.size(); i != e; ++i) {
@@ -3554,6 +3627,16 @@ public:
         FPU |= NeonFPU;
     }
 
+    if (!(FPU & NeonFPU) && FPMath == FP_Neon) {
+      Diags.Report(diag::err_target_unsupported_fpmath) << "neon";
+      return false;
+    }
+
+    if (FPMath == FP_Neon)
+      Features.push_back("+neonfp");
+    else if (FPMath == FP_VFP)
+      Features.push_back("-neonfp");
+
     // Remove front-end specific options which the backend handles differently.
     std::vector<std::string>::iterator it;
     it = std::find(Features.begin(), Features.end(), "+soft-float");
@@ -3562,6 +3645,7 @@ public:
     it = std::find(Features.begin(), Features.end(), "+soft-float-abi");
     if (it != Features.end())
       Features.erase(it);
+    return true;
   }
 
   virtual bool hasFeature(StringRef Feature) const {
@@ -3614,6 +3698,7 @@ public:
     CPU = Name;
     return true;
   }
+  virtual bool setFPMath(StringRef Name);
   virtual void getTargetDefines(const LangOptions &Opts,
                                 MacroBuilder &Builder) const {
     // Target identification.
@@ -3784,6 +3869,18 @@ public:
     return -1;
   }
 };
+
+bool ARMTargetInfo::setFPMath(StringRef Name) {
+  if (Name == "neon") {
+    FPMath = FP_Neon;
+    return true;
+  } else if (Name == "vfp" || Name == "vfp2" || Name == "vfp3" ||
+             Name == "vfp4") {
+    FPMath = FP_VFP;
+    return true;
+  }
+  return false;
+}
 
 const char * const ARMTargetInfo::GCCRegNames[] = {
   // Integer registers
@@ -4035,11 +4132,13 @@ class SparcTargetInfo : public TargetInfo {
 public:
   SparcTargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {}
 
-  virtual void HandleTargetFeatures(std::vector<std::string> &Features) {
+  virtual bool HandleTargetFeatures(std::vector<std::string> &Features,
+                                    DiagnosticsEngine &Diags) {
     SoftFloat = false;
     for (unsigned i = 0, e = Features.size(); i != e; ++i)
       if (Features[i] == "+soft-float")
         SoftFloat = true;
+    return true;
   }
   virtual void getTargetDefines(const LangOptions &Opts,
                                 MacroBuilder &Builder) const {
@@ -4607,17 +4706,8 @@ public:
     return "";
   }
 
-  virtual void setFeatureEnabled(llvm::StringMap<bool> &Features,
-                                 StringRef Name,
-                                 bool Enabled) const {
-    if (Name == "32")
-      Name = "o32";
-    else if (Name == "64")
-      Name = "n64";
-    Features[Name] = Enabled;
-  }
-
-  virtual void HandleTargetFeatures(std::vector<std::string> &Features) {
+  virtual bool HandleTargetFeatures(std::vector<std::string> &Features,
+                                    DiagnosticsEngine &Diags) {
     IsMips16 = false;
     IsMicromips = false;
     IsSingleFloat = false;
@@ -4647,6 +4737,8 @@ public:
       std::find(Features.begin(), Features.end(), "+soft-float");
     if (it != Features.end())
       Features.erase(it);
+
+    return true;
   }
 
   virtual int getEHDataRegisterNumber(unsigned RegNo) const {
@@ -5463,39 +5555,24 @@ TargetInfo *TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
     return 0;
   }
 
+  // Set the fp math unit.
+  if (!Opts->FPMath.empty() && !Target->setFPMath(Opts->FPMath)) {
+    Diags.Report(diag::err_target_unknown_fpmath) << Opts->FPMath;
+    return 0;
+  }
+
   // Compute the default target features, we need the target to handle this
   // because features may have dependencies on one another.
   llvm::StringMap<bool> Features;
   Target->getDefaultFeatures(Features);
 
   // Apply the user specified deltas.
-  // First the enables.
-  for (std::vector<std::string>::const_iterator 
-         it = Opts->FeaturesAsWritten.begin(),
-         ie = Opts->FeaturesAsWritten.end();
-       it != ie; ++it) {
-    const char *Name = it->c_str();
-
-    if (Name[0] != '+')
-      continue;
-
+  for (unsigned I = 0, N = Opts->FeaturesAsWritten.size();
+       I < N; ++I) {
+    const char *Name = Opts->FeaturesAsWritten[I].c_str();
     // Apply the feature via the target.
-    Target->setFeatureEnabled(Features, Name + 1, true);
-  }
-
-  // Then the disables.
-  for (std::vector<std::string>::const_iterator 
-         it = Opts->FeaturesAsWritten.begin(),
-         ie = Opts->FeaturesAsWritten.end();
-       it != ie; ++it) {
-    const char *Name = it->c_str();
-
-    if (Name[0] == '+')
-      continue;
-
-    // Apply the feature via the target.
-    assert(Name[0] == '-');
-    Target->setFeatureEnabled(Features, Name + 1, false);
+    bool Enabled = Name[0] == '+';
+    Target->setFeatureEnabled(Features, Name + 1, Enabled);
   }
 
   // Add the features to the compile options.
@@ -5506,7 +5583,8 @@ TargetInfo *TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
   for (llvm::StringMap<bool>::const_iterator it = Features.begin(),
          ie = Features.end(); it != ie; ++it)
     Opts->Features.push_back((it->second ? "+" : "-") + it->first().str());
-  Target->HandleTargetFeatures(Opts->Features);
+  if (!Target->HandleTargetFeatures(Opts->Features, Diags))
+    return 0;
 
   return Target.take();
 }

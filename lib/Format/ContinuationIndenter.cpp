@@ -116,12 +116,9 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
       !Current.isOneOf(tok::r_paren, tok::r_brace))
     return true;
   if (Style.AlwaysBreakBeforeMultilineStrings &&
-      State.Column > State.Stack.back().Indent &&
-      Current.is(tok::string_literal) && Previous.isNot(tok::lessless) &&
-      Previous.Type != TT_InlineASMColon &&
-      ((Current.getNextNonComment() &&
-        Current.getNextNonComment()->is(tok::string_literal)) ||
-       (Current.TokenText.find("\\\n") != StringRef::npos)))
+      State.Column > State.Stack.back().Indent && // Breaking saves columns.
+      Previous.isNot(tok::lessless) && Previous.Type != TT_InlineASMColon &&
+      NextIsMultilineString(State))
     return true;
 
   if (!Style.BreakBeforeBinaryOperators) {
@@ -176,13 +173,14 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
 }
 
 unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
-                                               bool DryRun) {
+                                               bool DryRun,
+                                               unsigned ExtraSpaces) {
   const FormatToken &Current = *State.NextToken;
   const FormatToken &Previous = *State.NextToken->Previous;
 
   // Extra penalty that needs to be added because of the way certain line
   // breaks are chosen.
-  unsigned ExtraPenalty = 0;
+  unsigned Penalty = 0;
 
   if (State.Stack.size() == 0 || Current.Type == TT_ImplicitStringLiteral) {
     // FIXME: Is this correct?
@@ -199,13 +197,20 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
   unsigned ContinuationIndent =
       std::max(State.Stack.back().LastSpace, State.Stack.back().Indent) + 4;
   if (Newline) {
+    // The first line break on any ParenLevel causes an extra penalty in order
+    // prefer similar line breaks.
+    if (!State.Stack.back().ContainsLineBreak)
+      Penalty += 15;
+    State.Stack.back().ContainsLineBreak = true;
+
+    Penalty += State.NextToken->SplitPenalty;
+
     // Breaking before the first "<<" is generally not desirable if the LHS is
     // short.
     if (Current.is(tok::lessless) && State.Stack.back().FirstLessLess == 0 &&
         State.Column <= Style.ColumnLimit / 2)
-      ExtraPenalty += Style.PenaltyBreakFirstLessLess;
+      Penalty += Style.PenaltyBreakFirstLessLess;
 
-    State.Stack.back().ContainsLineBreak = true;
     if (Current.is(tok::r_brace)) {
       if (Current.BlockKind == BK_BracedInit)
         State.Column = State.Stack[State.Stack.size() - 2].LastSpace;
@@ -333,7 +338,7 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
         State.Stack.back().LastSpace = State.Stack.back().VariablePos;
     }
 
-    unsigned Spaces = State.NextToken->SpacesRequiredBefore;
+    unsigned Spaces = State.NextToken->SpacesRequiredBefore + ExtraSpaces;
 
     if (!DryRun)
       Whitespaces.replaceWhitespace(Current, 0, Spaces, State.Column + Spaces);
@@ -365,11 +370,13 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
       State.Stack.back().LastSpace = State.Column;
     else if ((Previous.Type == TT_BinaryOperator ||
               Previous.Type == TT_ConditionalExpr ||
+              Previous.Type == TT_UnaryOperator ||
               Previous.Type == TT_CtorInitializerColon) &&
              !(Previous.getPrecedence() == prec::Assignment &&
                Current.FakeLParens.empty()))
       // Always indent relative to the RHS of the expression unless this is a
-      // simple assignment without binary expression on the RHS.
+      // simple assignment without binary expression on the RHS. Also indent
+      // relative to unary operators and the colons of constructor initializers.
       State.Stack.back().LastSpace = State.Column;
     else if (Previous.Type == TT_InheritanceColon)
       State.Stack.back().Indent = State.Column;
@@ -393,7 +400,7 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
     }
   }
 
-  return moveStateToNextToken(State, DryRun, Newline) + ExtraPenalty;
+  return moveStateToNextToken(State, DryRun, Newline) + Penalty;
 }
 
 unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
@@ -537,19 +544,26 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
   }
 
   State.Column += Current.CodePointCount;
-
   State.NextToken = State.NextToken->Next;
+  unsigned Penalty =  breakProtrudingToken(Current, State, DryRun);
 
-  if (!Newline && Style.AlwaysBreakBeforeMultilineStrings &&
-      Current.is(tok::string_literal) && Current.CanBreakBefore)
-    return 0;
+  // If the previous has a special role, let it consume tokens as appropriate.
+  // It is necessary to start at the previous token for the only implemented
+  // role (comma separated list). That way, the decision whether or not to break
+  // after the "{" is already done and both options are tried and evaluated.
+  // FIXME: This is ugly, find a better way.
+  if (Previous && Previous->Role)
+    Penalty += Previous->Role->format(State, this, DryRun);
 
-  return breakProtrudingToken(Current, State, DryRun);
+  return Penalty;
 }
 
 unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
                                                     LineState &State,
                                                     bool DryRun) {
+  if (!Current.isOneOf(tok::string_literal, tok::comment))
+    return 0;
+
   llvm::OwningPtr<BreakableToken> Token;
   unsigned StartColumn = State.Column - Current.CodePointCount;
   unsigned OriginalStartColumn =
@@ -664,6 +678,20 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
 unsigned ContinuationIndenter::getColumnLimit() const {
   // In preprocessor directives reserve two chars for trailing " \"
   return Style.ColumnLimit - (Line.InPPDirective ? 2 : 0);
+}
+
+bool ContinuationIndenter::NextIsMultilineString(const LineState &State) {
+  const FormatToken &Current = *State.NextToken;
+  if (!Current.is(tok::string_literal))
+    return false;
+  if (Current.getNextNonComment() &&
+      Current.getNextNonComment()->is(tok::string_literal))
+    return true; // Implicit concatenation.
+  if (State.Column + Current.CodePointCount + Current.UnbreakableTailLength >
+      Style.ColumnLimit)
+    return true; // String will be split.
+  // String literal might have escaped newlines.
+  return Current.TokenText.find("\\\n") != StringRef::npos;
 }
 
 } // namespace format

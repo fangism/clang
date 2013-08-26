@@ -797,7 +797,6 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
   // only allowed at the start of a compound stmt regardless of the language.
   while (Tok.is(tok::kw___label__)) {
     SourceLocation LabelLoc = ConsumeToken();
-    Diag(LabelLoc, diag::ext_gnu_local_label);
 
     SmallVector<Decl *, 8> DeclsInGroup;
     while (1) {
@@ -2543,7 +2542,7 @@ StmtResult Parser::ParseCXXTryBlockCommon(SourceLocation TryLoc, bool FnTry) {
     if (Handlers.empty())
       return StmtError();
 
-    return Actions.ActOnCXXTryBlock(TryLoc, TryBlock.take(),Handlers);
+    return Actions.ActOnCXXTryBlock(TryLoc, TryBlock.take(), Handlers);
   }
 }
 

@@ -1249,8 +1249,7 @@ static bool findCircularInheritance(const CXXRecordDecl *Class,
     if (Queue.empty())
       return false;
 
-    Current = Queue.back();
-    Queue.pop_back();
+    Current = Queue.pop_back_val();
   }
 
   return false;
@@ -6710,7 +6709,7 @@ Decl *Sema::ActOnUsingDirective(Scope *S,
                                       IdentLoc, Named, CommonAncestor);
 
     if (IsUsingDirectiveInToplevelContext(CurContext) &&
-        !SourceMgr.isFromMainFile(SourceMgr.getExpansionLoc(IdentLoc))) {
+        !SourceMgr.isInMainFile(SourceMgr.getExpansionLoc(IdentLoc))) {
       Diag(IdentLoc, diag::warn_using_directive_in_header);
     }
 

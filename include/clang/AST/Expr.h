@@ -482,21 +482,22 @@ public:
   ///
   /// Note: This does not perform the implicit conversions required by C++11
   /// [expr.const]p5.
-  bool isIntegerConstantExpr(llvm::APSInt &Result, ASTContext &Ctx,
+  bool isIntegerConstantExpr(llvm::APSInt &Result, const ASTContext &Ctx,
                              SourceLocation *Loc = 0,
                              bool isEvaluated = true) const;
-  bool isIntegerConstantExpr(ASTContext &Ctx, SourceLocation *Loc = 0) const;
+  bool isIntegerConstantExpr(const ASTContext &Ctx,
+                             SourceLocation *Loc = 0) const;
 
   /// isCXX98IntegralConstantExpr - Return true if this expression is an
   /// integral constant expression in C++98. Can only be used in C++.
-  bool isCXX98IntegralConstantExpr(ASTContext &Ctx) const;
+  bool isCXX98IntegralConstantExpr(const ASTContext &Ctx) const;
 
   /// isCXX11ConstantExpr - Return true if this expression is a constant
   /// expression in C++11. Can only be used in C++.
   ///
   /// Note: This does not perform the implicit conversions required by C++11
   /// [expr.const]p5.
-  bool isCXX11ConstantExpr(ASTContext &Ctx, APValue *Result = 0,
+  bool isCXX11ConstantExpr(const ASTContext &Ctx, APValue *Result = 0,
                            SourceLocation *Loc = 0) const;
 
   /// isPotentialConstantExpr - Return true if this function's definition
@@ -906,7 +907,7 @@ class DeclRefExpr : public Expr {
     return const_cast<DeclRefExpr *>(this)->getInternalFoundDecl();
   }
 
-  DeclRefExpr(ASTContext &Ctx,
+  DeclRefExpr(const ASTContext &Ctx,
               NestedNameSpecifierLoc QualifierLoc,
               SourceLocation TemplateKWLoc,
               ValueDecl *D, bool refersToEnclosingLocal,
@@ -921,7 +922,7 @@ class DeclRefExpr : public Expr {
 
   /// \brief Computes the type- and value-dependence flags for this
   /// declaration reference expression.
-  void computeDependence(ASTContext &C);
+  void computeDependence(const ASTContext &C);
 
 public:
   DeclRefExpr(ValueDecl *D, bool refersToEnclosingLocal, QualType T,
@@ -937,7 +938,7 @@ public:
     computeDependence(D->getASTContext());
   }
 
-  static DeclRefExpr *Create(ASTContext &Context,
+  static DeclRefExpr *Create(const ASTContext &Context,
                              NestedNameSpecifierLoc QualifierLoc,
                              SourceLocation TemplateKWLoc,
                              ValueDecl *D,
@@ -947,7 +948,7 @@ public:
                              NamedDecl *FoundD = 0,
                              const TemplateArgumentListInfo *TemplateArgs = 0);
 
-  static DeclRefExpr *Create(ASTContext &Context,
+  static DeclRefExpr *Create(const ASTContext &Context,
                              NestedNameSpecifierLoc QualifierLoc,
                              SourceLocation TemplateKWLoc,
                              ValueDecl *D,
@@ -958,7 +959,7 @@ public:
                              const TemplateArgumentListInfo *TemplateArgs = 0);
 
   /// \brief Construct an empty declaration reference expression.
-  static DeclRefExpr *CreateEmpty(ASTContext &Context,
+  static DeclRefExpr *CreateEmpty(const ASTContext &Context,
                                   bool HasQualifier,
                                   bool HasFoundDecl,
                                   bool HasTemplateKWAndArgsInfo,

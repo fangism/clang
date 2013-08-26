@@ -2189,9 +2189,6 @@ def warn_use_while_consumed : Warning<
 def warn_use_of_temp_while_consumed : Warning<
   "invocation of method '%0' on a temporary object while it is in the "
   "'consumed' state">, InGroup<Consumed>, DefaultIgnore;
-def warn_uniqueness_attribute_wrong_decl_type : Warning<
-  "%0 attribute only applies to methods">,
-  InGroup<Consumed>, DefaultIgnore;
 
 // ConsumedStrict warnings
 def warn_use_in_unknown_state : Warning<
@@ -2996,6 +2993,9 @@ def err_pointer_to_member_call_drops_quals : Error<
 def err_pointer_to_member_oper_value_classify: Error<
   "pointer-to-member function type %0 can only be called on an "
   "%select{rvalue|lvalue}1">;
+def ext_ms_deref_template_argument: ExtWarn<
+  "non-type template argument containing a dereference operation is a "
+  "Microsoft extension">, InGroup<Microsoft>;
 
 // C++ template specialization
 def err_template_spec_unknown_kind : Error<
@@ -4345,7 +4345,8 @@ def err_member_decl_does_not_match_suggest : Error<
   "out-of-line %select{declaration|definition}2 of %0 "
   "does not match any declaration in %1; did you mean %3?">;
 def err_member_def_does_not_match_ret_type : Error<
-  "out-of-line definition of %q0 differs from the declaration in the return type">;
+  "return type of out-of-line definition of %q0 differs from "
+  "that in the declaration">;
 def err_nonstatic_member_out_of_line : Error<
   "non-static data member defined out-of-line">;
 def err_qualified_typedef_declarator : Error<
@@ -6637,6 +6638,8 @@ def err_module_private_local : Error<
 def err_module_private_local_class : Error<
   "local %select{struct|interface|union|class|enum}0 cannot be declared "
   "__module_private__">;
+def err_module_private_declaration : Error<
+  "declaration of %0 must be imported from module '%1' before it is required">;
 def err_module_private_definition : Error<
   "definition of %0 must be imported from module '%1' before it is required">;
 }
