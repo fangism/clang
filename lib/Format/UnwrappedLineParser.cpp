@@ -284,8 +284,12 @@ void UnwrappedLineParser::calculateBraceTypes() {
           // Thus, if the parent is a braced init list, we consider all
           // brace blocks inside it braced init list. That works good enough
           // for now, but we will need to fix it to correctly handle lambdas.
+          //
+          // We exclude + and - as they can be ObjC visibility modifiers.
           if (NextTok->isOneOf(tok::comma, tok::semi, tok::r_paren,
-                               tok::l_brace, tok::colon)) {
+                               tok::l_brace, tok::colon) ||
+              (NextTok->isBinaryOperator() &&
+               !NextTok->isOneOf(tok::plus, tok::minus))) {
             Tok->BlockKind = BK_BracedInit;
             LBraceStack.back()->BlockKind = BK_BracedInit;
           } else {
@@ -933,6 +937,7 @@ void UnwrappedLineParser::parseEnum() {
     if (FormatTok->Tok.is(tok::identifier))
       nextToken();
   }
+  bool HasError = false;
   if (FormatTok->Tok.is(tok::l_brace)) {
     if (Style.BreakBeforeBraces == FormatStyle::BS_Allman)
       addUnwrappedLine();
@@ -948,7 +953,17 @@ void UnwrappedLineParser::parseEnum() {
         addUnwrappedLine();
         nextToken();
         --Line->Level;
+        if (HasError) {
+          if (FormatTok->is(tok::semi))
+            nextToken();
+          addUnwrappedLine();
+        }
         return;
+      case tok::semi:
+        HasError = true;
+        nextToken();
+        addUnwrappedLine();
+        break;
       case tok::comma:
         nextToken();
         addUnwrappedLine();
@@ -1026,7 +1041,13 @@ void UnwrappedLineParser::parseObjCUntilAtEnd() {
       addUnwrappedLine();
       break;
     }
-    parseStructuralElement();
+    if (FormatTok->is(tok::l_brace)) {
+      parseBlock(/*MustBeDeclaration=*/false);
+      // In ObjC interfaces, nothing should be following the "}".
+      addUnwrappedLine();
+    } else {
+      parseStructuralElement();
+    }
   } while (!eof());
 }
 

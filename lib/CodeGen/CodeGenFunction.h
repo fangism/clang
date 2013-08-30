@@ -953,14 +953,6 @@ public:
 
   CodeGenTypes &getTypes() const { return CGM.getTypes(); }
   ASTContext &getContext() const { return CGM.getContext(); }
-  /// Returns true if DebugInfo is actually initialized.
-  bool maybeInitializeDebugInfo() {
-    if (CGM.getModuleDebugInfo()) {
-      DebugInfo = CGM.getModuleDebugInfo();
-      return true;
-    }
-    return false;
-  }
   CGDebugInfo *getDebugInfo() { 
     if (DisableDebugInfo) 
       return NULL;
@@ -1029,10 +1021,10 @@ public:
                                    bool useEHCleanupForArray);
   void emitDestroy(llvm::Value *addr, QualType type, Destroyer *destroyer,
                    bool useEHCleanupForArray);
-  llvm::Function *generateDestroyHelper(llvm::Constant *addr,
-                                        QualType type,
+  llvm::Function *generateDestroyHelper(llvm::Constant *addr, QualType type,
                                         Destroyer *destroyer,
-                                        bool useEHCleanupForArray);
+                                        bool useEHCleanupForArray,
+                                        const VarDecl *VD);
   void emitArrayDestroy(llvm::Value *begin, llvm::Value *end,
                         QualType type, Destroyer *destroyer,
                         bool checkZeroLength, bool useEHCleanup);
@@ -2313,7 +2305,8 @@ public:
 
   /// Call atexit() with a function that passes the given argument to
   /// the given function.
-  void registerGlobalDtorWithAtExit(llvm::Constant *fn, llvm::Constant *addr);
+  void registerGlobalDtorWithAtExit(const VarDecl &D, llvm::Constant *fn,
+                                    llvm::Constant *addr);
 
   /// Emit code in this function to perform a guarded variable
   /// initialization.  Guarded initializations are used when it's not

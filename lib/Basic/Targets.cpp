@@ -1375,6 +1375,7 @@ static const char *DescriptionStringR600DoubleOps =
 static const char *DescriptionStringSI =
   "e"
   "-p:64:64:64"
+  "-p3:32:32:32"
   "-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64"
   "-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128"
   "-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-v2048:2048:2048"
@@ -1636,6 +1637,7 @@ class X86TargetInfo : public TargetInfo {
     /// Atom processors
     //@{
     CK_Atom,
+    CK_SLM,
     //@}
 
     /// \name Nehalem
@@ -1804,6 +1806,7 @@ public:
       .Case("core2", CK_Core2)
       .Case("penryn", CK_Penryn)
       .Case("atom", CK_Atom)
+      .Case("slm", CK_SLM)
       .Case("corei7", CK_Corei7)
       .Case("corei7-avx", CK_Corei7AVX)
       .Case("core-avx-i", CK_CoreAVXi)
@@ -1879,6 +1882,7 @@ public:
     case CK_Core2:
     case CK_Penryn:
     case CK_Atom:
+    case CK_SLM:
     case CK_Corei7:
     case CK_Corei7AVX:
     case CK_CoreAVXi:
@@ -1976,6 +1980,7 @@ void X86TargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
     setFeatureEnabled(Features, "ssse3", true);
     break;
   case CK_Corei7:
+  case CK_SLM:
     setFeatureEnabled(Features, "sse4.2", true);
     break;
   case CK_Corei7AVX:
@@ -2471,6 +2476,9 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     break;
   case CK_Atom:
     defineCPUMacros(Builder, "atom");
+    break;
+  case CK_SLM:
+    defineCPUMacros(Builder, "slm");
     break;
   case CK_Corei7:
   case CK_Corei7AVX:
@@ -3093,9 +3101,9 @@ public:
   }
 
   virtual CallingConvCheckResult checkCallingConvention(CallingConv CC) const {
-    return (CC == CC_Default ||
-            CC == CC_C || 
-            CC == CC_IntelOclBicc) ? CCCR_OK : CCCR_Warning;
+    return (CC == CC_C ||
+            CC == CC_IntelOclBicc ||
+            CC == CC_X86_64Win64) ? CCCR_OK : CCCR_Warning;
   }
 
   virtual CallingConv getDefaultCallingConv(CallingConvMethodType MT) const {
@@ -3130,6 +3138,11 @@ public:
   }
   virtual BuiltinVaListKind getBuiltinVaListKind() const {
     return TargetInfo::CharPtrBuiltinVaList;
+  }
+  virtual CallingConvCheckResult checkCallingConvention(CallingConv CC) const {
+    return (CC == CC_C ||
+            CC == CC_IntelOclBicc ||
+            CC == CC_X86_64SysV) ? CCCR_OK : CCCR_Warning;
   }
 };
 } // end anonymous namespace

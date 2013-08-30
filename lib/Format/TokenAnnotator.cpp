@@ -393,6 +393,8 @@ private:
         if (CurrentToken->isOneOf(tok::star, tok::amp))
           CurrentToken->Type = TT_PointerOrReference;
         consumeToken();
+        if (CurrentToken->Previous->Type == TT_BinaryOperator)
+          CurrentToken->Previous->Type = TT_OverloadedOperator;
       }
       if (CurrentToken) {
         CurrentToken->Type = TT_OverloadedOperatorLParen;
@@ -484,9 +486,6 @@ private:
 
 public:
   LineType parseLine() {
-    int PeriodsAndArrows = 0;
-    FormatToken *LastPeriodOrArrow = NULL;
-    bool CanBeBuilderTypeStmt = true;
     if (CurrentToken->is(tok::hash)) {
       parsePreprocessorDirective();
       return LT_PreprocessorDirective;
@@ -494,25 +493,11 @@ public:
     while (CurrentToken != NULL) {
       if (CurrentToken->is(tok::kw_virtual))
         KeywordVirtualFound = true;
-      if (CurrentToken->isOneOf(tok::period, tok::arrow)) {
-        ++PeriodsAndArrows;
-        LastPeriodOrArrow = CurrentToken;
-      }
-      FormatToken *TheToken = CurrentToken;
       if (!consumeToken())
         return LT_Invalid;
-      if (TheToken->getPrecedence() > prec::Assignment &&
-          TheToken->Type == TT_BinaryOperator)
-        CanBeBuilderTypeStmt = false;
     }
     if (KeywordVirtualFound)
       return LT_VirtualFunctionDecl;
-
-    // Assume a builder-type call if there are 2 or more "." and "->".
-    if (PeriodsAndArrows >= 2 && CanBeBuilderTypeStmt) {
-      LastPeriodOrArrow->LastInChainOfCalls = true;
-      return LT_BuilderTypeCall;
-    }
 
     if (Line.First->Type == TT_ObjCMethodSpecifier) {
       if (Contexts.back().FirstObjCSelectorName != NULL)
@@ -841,6 +826,9 @@ private:
   IdentifierInfo &Ident_in;
 };
 
+static int PrecedenceUnaryOperator = prec::PointerToMember + 1;
+static int PrecedenceArrowAndPeriod = prec::PointerToMember + 2;
+
 /// \brief Parses binary expressions by inserting fake parenthesis based on
 /// operator precedence.
 class ExpressionParser {
@@ -853,24 +841,24 @@ public:
 
   /// \brief Parse expressions with the given operatore precedence.
   void parse(int Precedence = 0) {
-    if (Current == NULL)
+    if (Current == NULL || Precedence > PrecedenceArrowAndPeriod)
       return;
 
     // Conditional expressions need to be parsed separately for proper nesting.
-    if (Precedence == prec::Conditional + 1) {
+    if (Precedence == prec::Conditional) {
       parseConditionalExpr();
       return;
     }
 
     // Parse unary operators, which all have a higher precedence than binary
     // operators.
-    if (Precedence > prec::PointerToMember) {
+    if (Precedence == PrecedenceUnaryOperator) {
       parseUnaryOperator();
       return;
     }
 
     FormatToken *Start = Current;
-    bool OperatorFound = false;
+    FormatToken *LatestOperator = NULL;
 
     while (Current) {
       // Consume operators with higher precedence.
@@ -885,9 +873,16 @@ public:
       // At the end of the line or when an operator with higher precedence is
       // found, insert fake parenthesis and return.
       if (Current == NULL || Current->closesScope() ||
-          (CurrentPrecedence != 0 && CurrentPrecedence < Precedence)) {
-        if (OperatorFound)
-          addFakeParenthesis(Start, prec::Level(Precedence - 1));
+          (CurrentPrecedence != -1 && CurrentPrecedence < Precedence)) {
+        if (LatestOperator) {
+          if (Precedence == PrecedenceArrowAndPeriod) {
+            LatestOperator->LastInChainOfCalls = true;
+            // Call expressions don't have a binary operator precedence.
+            addFakeParenthesis(Start, prec::Unknown);
+          } else {
+            addFakeParenthesis(Start, prec::Level(Precedence));
+          }
+        }
         return;
       }
 
@@ -901,7 +896,7 @@ public:
       } else {
         // Operator found.
         if (CurrentPrecedence == Precedence)
-          OperatorFound = true;
+          LatestOperator = Current;
 
         next();
       }
@@ -914,15 +909,17 @@ private:
   int getCurrentPrecedence() {
     if (Current) {
       if (Current->Type == TT_ConditionalExpr)
-        return 1 + (int)prec::Conditional;
+        return prec::Conditional;
       else if (Current->is(tok::semi) || Current->Type == TT_InlineASMColon)
-        return 1;
+        return 0;
       else if (Current->Type == TT_BinaryOperator || Current->is(tok::comma))
-        return 1 + (int)Current->getPrecedence();
+        return Current->getPrecedence();
       else if (Current->Type == TT_ObjCSelectorName)
-        return 1 + (int)prec::Assignment;
+        return prec::Assignment;
+      else if (Current->isOneOf(tok::period, tok::arrow))
+        return PrecedenceArrowAndPeriod;
     }
-    return 0;
+    return -1;
   }
 
   void addFakeParenthesis(FormatToken *Start, prec::Level Precedence) {
@@ -934,36 +931,26 @@ private:
   /// \brief Parse unary operator expressions and surround them with fake
   /// parentheses if appropriate.
   void parseUnaryOperator() {
-    if (Current == NULL || Current->Type != TT_UnaryOperator)
+    if (Current == NULL || Current->Type != TT_UnaryOperator) {
+      parse(PrecedenceArrowAndPeriod);
       return;
+    }
 
     FormatToken *Start = Current;
     next();
+    parseUnaryOperator();
 
-    while (Current) {
-      if (Current->opensScope()) {
-        while (Current && !Current->closesScope()) {
-          next();
-          parse();
-        }
-        next();
-      } else if (getCurrentPrecedence() == 0 && !Current->closesScope()) {
-        next();
-      } else {
-        break;
-      }
-    }
     // The actual precedence doesn't matter.
-    addFakeParenthesis(Start, prec::Level(0));
+    addFakeParenthesis(Start, prec::Unknown);
   }
 
   void parseConditionalExpr() {
     FormatToken *Start = Current;
-    parse(prec::LogicalOr + 1);
+    parse(prec::LogicalOr);
     if (!Current || !Current->is(tok::question))
       return;
     next();
-    parse(prec::LogicalOr + 1);
+    parse(prec::LogicalOr);
     if (!Current || Current->Type != TT_ConditionalExpr)
       return;
     next();
@@ -1037,8 +1024,7 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
     Current->CanBreakBefore =
         Current->MustBreakBefore || canBreakBefore(Line, *Current);
     if (Current->MustBreakBefore ||
-        (Current->is(tok::string_literal) &&
-         Current->TokenText.find("\\\n") != StringRef::npos))
+        (Current->is(tok::string_literal) && Current->IsMultiline))
       Current->TotalLength = Current->Previous->TotalLength + Style.ColumnLimit;
     else
       Current->TotalLength = Current->Previous->TotalLength +
@@ -1115,10 +1101,8 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
       Left.Type == TT_InheritanceColon)
     return 2;
 
-  if (Right.isOneOf(tok::arrow, tok::period) &&
-      Right.Type != TT_DesignatedInitializerPeriod) {
-    if (Left.isOneOf(tok::r_paren, tok::r_square) && Left.MatchingParen &&
-        Left.MatchingParen->ParameterCount > 0)
+  if (Right.isMemberAccess()) {
+    if (Left.isOneOf(tok::r_paren, tok::r_square))
       return 20; // Should be smaller than breaking at a nested comma.
     return 150;
   }
@@ -1197,7 +1181,8 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   if (Left.is(tok::coloncolon))
     return false;
   if (Right.is(tok::coloncolon))
-    return !Left.isOneOf(tok::identifier, tok::greater, tok::l_paren);
+    return !Left.isOneOf(tok::identifier, tok::greater, tok::l_paren,
+                         tok::r_paren);
   if (Left.is(tok::less) || Right.isOneOf(tok::greater, tok::less))
     return false;
   if (Right.is(tok::ellipsis))
@@ -1221,7 +1206,8 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return Left.Type == TT_ObjCArrayLiteral && Right.isNot(tok::r_square);
   if (Right.is(tok::r_square))
     return Right.Type == TT_ObjCArrayLiteral;
-  if (Right.is(tok::l_square) && Right.Type != TT_ObjCMethodExpr)
+  if (Right.is(tok::l_square) && Right.Type != TT_ObjCMethodExpr &&
+      Left.isNot(tok::numeric_constant))
     return false;
   if (Left.is(tok::colon))
     return Left.Type != TT_ObjCMethodExpr;
@@ -1306,7 +1292,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return true;
   if (Tok.Previous->Type == TT_TemplateCloser && Tok.is(tok::l_paren))
     return false;
-  if (Tok.is(tok::less) && Line.First->is(tok::hash))
+  if (Tok.is(tok::less) && Tok.Previous->isNot(tok::l_paren) &&
+      Line.First->is(tok::hash))
     return true;
   if (Tok.Type == TT_TrailingUnaryOperator)
     return false;
@@ -1335,7 +1322,8 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
       Right.is(tok::question))
     return true;
   if (Right.Type == TT_RangeBasedForLoopColon ||
-      Right.Type == TT_OverloadedOperatorLParen)
+      Right.Type == TT_OverloadedOperatorLParen ||
+      Right.Type == TT_OverloadedOperator)
     return false;
   if (Left.Type == TT_RangeBasedForLoopColon)
     return true;
