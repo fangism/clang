@@ -61,10 +61,10 @@ template <class T> struct ArgTypeTraits<ast_matchers::internal::Matcher<T> > {
             ">").str();
   }
   static bool is(const VariantValue &Value) {
-    return Value.isMatcher() && Value.getMatcher().hasTypedMatcher<T>();
+    return Value.isMatcher() && Value.getMatcher().template hasTypedMatcher<T>();
   }
   static ast_matchers::internal::Matcher<T> get(const VariantValue &Value) {
-    return Value.getMatcher().getTypedMatcher<T>();
+    return Value.getMatcher().template getTypedMatcher<T>();
   }
 };
 
