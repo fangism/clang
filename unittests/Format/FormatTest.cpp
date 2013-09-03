@@ -525,6 +525,10 @@ TEST_F(FormatTest, FormatsSwitchStatement) {
                "  case a:          \\\n"
                "    foo = b;       \\\n"
                "  }", getLLVMStyleWithColumns(20));
+  verifyFormat("#define OPERATION_CASE(name)           \\\n"
+               "  case OP_name:                        \\\n"
+               "    return operations::Operation##name\n",
+               getLLVMStyleWithColumns(40));
 
   verifyGoogleFormat("switch (x) {\n"
                      "  case 1:\n"
@@ -3621,6 +3625,8 @@ TEST_F(FormatTest, UnderstandsOverloadedOperators) {
 
   verifyGoogleFormat("operator void*();");
   verifyGoogleFormat("operator SomeType<SomeType<int>>();");
+
+  verifyFormat("using A::operator+;");
 }
 
 TEST_F(FormatTest, UnderstandsNewAndDelete) {
@@ -3675,7 +3681,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyGoogleFormat("return sizeof(int**);");
   verifyIndependentOfContext("Type **A = static_cast<Type **>(P);");
   verifyGoogleFormat("Type** A = static_cast<Type**>(P);");
-  verifyFormat("auto a = [](int **&, int ***) {};");
+  verifyFormat("auto a = [](int **&, int ***) {\n};");
 
   verifyIndependentOfContext("InvalidRegions[*R] = 0;");
 
@@ -3859,7 +3865,7 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("f(foo).b;");
   verifyFormat("f(foo)(b);");
   verifyFormat("f(foo)[b];");
-  verifyFormat("[](foo) { return 4; }(bar)];");
+  verifyFormat("[](foo) {\n  return 4;\n}(bar);");
   verifyFormat("(*funptr)(foo)[4];");
   verifyFormat("funptrs[4](foo)[4];");
   verifyFormat("void f(int *);");
@@ -6249,6 +6255,46 @@ TEST_F(FormatTest, FormatsProtocolBufferDefinitions) {
                "  required int32 field1 = 1;\n"
                "  optional string field2 = 2 [default = \"2\"]\n"
                "}");
+}
+
+TEST_F(FormatTest, FormatsLambdas) {
+  // FIXME: The formatting is incorrect; this test currently checks that
+  // parsing of the unwrapped lines doesn't regress.
+  verifyFormat(
+      "int c = [b]() mutable {\n"
+      "  return [&b]{\n"
+      "    return b++;\n"
+      "  }();\n"
+      "}();\n");
+  verifyFormat(
+      "int c = [&]{\n"
+      "  [ = ]{\n"
+      "    return b++;\n"
+      "  }();\n"
+      "}();\n");
+  verifyFormat(
+      "int c = [ &, &a, a]{\n"
+      "  [ =, c, &d]{\n"
+      "    return b++;\n"
+      "  }();\n"
+      "}();\n");
+  verifyFormat(
+      "int c = [&a, &a, a]{\n"
+      "  [ =, a, b, &c]{\n"
+      "    return b++;\n"
+      "  }();\n"
+      "}();\n");
+  verifyFormat(
+      "auto c = {[&a, &a, a]{\n"
+      "  [ =, a, b, &c]{\n"
+      "    return b++;\n"
+      "  }();\n"
+      "} }\n");
+  verifyFormat(
+      "auto c = {[&a, &a, a]{\n"
+      "  [ =, a, b, &c]{\n"
+      "  }();\n"
+      "} }\n");
 }
 
 } // end namespace tooling

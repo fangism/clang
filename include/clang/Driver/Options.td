@@ -61,7 +61,6 @@ def M_Group               : OptionGroup<"<M group>">, Group<CompileOnly_Group>;
 def T_Group               : OptionGroup<"<T group>">;
 def O_Group               : OptionGroup<"<O group>">, Group<CompileOnly_Group>;
 def W_Group               : OptionGroup<"<W group>">, Group<CompileOnly_Group>;
-def X_Group               : OptionGroup<"<X group>">;
 def d_Group               : OptionGroup<"<d group>">;
 def f_Group               : OptionGroup<"<f group>">, Group<CompileOnly_Group>;
 def f_clang_Group         : OptionGroup<"<f (clang-only) group>">, Group<CompileOnly_Group>;
@@ -128,9 +127,6 @@ def driver_mode : Joined<["--"], "driver-mode=">, Group<internal_driver_Group>,
 def ccc_gcc_name : Separate<["-"], "ccc-gcc-name">, InternalDriverOpt,
   HelpText<"Name for native GCC compiler">,
   MetaVarName<"<gcc-path>">;
-def ccc_clang_archs : Separate<["-"], "ccc-clang-archs">, InternalDriverOpt,
-  HelpText<"Comma separate list of architectures to use the clang compiler for">,
-  MetaVarName<"<arch-list>">;
 def ccc_pch_is_pch : Flag<["-"], "ccc-pch-is-pch">, InternalDriverOpt,
   HelpText<"Use lazy PCH for precompiled headers">;
 def ccc_pch_is_pth : Flag<["-"], "ccc-pch-is-pth">, InternalDriverOpt,
@@ -140,8 +136,6 @@ class InternalDebugOpt : Group<internal_debug_Group>,
   Flags<[DriverOption, HelpHidden]>;
 def ccc_install_dir : Separate<["-"], "ccc-install-dir">, InternalDebugOpt,
   HelpText<"Simulate installation in the given directory">;
-def ccc_print_options : Flag<["-"], "ccc-print-options">, InternalDebugOpt,
-  HelpText<"Dump parsed command line arguments">;
 def ccc_print_phases : Flag<["-"], "ccc-print-phases">, InternalDebugOpt,
   HelpText<"Dump list of actions to perform">;
 def ccc_print_bindings : Flag<["-"], "ccc-print-bindings">, InternalDebugOpt,
@@ -151,8 +145,6 @@ def ccc_arcmt_check : Flag<["-"], "ccc-arcmt-check">, InternalDriverOpt,
   HelpText<"Check for ARC migration issues that need manual handling">;
 def ccc_arcmt_modify : Flag<["-"], "ccc-arcmt-modify">, InternalDriverOpt,
   HelpText<"Apply modifications to files to conform to ARC">;
-def ccc_arrmt_check : Flag<["-"], "ccc-arrmt-check">, Alias<ccc_arcmt_check>;
-def ccc_arrmt_modify : Flag<["-"], "ccc-arrmt-modify">, Alias<ccc_arcmt_modify>;
 def ccc_arcmt_migrate : Separate<["-"], "ccc-arcmt-migrate">, InternalDriverOpt,
   HelpText<"Apply modifications and produces temporary files that conform to ARC">;
 def arcmt_migrate_report_output : Separate<["-"], "arcmt-migrate-report-output">,

@@ -389,11 +389,12 @@ private:
       Tok->Type = TT_BinaryOperator;
       break;
     case tok::kw_operator:
-      while (CurrentToken && CurrentToken->isNot(tok::l_paren)) {
+      while (CurrentToken &&
+             !CurrentToken->isOneOf(tok::l_paren, tok::semi, tok::r_paren)) {
         if (CurrentToken->isOneOf(tok::star, tok::amp))
           CurrentToken->Type = TT_PointerOrReference;
         consumeToken();
-        if (CurrentToken->Previous->Type == TT_BinaryOperator)
+        if (CurrentToken && CurrentToken->Previous->Type == TT_BinaryOperator)
           CurrentToken->Previous->Type = TT_OverloadedOperator;
       }
       if (CurrentToken) {
@@ -1024,7 +1025,7 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
     Current->CanBreakBefore =
         Current->MustBreakBefore || canBreakBefore(Line, *Current);
     if (Current->MustBreakBefore ||
-        (Current->is(tok::string_literal) && Current->IsMultiline))
+        (Current->is(tok::string_literal) && Current->isMultiline()))
       Current->TotalLength = Current->Previous->TotalLength + Style.ColumnLimit;
     else
       Current->TotalLength = Current->Previous->TotalLength +
