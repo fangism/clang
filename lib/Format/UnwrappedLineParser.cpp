@@ -122,9 +122,12 @@ class ScopedLineState {
 public:
   ScopedLineState(UnwrappedLineParser &Parser,
                   bool SwitchToPreprocessorLines = false)
-      : Parser(Parser), SwitchToPreprocessorLines(SwitchToPreprocessorLines) {
+      : Parser(Parser) {
+    OriginalLines = Parser.CurrentLines;
     if (SwitchToPreprocessorLines)
       Parser.CurrentLines = &Parser.PreprocessorDirectives;
+    else if (!Parser.Line->Tokens.empty())
+      Parser.CurrentLines = &Parser.Line->Tokens.back().Children;
     PreBlockLine = Parser.Line.take();
     Parser.Line.reset(new UnwrappedLine());
     Parser.Line->Level = PreBlockLine->Level;
@@ -137,16 +140,16 @@ public:
     }
     assert(Parser.Line->Tokens.empty());
     Parser.Line.reset(PreBlockLine);
-    Parser.MustBreakBeforeNextToken = true;
-    if (SwitchToPreprocessorLines)
-      Parser.CurrentLines = &Parser.Lines;
+    if (Parser.CurrentLines == &Parser.PreprocessorDirectives)
+      Parser.MustBreakBeforeNextToken = true;
+    Parser.CurrentLines = OriginalLines;
   }
 
 private:
   UnwrappedLineParser &Parser;
-  const bool SwitchToPreprocessorLines;
 
   UnwrappedLine *PreBlockLine;
+  SmallVectorImpl<UnwrappedLine> *OriginalLines;
 };
 
 namespace {
@@ -191,7 +194,8 @@ bool UnwrappedLineParser::parse() {
   Tokens = &TokenSource;
   readToken();
   parseFile();
-  for (std::vector<UnwrappedLine>::iterator I = Lines.begin(), E = Lines.end();
+  for (SmallVectorImpl<UnwrappedLine>::iterator I = Lines.begin(),
+                                                E = Lines.end();
        I != E; ++I) {
     Callback.consumeUnwrappedLine(*I);
   }
@@ -278,13 +282,11 @@ void UnwrappedLineParser::calculateBraceTypes() {
       if (!LBraceStack.empty()) {
         if (LBraceStack.back()->BlockKind == BK_Unknown) {
           // If there is a comma, semicolon or right paren after the closing
-          // brace, we assume this is a braced initializer list.
-
-          // FIXME: Note that this currently works only because we do not
-          // use the brace information while inside a braced init list.
-          // Thus, if the parent is a braced init list, we consider all
-          // brace blocks inside it braced init list. That works good enough
-          // for now, but we will need to fix it to correctly handle lambdas.
+          // brace, we assume this is a braced initializer list.  Note that
+          // regardless how we mark inner braces here, we will overwrite the
+          // BlockKind later if we parse a braced list (where all blocks inside
+          // are by default braced lists), or when we explicitly detect blocks
+          // (for example while parsing lambdas).
           //
           // We exclude + and - as they can be ObjC visibility modifiers.
           if (NextTok->isOneOf(tok::comma, tok::semi, tok::r_paren,
@@ -315,12 +317,13 @@ void UnwrappedLineParser::calculateBraceTypes() {
     }
     Tok = NextTok;
     Position += ReadTokens;
-  } while (Tok->Tok.isNot(tok::eof));
+  } while (Tok->Tok.isNot(tok::eof) && !LBraceStack.empty());
   // Assume other blocks for all unclosed opening braces.
   for (unsigned i = 0, e = LBraceStack.size(); i != e; ++i) {
     if (LBraceStack[i]->BlockKind == BK_Unknown)
       LBraceStack[i]->BlockKind = BK_Block;
   }
+
   FormatTok = Tokens->setPosition(StoredPosition);
 }
 
@@ -345,6 +348,20 @@ void UnwrappedLineParser::parseBlock(bool MustBeDeclaration, bool AddLevel) {
 
   nextToken(); // Munch the closing brace.
   Line->Level = InitialLevel;
+}
+
+void UnwrappedLineParser::parseChildBlock() {
+  FormatTok->BlockKind = BK_Block;
+  nextToken();
+  {
+    ScopedLineState LineState(*this);
+    ScopedDeclarationState DeclarationState(*Line, DeclarationScopeStack,
+                                            /*MustBeDeclaration=*/false);
+    Line->Level += 1;
+    parseLevel(/*HasOpeningBrace=*/true);
+    Line->Level -= 1;
+  }
+  nextToken();
 }
 
 void UnwrappedLineParser::parsePPDirective() {
@@ -592,6 +609,12 @@ void UnwrappedLineParser::parseStructuralElement() {
     case tok::l_paren:
       parseParens();
       break;
+    case tok::caret:
+      nextToken();
+      if (FormatTok->is(tok::l_brace)) {
+        parseChildBlock();
+      }
+      break;
     case tok::l_brace:
       if (!tryToParseBracedList()) {
         // A block outside of parentheses must be the last part of a
@@ -651,63 +674,68 @@ void UnwrappedLineParser::parseStructuralElement() {
 }
 
 void UnwrappedLineParser::tryToParseLambda() {
-  if (!tryToParseLambdaIntroducer()) {
+  // FIXME: This is a dirty way to access the previous token. Find a better
+  // solution.
+  if (!Line->Tokens.empty() &&
+      Line->Tokens.back().Tok->isOneOf(tok::identifier, tok::kw_operator)) {
+    nextToken();
     return;
   }
-  if (FormatTok->is(tok::l_paren)) {
-    parseParens();
-  }
+  assert(FormatTok->is(tok::l_square));
+  FormatToken &LSquare = *FormatTok;
+  if (!tryToParseLambdaIntroducer())
+    return;
 
   while (FormatTok->isNot(tok::l_brace)) {
     switch (FormatTok->Tok.getKind()) {
-      case tok::l_brace:
-        break;
-        return;
-      case tok::l_paren:
-        parseParens();
-        break;
-      case tok::semi:
-      case tok::equal:
-      case tok::eof:
-        return;
-      default:
-        nextToken();
-        break;
+    case tok::l_brace:
+      break;
+    case tok::l_paren:
+      parseParens();
+      break;
+    case tok::identifier:
+    case tok::kw_mutable:
+      nextToken();
+      break;
+    default:
+      return;
     }
   }
-  nextToken();
-  {
-    ScopedLineState LineState(*this);
-    ScopedDeclarationState DeclarationState(*Line, DeclarationScopeStack,
-                                            /*MustBeDeclaration=*/false);
-    Line->Level += 1;
-    parseLevel(/*HasOpeningBrace=*/true);
-    Line->Level -= 1;
-  }
-  nextToken();
+  LSquare.Type = TT_LambdaLSquare;
+  parseChildBlock();
 }
 
 bool UnwrappedLineParser::tryToParseLambdaIntroducer() {
   nextToken();
   if (FormatTok->is(tok::equal)) {
     nextToken();
-    if (FormatTok->is(tok::r_square)) return true;
-    if (FormatTok->isNot(tok::comma)) return false;
+    if (FormatTok->is(tok::r_square)) {
+      nextToken();
+      return true;
+    }
+    if (FormatTok->isNot(tok::comma))
+      return false;
     nextToken();
   } else if (FormatTok->is(tok::amp)) {
     nextToken();
-    if (FormatTok->is(tok::r_square)) return true;
+    if (FormatTok->is(tok::r_square)) {
+      nextToken();
+      return true;
+    }
     if (!FormatTok->isOneOf(tok::comma, tok::identifier)) {
       return false;
     }
-    if (FormatTok->is(tok::comma)) nextToken();
+    if (FormatTok->is(tok::comma))
+      nextToken();
   } else if (FormatTok->is(tok::r_square)) {
     nextToken();
     return true;
   }
   do {
-    if (FormatTok->is(tok::amp)) nextToken();
-    if (!FormatTok->isOneOf(tok::identifier, tok::kw_this)) return false;
+    if (FormatTok->is(tok::amp))
+      nextToken();
+    if (!FormatTok->isOneOf(tok::identifier, tok::kw_this))
+      return false;
     nextToken();
     if (FormatTok->is(tok::comma)) {
       nextToken();
@@ -741,10 +769,19 @@ void UnwrappedLineParser::parseBracedList() {
     // here, otherwise our bail-out scenarios below break. The better solution
     // might be to just implement a more or less complete expression parser.
     switch (FormatTok->Tok.getKind()) {
-      case tok::l_square:
-        tryToParseLambda();
-        break;
+    case tok::caret:
+      nextToken();
+      if (FormatTok->is(tok::l_brace)) {
+        parseChildBlock();
+      }
+      break;
+    case tok::l_square:
+      tryToParseLambda();
+      break;
     case tok::l_brace:
+      // Assume there are no blocks inside a braced init list apart
+      // from the ones we explicitly parse out (like lambdas).
+      FormatTok->BlockKind = BK_BracedInit;
       parseBracedList();
       break;
     case tok::r_brace:
@@ -811,18 +848,12 @@ void UnwrappedLineParser::parseParens() {
     case tok::r_brace:
       // A "}" inside parenthesis is an error if there wasn't a matching "{".
       return;
+    case tok::l_square:
+      tryToParseLambda();
+      break;
     case tok::l_brace: {
       if (!tryToParseBracedList()) {
-        nextToken();
-        {
-          ScopedLineState LineState(*this);
-          ScopedDeclarationState DeclarationState(*Line, DeclarationScopeStack,
-                                                  /*MustBeDeclaration=*/false);
-          Line->Level += 1;
-          parseLevel(/*HasOpeningBrace=*/true);
-          Line->Level -= 1;
-        }
-        nextToken();
+        parseChildBlock();
       }
       break;
     }
@@ -1005,9 +1036,8 @@ void UnwrappedLineParser::parseEnum() {
   if (FormatTok->Tok.is(tok::kw_class) ||
       FormatTok->Tok.is(tok::kw_struct))
       nextToken();
-  if (FormatTok->Tok.is(tok::identifier) ||
-      FormatTok->Tok.is(tok::kw___attribute) ||
-      FormatTok->Tok.is(tok::kw___declspec)) {
+  while (FormatTok->Tok.getIdentifierInfo() ||
+         FormatTok->isOneOf(tok::colon, tok::coloncolon)) {
     nextToken();
     // We can have macros or attributes in between 'enum' and the enum name.
     if (FormatTok->Tok.is(tok::l_paren)) {
@@ -1173,23 +1203,40 @@ void UnwrappedLineParser::parseObjCProtocol() {
   parseObjCUntilAtEnd();
 }
 
+LLVM_ATTRIBUTE_UNUSED static void printDebugInfo(const UnwrappedLine &Line,
+                                                 StringRef Prefix = "") {
+  llvm::dbgs() << Prefix << "Line(" << Line.Level << ")"
+               << (Line.InPPDirective ? " MACRO" : "") << ": ";
+  for (std::list<UnwrappedLineNode>::const_iterator I = Line.Tokens.begin(),
+                                                    E = Line.Tokens.end();
+       I != E; ++I) {
+    llvm::dbgs() << I->Tok->Tok.getName() << "[" << I->Tok->Type << "] ";
+  }
+  for (std::list<UnwrappedLineNode>::const_iterator I = Line.Tokens.begin(),
+                                                    E = Line.Tokens.end();
+       I != E; ++I) {
+    const UnwrappedLineNode &Node = *I;
+    for (SmallVectorImpl<UnwrappedLine>::const_iterator
+             I = Node.Children.begin(),
+             E = Node.Children.end();
+         I != E; ++I) {
+      printDebugInfo(*I, "\nChild: ");
+    }
+  }
+  llvm::dbgs() << "\n";
+}
+
 void UnwrappedLineParser::addUnwrappedLine() {
   if (Line->Tokens.empty())
     return;
   DEBUG({
-    llvm::dbgs() << "Line(" << Line->Level << ")"
-                 << (Line->InPPDirective ? " MACRO" : "") << ": ";
-    for (std::list<FormatToken *>::iterator I = Line->Tokens.begin(),
-                                            E = Line->Tokens.end();
-         I != E; ++I) {
-      llvm::dbgs() << (*I)->Tok.getName() << " ";
-    }
-    llvm::dbgs() << "\n";
+    if (CurrentLines == &Lines)
+      printDebugInfo(*Line);
   });
   CurrentLines->push_back(*Line);
   Line->Tokens.clear();
   if (CurrentLines == &Lines && !PreprocessorDirectives.empty()) {
-    for (std::vector<UnwrappedLine>::iterator
+    for (SmallVectorImpl<UnwrappedLine>::iterator
              I = PreprocessorDirectives.begin(),
              E = PreprocessorDirectives.end();
          I != E; ++I) {
@@ -1263,9 +1310,9 @@ void UnwrappedLineParser::readToken() {
 }
 
 void UnwrappedLineParser::pushToken(FormatToken *Tok) {
-  Line->Tokens.push_back(Tok);
+  Line->Tokens.push_back(UnwrappedLineNode(Tok));
   if (MustBreakBeforeNextToken) {
-    Line->Tokens.back()->MustBreakBefore = true;
+    Line->Tokens.back().Tok->MustBreakBefore = true;
     MustBreakBeforeNextToken = false;
   }
 }

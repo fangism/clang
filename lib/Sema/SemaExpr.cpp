@@ -7474,6 +7474,22 @@ static void diagnoseLogicalNotOnLHSofComparison(Sema &S, ExprResult &LHS,
       << FixItHint::CreateInsertion(SecondClose, ")");
 }
 
+// Get the decl for a simple expression: a reference to a variable,
+// an implicit C++ field reference, or an implicit ObjC ivar reference.
+static ValueDecl *getCompareDecl(Expr *E) {
+  if (DeclRefExpr* DR = dyn_cast<DeclRefExpr>(E))
+    return DR->getDecl();
+  if (ObjCIvarRefExpr* Ivar = dyn_cast<ObjCIvarRefExpr>(E)) {
+    if (Ivar->isFreeIvar())
+      return Ivar->getDecl();
+  }
+  if (MemberExpr* Mem = dyn_cast<MemberExpr>(E)) {
+    if (Mem->isImplicitAccess())
+      return Mem->getMemberDecl();
+  }
+  return 0;
+}
+
 // C99 6.5.8, C++ [expr.rel]
 QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
                                     SourceLocation Loc, unsigned OpaqueOpc,
@@ -7510,37 +7526,34 @@ QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
     // obvious cases in the definition of the template anyways. The idea is to
     // warn when the typed comparison operator will always evaluate to the same
     // result.
-    if (DeclRefExpr* DRL = dyn_cast<DeclRefExpr>(LHSStripped)) {
-      if (DeclRefExpr* DRR = dyn_cast<DeclRefExpr>(RHSStripped)) {
-        if (DRL->getDecl() == DRR->getDecl() &&
-            !IsWithinTemplateSpecialization(DRL->getDecl())) {
-          DiagRuntimeBehavior(Loc, 0, PDiag(diag::warn_comparison_always)
-                              << 0 // self-
-                              << (Opc == BO_EQ
-                                  || Opc == BO_LE
-                                  || Opc == BO_GE));
-        } else if (LHSType->isArrayType() && RHSType->isArrayType() &&
-                   !DRL->getDecl()->getType()->isReferenceType() &&
-                   !DRR->getDecl()->getType()->isReferenceType()) {
-            // what is it always going to eval to?
-            char always_evals_to;
-            switch(Opc) {
-            case BO_EQ: // e.g. array1 == array2
-              always_evals_to = 0; // false
-              break;
-            case BO_NE: // e.g. array1 != array2
-              always_evals_to = 1; // true
-              break;
-            default:
-              // best we can say is 'a constant'
-              always_evals_to = 2; // e.g. array1 <= array2
-              break;
-            }
-            DiagRuntimeBehavior(Loc, 0, PDiag(diag::warn_comparison_always)
-                                << 1 // array
-                                << always_evals_to);
+    ValueDecl *DL = getCompareDecl(LHSStripped);
+    ValueDecl *DR = getCompareDecl(RHSStripped);
+    if (DL && DR && DL == DR && !IsWithinTemplateSpecialization(DL)) {
+      DiagRuntimeBehavior(Loc, 0, PDiag(diag::warn_comparison_always)
+                          << 0 // self-
+                          << (Opc == BO_EQ
+                              || Opc == BO_LE
+                              || Opc == BO_GE));
+    } else if (DL && DR && LHSType->isArrayType() && RHSType->isArrayType() &&
+               !DL->getType()->isReferenceType() &&
+               !DR->getType()->isReferenceType()) {
+        // what is it always going to eval to?
+        char always_evals_to;
+        switch(Opc) {
+        case BO_EQ: // e.g. array1 == array2
+          always_evals_to = 0; // false
+          break;
+        case BO_NE: // e.g. array1 != array2
+          always_evals_to = 1; // true
+          break;
+        default:
+          // best we can say is 'a constant'
+          always_evals_to = 2; // e.g. array1 <= array2
+          break;
         }
-      }
+        DiagRuntimeBehavior(Loc, 0, PDiag(diag::warn_comparison_always)
+                            << 1 // array
+                            << always_evals_to);
     }
 
     if (isa<CastExpr>(LHSStripped))
@@ -8402,6 +8415,9 @@ static QualType CheckIncrementDecrementOperand(Sema &S, Expr *Op,
                                           IsInc, IsPrefix);
   } else if (S.getLangOpts().AltiVec && ResType->isVectorType()) {
     // OK! ( C/C++ Language Extensions for CBEA(Version 2.6) 10.3 )
+  } else if(S.getLangOpts().OpenCL && ResType->isVectorType() &&
+            ResType->getAs<VectorType>()->getElementType()->isIntegerType()) {
+    // OpenCL V1.2 6.3 says dec/inc ops operate on integer vector types.
   } else {
     S.Diag(OpLoc, diag::err_typecheck_illegal_increment_decrement)
       << ResType << int(IsInc) << Op->getSourceRange();
@@ -9625,7 +9641,7 @@ ExprResult Sema::ActOnUnaryOp(Scope *S, SourceLocation OpLoc,
 /// ActOnAddrLabel - Parse the GNU address of label extension: "&&foo".
 ExprResult Sema::ActOnAddrLabel(SourceLocation OpLoc, SourceLocation LabLoc,
                                 LabelDecl *TheDecl) {
-  TheDecl->setUsed();
+  TheDecl->markUsed(Context);
   // Create the AST node.  The address of a label always has type 'void*'.
   return Owned(new (Context) AddrLabelExpr(OpLoc, LabLoc, TheDecl,
                                        Context.getPointerType(Context.VoidTy)));
@@ -10238,7 +10254,7 @@ ExprResult Sema::ActOnBlockStmtExpr(SourceLocation CaretLoc,
     computeNRVO(Body, getCurBlock());
   
   BlockExpr *Result = new (Context) BlockExpr(BSI->TheDecl, BlockTy);
-  const AnalysisBasedWarnings::Policy &WP = AnalysisWarnings.getDefaultPolicy();
+  AnalysisBasedWarnings::Policy WP = AnalysisWarnings.getDefaultPolicy();
   PopFunctionScopeInfo(&WP, Result->getBlockDecl(), Result);
 
   // If the block isn't obviously global, i.e. it captures anything at
@@ -11099,7 +11115,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
   // decl in the middle of a decl chain. We loop to maintain the invariant
   // that once a decl is used, all decls after it are also used.
   for (FunctionDecl *F = Func->getMostRecentDecl();; F = F->getPreviousDecl()) {
-    F->setUsed(true);
+    F->markUsed(Context);
     if (F == Func)
       break;
   }
@@ -11174,7 +11190,7 @@ static ExprResult captureInCapturedRegion(Sema &S, CapturedRegionScopeInfo *RSI,
   Expr *Ref = new (S.Context) DeclRefExpr(Var, RefersToEnclosingLocal,
                                           DeclRefType, VK_LValue, Loc);
   Var->setReferenced(true);
-  Var->setUsed(true);
+  Var->markUsed(S.Context);
 
   return Ref;
 }
@@ -11216,7 +11232,7 @@ static ExprResult captureInLambda(Sema &S, LambdaScopeInfo *LSI,
   Expr *Ref = new (S.Context) DeclRefExpr(Var, RefersToEnclosingLocal, 
                                           DeclRefType, VK_LValue, Loc);
   Var->setReferenced(true);
-  Var->setUsed(true);
+  Var->markUsed(S.Context);
 
   // When the field has array type, create index variables for each
   // dimension of the array. We use these index variables to subscript
@@ -11662,7 +11678,7 @@ static void MarkVarDeclODRUsed(Sema &SemaRef, VarDecl *Var,
 
   SemaRef.tryCaptureVariable(Var, Loc);
 
-  Var->setUsed(true);
+  Var->markUsed(SemaRef.Context);
 }
 
 void Sema::UpdateMarkingForLValueToRValue(Expr *E) {

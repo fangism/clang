@@ -382,7 +382,7 @@ def MinSize : InheritableAttr {
 
 def Format : InheritableAttr {
   let Spellings = [GNU<"format">, CXX11<"gnu", "format">];
-  let Args = [StringArgument<"Type">, IntArgument<"FormatIdx">,
+  let Args = [IdentifierArgument<"Type">, IntArgument<"FormatIdx">,
               IntArgument<"FirstArg">];
 }
 
@@ -629,11 +629,6 @@ def ReqdWorkGroupSize : InheritableAttr {
   let Spellings = [GNU<"reqd_work_group_size">];
   let Args = [UnsignedArgument<"XDim">, UnsignedArgument<"YDim">,
               UnsignedArgument<"ZDim">];
-}
-
-def Endian : InheritableAttr {
-  let Spellings = [GNU<"endian">];
-  let Args = [IdentifierArgument<"platform">];
 }
 
 def WorkGroupSizeHint :  InheritableAttr {
@@ -931,6 +926,9 @@ def SharedLocksRequired : InheritableAttr {
 def Consumable : InheritableAttr {
   let Spellings = [GNU<"consumable">];
   let Subjects = [CXXRecord];
+  let Args = [EnumArgument<"DefaultState", "ConsumedState",
+                           ["unknown", "consumed", "unconsumed"],
+                           ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
 def CallableWhenUnconsumed : InheritableAttr {
@@ -951,6 +949,14 @@ def TestsConsumed : InheritableAttr {
 def Consumes : InheritableAttr {
   let Spellings = [GNU<"consumes">];
   let Subjects = [CXXMethod];
+}
+
+def ReturnTypestate : InheritableAttr {
+  let Spellings = [GNU<"return_typestate">];
+  let Subjects = [Function];
+  let Args = [EnumArgument<"State", "ConsumedState",
+                           ["unknown", "consumed", "unconsumed"],
+                           ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
 // Type safety attributes for `void *' pointers and type tags.
