@@ -7962,7 +7962,8 @@ isBetterOverloadCandidate(Sema &S,
                                          Loc,
                        isa<CXXConversionDecl>(Cand1.Function)? TPOC_Conversion
                                                              : TPOC_Call,
-                                         Cand1.ExplicitCallArguments))
+                                         Cand1.ExplicitCallArguments,
+                                         Cand2.ExplicitCallArguments))
       return BetterTemplate == Cand1.Function->getPrimaryTemplate();
   }
 
@@ -9491,7 +9492,7 @@ private:
     // TODO: It looks like FailedCandidates does not serve much purpose
     // here, since the no_viable diagnostic has index 0.
     UnresolvedSetIterator Result = S.getMostSpecialized(
-        MatchesCopy.begin(), MatchesCopy.end(), FailedCandidates, TPOC_Other, 0,
+        MatchesCopy.begin(), MatchesCopy.end(), FailedCandidates,
         SourceExpr->getLocStart(), S.PDiag(),
         S.PDiag(diag::err_addr_ovl_ambiguous) << Matches[0]
                                                      .second->getDeclName(),
