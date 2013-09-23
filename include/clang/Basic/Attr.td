@@ -571,7 +571,7 @@ def ObjCPreciseLifetime : InheritableAttr {
 
 def ObjCReturnsInnerPointer : InheritableAttr {
   let Spellings = [GNU<"objc_returns_inner_pointer">];
-  let Subjects = [ObjCMethod];
+  let Subjects = [ObjCMethod, ObjCProperty];
 }
 
 def ObjCRequiresSuper : InheritableAttr {
@@ -601,6 +601,7 @@ def Ownership : InheritableAttr {
                     ["ownership_holds", "ownership_returns", "ownership_takes"],
                     ["Holds", "Returns", "Takes"]>,
               StringArgument<"Module">, VariadicUnsignedArgument<"Args">];
+  let HasCustomParsing = 1;
 }
 
 def Packed : InheritableAttr {

@@ -21,6 +21,7 @@
 #include "clang/AST/TypeOrdering.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/PartialDiagnostic.h"
+#include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
@@ -977,6 +978,10 @@ bool Sema::IsOverload(FunctionDecl *New, FunctionDecl *Old,
                       bool UseUsingDeclRules) {
   // C++ [basic.start.main]p2: This function shall not be overloaded.
   if (New->isMain())
+    return false;
+
+  // MSVCRT user defined entry points cannot be overloaded.
+  if (New->isMSVCRTEntryPoint())
     return false;
 
   FunctionTemplateDecl *OldTemplate = Old->getDescribedFunctionTemplate();
@@ -5527,7 +5532,7 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
 }
 
 /// \brief Add all of the function declarations in the given function set to
-/// the overload canddiate set.
+/// the overload candidate set.
 void Sema::AddFunctionCandidates(const UnresolvedSetImpl &Fns,
                                  ArrayRef<Expr *> Args,
                                  OverloadCandidateSet& CandidateSet,
@@ -5823,6 +5828,17 @@ Sema::AddConversionCandidate(CXXConversionDecl *Conversion,
       return;
     ConvType = Conversion->getConversionType().getNonReferenceType();
   }
+
+  // Per C++ [over.match.conv]p1, [over.match.ref]p1, an explicit conversion
+  // operator is only a candidate if its return type is the target type or
+  // can be converted to the target type with a qualification conversion.
+  bool ObjCLifetimeConversion;
+  QualType ToNonRefType = ToType.getNonReferenceType();
+  if (Conversion->isExplicit() &&
+      !Context.hasSameUnqualifiedType(ConvType, ToNonRefType) &&
+      !IsQualificationConversion(ConvType, ToNonRefType, /*CStyle*/false,
+                                 ObjCLifetimeConversion))
+    return;
 
   // Overload resolution is always an unevaluated context.
   EnterExpressionEvaluationContext Unevaluated(*this, Sema::Unevaluated);
@@ -8141,7 +8157,7 @@ void Sema::NoteOverloadCandidate(FunctionDecl *Fn, QualType DestType) {
   MaybeEmitInheritedConstructorNote(*this, Fn);
 }
 
-//Notes the location of all overload candidates designated through 
+// Notes the location of all overload candidates designated through
 // OverloadedExpr
 void Sema::NoteAllOverloadCandidates(Expr* OverloadedExpr, QualType DestType) {
   assert(OverloadedExpr->getType() == Context.OverloadTy);

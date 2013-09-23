@@ -302,7 +302,7 @@ namespace {
     /// This - The binding for the this pointer in this call, if any.
     const LValue *This;
 
-    /// ParmBindings - Parameter bindings for this function call, indexed by
+    /// Arguments - Parameter bindings for this function call, indexed by
     /// parameters' function scope indices.
     APValue *Arguments;
 
@@ -5263,7 +5263,7 @@ VectorExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
   while (CountElts < NumElements) {
     // Handle nested vector initialization.
     if (CountInits < NumInits 
-        && E->getInit(CountInits)->getType()->isExtVectorType()) {
+        && E->getInit(CountInits)->getType()->isVectorType()) {
       APValue v;
       if (!EvaluateVector(E->getInit(CountInits), v, Info))
         return Error(E);
@@ -8146,6 +8146,7 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
   case Expr::ObjCSubscriptRefExprClass:
   case Expr::ObjCIsaExprClass:
   case Expr::ShuffleVectorExprClass:
+  case Expr::ConvertVectorExprClass:
   case Expr::BlockExprClass:
   case Expr::NoStmtClass:
   case Expr::OpaqueValueExprClass:
