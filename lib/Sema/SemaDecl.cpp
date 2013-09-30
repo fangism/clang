@@ -15,6 +15,7 @@
 #include "TypeLocBuilder.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTLambda.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/CommentDiagnostic.h"
@@ -425,8 +426,13 @@ bool Sema::DiagnoseUnknownTypeName(IdentifierInfo *&II,
         llvm_unreachable("could not have corrected a typo here");
       }
 
+      CXXScopeSpec tmpSS;
+      if (Corrected.getCorrectionSpecifier())
+        tmpSS.MakeTrivial(Context, Corrected.getCorrectionSpecifier(),
+                          SourceRange(IILoc));
       SuggestedType = getTypeName(*Corrected.getCorrectionAsIdentifierInfo(),
-                                  IILoc, S, SS, false, false, ParsedType(),
+                                  IILoc, S, tmpSS.isSet() ? &tmpSS : SS, false,
+                                  false, ParsedType(),
                                   /*IsCtorOrDtorName=*/false,
                                   /*NonTrivialTypeSourceInfo=*/true);
     }
@@ -7965,14 +7971,17 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init,
         // It isn't possible to write this directly, but it is possible to
         // end up in this situation with "auto x(some_pack...);"
         Diag(CXXDirectInit->getLocStart(),
-             diag::err_auto_var_init_no_expression)
+             VDecl->isInitCapture() ? diag::err_init_capture_no_expression
+                                    : diag::err_auto_var_init_no_expression)
           << VDecl->getDeclName() << VDecl->getType()
           << VDecl->getSourceRange();
         RealDecl->setInvalidDecl();
         return;
       } else if (CXXDirectInit->getNumExprs() > 1) {
         Diag(CXXDirectInit->getExpr(1)->getLocStart(),
-             diag::err_auto_var_init_multiple_expressions)
+             VDecl->isInitCapture()
+                 ? diag::err_init_capture_multiple_expressions
+                 : diag::err_auto_var_init_multiple_expressions)
           << VDecl->getDeclName() << VDecl->getType()
           << VDecl->getSourceRange();
         RealDecl->setInvalidDecl();
@@ -8332,7 +8341,8 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init,
     if (VDecl->getStorageClass() == SC_Extern &&
         (!getLangOpts().CPlusPlus ||
          !(Context.getBaseElementType(VDecl->getType()).isConstQualified() ||
-           VDecl->isExternC())))
+           VDecl->isExternC())) &&
+        !isTemplateInstantiation(VDecl->getTemplateSpecializationKind()))
       Diag(VDecl->getLocation(), diag::warn_extern_init);
 
     // C99 6.7.8p4. All file scoped initializers need to be constant.
@@ -8683,7 +8693,7 @@ void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
   }
 
   if (var->isThisDeclarationADefinition() &&
-      var->isExternallyVisible() &&
+      var->isExternallyVisible() && var->hasLinkage() &&
       getDiagnostics().getDiagnosticLevel(
                        diag::warn_missing_variable_declarations,
                        var->getLocation())) {
@@ -8975,6 +8985,7 @@ Decl *Sema::ActOnParamDeclarator(Scope *S, Declarator &D) {
   const DeclSpec &DS = D.getDeclSpec();
 
   // Verify C99 6.7.5.3p2: The only SCS allowed is 'register'.
+
   // C++03 [dcl.stc]p2 also permits 'auto'.
   VarDecl::StorageClass StorageClass = SC_None;
   if (DS.getStorageClassSpec() == DeclSpec::SCS_register) {
@@ -9334,9 +9345,37 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D) {
     FD = FunTmpl->getTemplatedDecl();
   else
     FD = cast<FunctionDecl>(D);
+  // If we are instantiating a generic lambda call operator, push
+  // a LambdaScopeInfo onto the function stack.  But use the information
+  // that's already been calculated (ActOnLambdaExpr) when analyzing the
+  // template version, to prime the current LambdaScopeInfo. 
+  if (isGenericLambdaCallOperatorSpecialization(FD)) {
+    CXXMethodDecl *CallOperator = cast<CXXMethodDecl>(D);
+    CXXRecordDecl *LambdaClass = CallOperator->getParent();
+    LambdaExpr    *LE = LambdaClass->getLambdaExpr();
+    assert(LE && 
+     "No LambdaExpr of closure class when instantiating a generic lambda!");
+    assert(ActiveTemplateInstantiations.size() &&
+      "There should be an active template instantiation on the stack " 
+      "when instantiating a generic lambda!");
+    PushLambdaScope();
+    LambdaScopeInfo *LSI = getCurLambda();
+    LSI->CallOperator = CallOperator;
+    LSI->Lambda = LambdaClass;
+    LSI->ReturnType = CallOperator->getResultType();
 
-  // Enter a new function scope
-  PushFunctionScope();
+    if (LE->getCaptureDefault() == LCD_None)
+      LSI->ImpCaptureStyle = CapturingScopeInfo::ImpCap_None;
+    else if (LE->getCaptureDefault() == LCD_ByCopy)
+      LSI->ImpCaptureStyle = CapturingScopeInfo::ImpCap_LambdaByval;
+    else if (LE->getCaptureDefault() == LCD_ByRef)
+      LSI->ImpCaptureStyle = CapturingScopeInfo::ImpCap_LambdaByref;
+    
+    LSI->IntroducerRange = LE->getIntroducerRange();
+  }
+  else
+    // Enter a new function scope
+    PushFunctionScope();
 
   // See if this is a redefinition.
   if (!FD->isLateTemplateParsed())

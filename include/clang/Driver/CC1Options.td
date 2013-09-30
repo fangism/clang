@@ -165,8 +165,8 @@ def fuse_register_sized_bitfield_access: Flag<["-"], "fuse-register-sized-bitfie
   HelpText<"Use register sized accesses to bit-fields, when possible.">;
 def relaxed_aliasing : Flag<["-"], "relaxed-aliasing">,
   HelpText<"Turn off Type Based Alias Analysis">;
-def struct_path_tbaa : Flag<["-"], "struct-path-tbaa">,
-  HelpText<"Turn on struct-path aware Type Based Alias Analysis">;
+def no_struct_path_tbaa : Flag<["-"], "no-struct-path-tbaa">,
+  HelpText<"Turn off struct-path aware Type Based Alias Analysis">;
 def masm_verbose : Flag<["-"], "masm-verbose">,
   HelpText<"Generate verbose assembly output">;
 def mcode_model : Separate<["-"], "mcode-model">,
@@ -373,8 +373,6 @@ def arcmt_modify : Flag<["-"], "arcmt-modify">,
 def arcmt_migrate : Flag<["-"], "arcmt-migrate">,
   HelpText<"Apply modifications and produces temporary files that conform to ARC">;
 
-def relocatable_pch : Flag<["-", "--"], "relocatable-pch">,
-  HelpText<"Whether to build a relocatable precompiled header">;
 def print_stats : Flag<["-"], "print-stats">,
   HelpText<"Print performance metrics and statistics">;
 def fdump_record_layouts : Flag<["-"], "fdump-record-layouts">,
@@ -420,8 +418,8 @@ def fobjc_runtime_has_weak : Flag<["-"], "fobjc-runtime-has-weak">,
   HelpText<"The target Objective-C runtime supports ARC weak operations">;
 def fobjc_dispatch_method_EQ : Joined<["-"], "fobjc-dispatch-method=">,
   HelpText<"Objective-C dispatch method to use">;
-def fobjc_default_synthesize_properties : Flag<["-"], "fobjc-default-synthesize-properties">,
-  HelpText<"enable the default synthesis of Objective-C properties">;
+def disable_objc_default_synthesize_properties : Flag<["-"], "disable-objc-default-synthesize-properties">,
+  HelpText<"disable the default synthesis of Objective-C properties">;
 def fencode_extended_block_signature : Flag<["-"], "fencode-extended-block-signature">,
   HelpText<"enable extended encoding of block type signature">;
 def pic_level : Separate<["-"], "pic-level">,
@@ -476,6 +474,8 @@ def fdeprecated_macro : Flag<["-"], "fdeprecated-macro">,
   HelpText<"Defines the __DEPRECATED macro">;
 def fno_deprecated_macro : Flag<["-"], "fno-deprecated-macro">,
   HelpText<"Undefines the __DEPRECATED macro">;
+def fsized_deallocation : Flag<["-"], "fsized-deallocation">,
+  HelpText<"Enable C++1y sized global deallocation functions">;
 
 //===----------------------------------------------------------------------===//
 // Header Search Options
@@ -483,9 +483,12 @@ def fno_deprecated_macro : Flag<["-"], "fno-deprecated-macro">,
 
 def nostdsysteminc : Flag<["-"], "nostdsysteminc">,
   HelpText<"Disable standard system #include directories">;
-def fmodule_name : Joined<["-"], "fmodule-name=">, 
+def fmodule_name : Joined<["-"], "fmodule-name=">,
   MetaVarName<"<name>">,
-  HelpText<"Specify the name of the module to build">;           
+  HelpText<"Specify the name of the module to build">;
+def fmodule_map_file : Joined<["-"], "fmodule-map-file=">,
+  MetaVarName<"<file>">,
+  HelpText<"Load this module map file">;
 def fdisable_module_hash : Flag<["-"], "fdisable-module-hash">,
   HelpText<"Disable the module hash">;
 def c_isystem : JoinedOrSeparate<["-"], "c-isystem">, MetaVarName<"<directory>">,

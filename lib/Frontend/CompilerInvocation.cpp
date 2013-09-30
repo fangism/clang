@@ -344,7 +344,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.UseRegisterSizedBitfieldAccess = Args.hasArg(
     OPT_fuse_register_sized_bitfield_access);
   Opts.RelaxedAliasing = Args.hasArg(OPT_relaxed_aliasing);
-  Opts.StructPathTBAA = Args.hasArg(OPT_struct_path_tbaa);
+  Opts.StructPathTBAA = !Args.hasArg(OPT_no_struct_path_tbaa);
   Opts.DwarfDebugFlags = Args.getLastArgValue(OPT_dwarf_debug_flags);
   Opts.MergeAllConstants = !Args.hasArg(OPT_fno_merge_all_constants);
   Opts.NoCommon = Args.hasArg(OPT_fno_common);
@@ -589,7 +589,10 @@ bool clang::ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
     Opts.setFormat(DiagnosticOptions::Clang);
   else if (Format == "msvc")
     Opts.setFormat(DiagnosticOptions::Msvc);
-  else if (Format == "vi")
+  else if (Format == "msvc-fallback") {
+    Opts.setFormat(DiagnosticOptions::Msvc);
+    Opts.CLFallbackMode = true;
+  } else if (Format == "vi")
     Opts.setFormat(DiagnosticOptions::Vi);
   else {
     Success = false;
@@ -893,6 +896,9 @@ static void ParseHeaderSearchArgs(HeaderSearchOptions &Opts, ArgList &Args) {
     StringRef MacroDef = (*it)->getValue();
     Opts.ModulesIgnoreMacros.insert(MacroDef.split('=').first);
   }
+  std::vector<std::string> ModuleMapFiles =
+      Args.getAllArgValues(OPT_fmodule_map_file);
+  Opts.ModuleMapFiles.insert(ModuleMapFiles.begin(), ModuleMapFiles.end());
 
   // Add -I..., -F..., and -index-header-map options in order.
   bool IsIndexHeaderMap = false;
@@ -1277,6 +1283,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.Blocks = Args.hasArg(OPT_fblocks);
   Opts.BlocksRuntimeOptional = Args.hasArg(OPT_fblocks_runtime_optional);
   Opts.Modules = Args.hasArg(OPT_fmodules);
+  Opts.ModulesDeclUse = Args.hasArg(OPT_fmodules_decluse);
   Opts.CharIsSigned = Opts.OpenCL || !Args.hasArg(OPT_fno_signed_char);
   Opts.WChar = Opts.CPlusPlus && !Args.hasArg(OPT_fno_wchar);
   Opts.ShortWChar = Args.hasArg(OPT_fshort_wchar);
@@ -1285,6 +1292,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.NoBuiltin = Args.hasArg(OPT_fno_builtin) || Opts.Freestanding;
   Opts.NoMathBuiltin = Args.hasArg(OPT_fno_math_builtin);
   Opts.AssumeSaneOperatorNew = !Args.hasArg(OPT_fno_assume_sane_operator_new);
+  Opts.SizedDeallocation = Args.hasArg(OPT_fsized_deallocation);
   Opts.HeinousExtensions = Args.hasArg(OPT_fheinous_gnu_extensions);
   Opts.AccessControl = !Args.hasArg(OPT_fno_access_control);
   Opts.ElideConstructors = !Args.hasArg(OPT_fno_elide_constructors);
@@ -1303,7 +1311,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.ObjCConstantStringClass =
     Args.getLastArgValue(OPT_fconstant_string_class);
   Opts.ObjCDefaultSynthProperties =
-    Args.hasArg(OPT_fobjc_default_synthesize_properties);
+    !Args.hasArg(OPT_disable_objc_default_synthesize_properties);
   Opts.EncodeExtendedBlockSig =
     Args.hasArg(OPT_fencode_extended_block_signature);
   Opts.EmitAllDecls = Args.hasArg(OPT_femit_all_decls);

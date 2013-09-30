@@ -948,6 +948,11 @@ static void getMIPSTargetFeatures(const Driver &D, const ArgList &Args,
     Features.push_back("+soft-float");
   }
 
+  if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
+    if (StringRef(A->getValue()) == "2008")
+      Features.push_back("+nan2008");
+  }
+
   AddTargetFeature(Args, Features, options::OPT_msingle_float,
                    options::OPT_mdouble_float, "single-float");
   AddTargetFeature(Args, Features, options::OPT_mips16, options::OPT_mno_mips16,
@@ -2178,8 +2183,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     options::OPT_fno_strict_aliasing,
                     getToolChain().IsStrictAliasingDefault()))
     CmdArgs.push_back("-relaxed-aliasing");
-  if (Args.hasArg(options::OPT_fstruct_path_tbaa))
-    CmdArgs.push_back("-struct-path-tbaa");
+  if (!Args.hasFlag(options::OPT_fstruct_path_tbaa,
+                    options::OPT_fno_struct_path_tbaa))
+    CmdArgs.push_back("-no-struct-path-tbaa");
   if (Args.hasFlag(options::OPT_fstrict_enums, options::OPT_fno_strict_enums,
                    false))
     CmdArgs.push_back("-fstrict-enums");
@@ -3029,6 +3035,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-fmodule-maps");
   }
 
+  // -fmodules-decluse checks that modules used are declared so (off by default).
+  if (Args.hasFlag(options::OPT_fmodules_decluse,
+                   options::OPT_fno_modules_decluse,
+                   false)) {
+    CmdArgs.push_back("-fmodules-decluse");
+  }
+
   // If a module path was provided, pass it along. Otherwise, use a temporary
   // directory.
   if (Arg *A = Args.getLastArg(options::OPT_fmodules_cache_path)) {
@@ -3176,12 +3189,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       else
         CmdArgs.push_back("-fobjc-dispatch-method=non-legacy");
     }
-  }
-
-  // -fobjc-default-synthesize-properties=1 is default. This only has an effect
-  // if the nonfragile objc abi is used.
-  if (getToolChain().IsObjCDefaultSynthPropertiesDefault()) {
-    CmdArgs.push_back("-fobjc-default-synthesize-properties");
   }
 
   // -fencode-extended-block-signature=1 is default.
@@ -3783,7 +3790,10 @@ void Clang::AddClangCLArgs(const ArgList &Args, ArgStringList &CmdArgs) const {
 
   if (!Args.hasArg(options::OPT_fdiagnostics_format_EQ)) {
     CmdArgs.push_back("-fdiagnostics-format");
-    CmdArgs.push_back("msvc");
+    if (Args.hasArg(options::OPT__SLASH_fallback))
+      CmdArgs.push_back("msvc-fallback");
+    else
+      CmdArgs.push_back("msvc");
   }
 }
 
@@ -4735,7 +4745,6 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_u_Group);
   Args.AddLastArg(CmdArgs, options::OPT_e);
-  Args.AddAllArgs(CmdArgs, options::OPT_m_Separate);
   Args.AddAllArgs(CmdArgs, options::OPT_r);
 
   // Forward -ObjC when either -ObjC or -ObjC++ is used, to force loading
@@ -5961,6 +5970,11 @@ void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     else
       CmdArgs.push_back("-EL");
 
+    if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
+      if (StringRef(A->getValue()) == "2008")
+        CmdArgs.push_back(Args.MakeArgString("-mnan=2008"));
+    }
+
     Args.AddLastArg(CmdArgs, options::OPT_mips16, options::OPT_mno_mips16);
     Args.AddLastArg(CmdArgs, options::OPT_mmicromips,
                     options::OPT_mno_micromips);
@@ -6704,6 +6718,7 @@ Command *visualstudio::Compile::GetCommand(Compilation &C, const JobAction &JA,
                                            const ArgList &Args,
                                            const char *LinkingOutput) const {
   ArgStringList CmdArgs;
+  CmdArgs.push_back("/nologo");
   CmdArgs.push_back("/c"); // Compile only.
   CmdArgs.push_back("/W0"); // No warnings.
 
@@ -6713,7 +6728,19 @@ Command *visualstudio::Compile::GetCommand(Compilation &C, const JobAction &JA,
   // These are spelled the same way in clang and cl.exe,.
   Args.AddAllArgs(CmdArgs, options::OPT_D, options::OPT_U);
   Args.AddAllArgs(CmdArgs, options::OPT_I);
-  Args.AddLastArg(CmdArgs, options::OPT_O, options::OPT_O0);
+
+  // Optimization level.
+  if (Arg *A = Args.getLastArg(options::OPT_O, options::OPT_O0)) {
+    if (A->getOption().getID() == options::OPT_O0) {
+      CmdArgs.push_back("/Od");
+    } else {
+      StringRef OptLevel = A->getValue();
+      if (OptLevel == "1" || OptLevel == "2" || OptLevel == "s")
+        A->render(Args, CmdArgs);
+      else if (OptLevel == "3")
+        CmdArgs.push_back("/Ox");
+    }
+  }
 
   // Flags for which clang-cl have an alias.
   // FIXME: How can we ensure this stays in sync with relevant clang-cl options?
@@ -6723,6 +6750,10 @@ Command *visualstudio::Compile::GetCommand(Compilation &C, const JobAction &JA,
                                                                    : "/GR-");
   if (Args.hasArg(options::OPT_fsyntax_only))
     CmdArgs.push_back("/Zs");
+
+  std::vector<std::string> Includes = Args.getAllArgValues(options::OPT_include);
+  for (size_t I = 0, E = Includes.size(); I != E; ++I)
+    CmdArgs.push_back(Args.MakeArgString(std::string("/FI") + Includes[I]));
 
   // Flags that can simply be passed through.
   Args.AddAllArgs(CmdArgs, options::OPT__SLASH_LD);

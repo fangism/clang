@@ -1470,11 +1470,12 @@ def err_illegal_decl_array_of_auto : Error<
 def err_new_array_of_auto : Error<
   "cannot allocate array of 'auto'">;
 def err_auto_not_allowed : Error<
-  "'auto' not allowed %select{in function prototype|in non-static struct member"
+  "%select{'auto'|'decltype(auto)'}0 not allowed %select{in function prototype"
+  "|in non-static struct member"
   "|in non-static union member|in non-static class member|in interface member"
   "|in exception declaration|in template parameter|in block literal"
   "|in template argument|in typedef|in type alias|in function return type"
-  "|in conversion function type|here}0">;
+  "|in conversion function type|here|in lambda parameter}1">;
 def err_auto_not_allowed_var_inst : Error<
   "'auto' variable template instantiation is not allowed">;
 def err_auto_var_requires_init : Error<
@@ -3127,12 +3128,12 @@ def err_dependent_typed_non_type_arg_in_partial_spec : Error<
     "non-type template argument specializes a template parameter with "
     "dependent type %0">;
 def err_partial_spec_args_match_primary_template : Error<
-    "class template partial specialization does not specialize any template "
-    "argument; to %select{declare|define}0 the primary template, remove the "
-    "template argument list">; 
+    "%select{class|variable}0 template partial specialization does not "
+    "specialize any template argument; to %select{declare|define}1 the "
+    "primary template, remove the template argument list">; 
 def warn_partial_specs_not_deducible : Warning<
-    "class template partial specialization contains "
-    "%select{a template parameter|template parameters}0 that can not be "
+    "%select{class|variable}0 template partial specialization contains "
+    "%select{a template parameter|template parameters}1 that can not be "
     "deduced; this partial specialization will never be used">;
 def note_partial_spec_unused_parameter : Note<
     "non-deducible template parameter %0">;
@@ -3301,11 +3302,11 @@ def warn_explicit_instantiation_unqualified_wrong_namespace_0x : Warning<
   InGroup<CXX11Compat>, DefaultIgnore;
 def err_explicit_instantiation_undefined_member : Error<
   "explicit instantiation of undefined %select{member class|member function|"
-  "static data member|static data member template}0 %1 of class template %2">;
+  "static data member}0 %1 of class template %2">;
 def err_explicit_instantiation_undefined_func_template : Error<
   "explicit instantiation of undefined function template %0">;
 def err_explicit_instantiation_undefined_var_template : Error<
-  "explicit instantiation of undefined variable template %0">;
+  "explicit instantiation of undefined variable template %q0">;
 def err_explicit_instantiation_declaration_after_definition : Error<
   "explicit instantiation declaration (with 'extern') follows explicit "
   "instantiation definition (without 'extern')">;
@@ -5068,16 +5069,25 @@ let CategoryName = "Lambda Issue" in {
     "here">;
 
   // C++1y lambda init-captures.
+  def warn_cxx11_compat_init_capture : Warning<
+    "initialized lambda captures are incompatible with C++ standards "
+    "before C++1y">, InGroup<CXXPre1yCompat>, DefaultIgnore;
+  def ext_init_capture : ExtWarn<
+    "initialized lambda captures are a C++1y extension">, InGroup<CXX1y>;
   def err_init_capture_no_expression : Error<
     "initializer missing for lambda capture %0">;
   def err_init_capture_multiple_expressions : Error<
     "initializer for lambda capture %0 contains multiple expressions">;
   def err_init_capture_deduction_failure : Error<
-    "cannot deduce type for lambda capture %0 from initializer of type %1">;
+    "cannot deduce type for lambda capture %0 from initializer of type %2">;
   def err_init_capture_deduction_failure_from_init_list : Error<
     "cannot deduce type for lambda capture %0 from initializer list">;
 }
 
+// C++1y Generic Lambdas
+def err_glambda_not_fully_implemented : Error<
+  "unimplemented generic lambda feature: %0">;
+    
 def err_return_in_captured_stmt : Error<
   "cannot return from %0">;
 def err_capture_block_variable : Error<
