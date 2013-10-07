@@ -1492,6 +1492,18 @@ TEST_F(FormatTest, SeparatesLogicalBlocks) {
                    "protected:\n"
                    "int h;\n"
                    "};"));
+  EXPECT_EQ("class A {\n"
+            "protected:\n"
+            "public:\n"
+            "  void f();\n"
+            "};",
+            format("class A {\n"
+                   "protected:\n"
+                   "\n"
+                   "public:\n"
+                   "\n"
+                   "  void f();\n"
+                   "};"));
 }
 
 TEST_F(FormatTest, FormatsClasses) {
@@ -4456,6 +4468,7 @@ TEST_F(FormatTest, UnderstandContextOfRecordTypeKeywords) {
   verifyFormat("class __attribute__(X) Z {\n} n;");
   verifyFormat("class __declspec(X) Z {\n} n;");
   verifyFormat("class A##B##C {\n} n;");
+  verifyFormat("class alignas(16) Z {\n} n;");
 
   // Redefinition from nested context:
   verifyFormat("class A::B::C {\n} n;");

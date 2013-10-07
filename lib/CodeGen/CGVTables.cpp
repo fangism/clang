@@ -337,7 +337,7 @@ void CodeGenFunction::GenerateThunk(llvm::Function *Fn,
   for (FunctionDecl::param_const_iterator I = MD->param_begin(),
        E = MD->param_end(); I != E; ++I) {
     ParmVarDecl *param = *I;
-    EmitDelegateCallArg(CallArgs, param);
+    EmitDelegateCallArg(CallArgs, param, param->getLocStart());
   }
 
   // Get our callee.
@@ -650,9 +650,9 @@ CodeGenVTables::GenerateConstructionVTable(const CXXRecordDecl *RD,
   // Get the mangled construction vtable name.
   SmallString<256> OutName;
   llvm::raw_svector_ostream Out(OutName);
-  CGM.getCXXABI().getMangleContext().
-    mangleCXXCtorVTable(RD, Base.getBaseOffset().getQuantity(), Base.getBase(), 
-                        Out);
+  cast<ItaniumMangleContext>(CGM.getCXXABI().getMangleContext())
+      .mangleCXXCtorVTable(RD, Base.getBaseOffset().getQuantity(),
+                           Base.getBase(), Out);
   Out.flush();
   StringRef Name = OutName.str();
 

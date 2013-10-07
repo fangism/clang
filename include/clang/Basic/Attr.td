@@ -81,6 +81,15 @@ class EnumArgument<string name, string type, list<string> values,
   list<string> Enums = enums;
 }
 
+// FIXME: There should be a VariadicArgument type that takes any other type
+//        of argument and generates the appropriate type.
+class VariadicEnumArgument<string name, string type, list<string> values,
+                           list<string> enums> : Argument<name, 1>  {
+  string Type = type;
+  list<string> Values = values;
+  list<string> Enums = enums;
+}
+
 // This handles one spelling of an attribute.
 class Spelling<string name, string variety> {
   string Name = name;
@@ -208,6 +217,14 @@ def AnalyzerNoReturn : InheritableAttr {
 def Annotate : InheritableParamAttr {
   let Spellings = [GNU<"annotate">];
   let Args = [StringArgument<"Annotation">];
+}
+
+def ARMInterrupt : InheritableAttr, TargetSpecificAttr {
+  let Spellings = [GNU<"interrupt">];
+  let Args = [EnumArgument<"Interrupt", "InterruptType",
+                           ["IRQ", "FIQ", "SWI", "ABORT", "UNDEF", ""],
+                           ["IRQ", "FIQ", "SWI", "ABORT", "UNDEF", "Generic"],
+                           1>];
 }
 
 def AsmLabel : InheritableAttr {
@@ -942,9 +959,12 @@ def Consumable : InheritableAttr {
                            ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
-def CallableWhenUnconsumed : InheritableAttr {
-  let Spellings = [GNU<"callable_when_unconsumed">];
+def CallableWhen : InheritableAttr {
+  let Spellings = [GNU<"callable_when">];
   let Subjects = [CXXMethod];
+  let Args = [VariadicEnumArgument<"CallableState", "ConsumedState",
+                                   ["unknown", "consumed", "unconsumed"],
+                                   ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
 def TestsUnconsumed : InheritableAttr {

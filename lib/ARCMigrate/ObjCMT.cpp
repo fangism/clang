@@ -48,7 +48,7 @@ class ObjCMigrateASTConsumer : public ASTConsumer {
                                   const ObjCImplementationDecl *ImpDecl);
   void migrateNSEnumDecl(ASTContext &Ctx, const EnumDecl *EnumDcl,
                      const TypedefDecl *TypedefDcl);
-  void migrateMethods(ASTContext &Ctx, ObjCContainerDecl *CDecl);
+  void migrateAllMethodInstaceType(ASTContext &Ctx, ObjCContainerDecl *CDecl);
   void migrateMethodInstanceType(ASTContext &Ctx, ObjCContainerDecl *CDecl,
                                  ObjCMethodDecl *OM);
   bool migrateProperty(ASTContext &Ctx, ObjCContainerDecl *D, ObjCMethodDecl *OM);
@@ -75,10 +75,7 @@ class ObjCMigrateASTConsumer : public ASTConsumer {
                                   const ObjCMethodDecl *MethodDecl);
 public:
   std::string MigrateDir;
-  bool MigrateLiterals;
-  bool MigrateSubscripting;
-  bool MigrateProperty;
-  bool MigrateReadonlyProperty;
+  unsigned ASTMigrateActions;
   unsigned  FileId;
   OwningPtr<NSAPI> NSAPIObj;
   OwningPtr<edit::EditedSource> Editor;
@@ -91,20 +88,14 @@ public:
   llvm::SmallVector<const Decl *, 8> CFFunctionIBCandidates;
   
   ObjCMigrateASTConsumer(StringRef migrateDir,
-                         bool migrateLiterals,
-                         bool migrateSubscripting,
-                         bool migrateProperty,
-                         bool migrateReadonlyProperty,
+                         unsigned astMigrateActions,
                          FileRemapper &remapper,
                          FileManager &fileMgr,
                          const PPConditionalDirectiveRecord *PPRec,
                          Preprocessor &PP,
                          bool isOutputFile = false)
   : MigrateDir(migrateDir),
-    MigrateLiterals(migrateLiterals),
-    MigrateSubscripting(migrateSubscripting),
-    MigrateProperty(migrateProperty), 
-    MigrateReadonlyProperty(migrateReadonlyProperty), 
+    ASTMigrateActions(astMigrateActions),
     FileId(0), Remapper(remapper), FileMgr(fileMgr), PPRec(PPRec), PP(PP),
     IsOutputFile(isOutputFile) { }
 
@@ -113,7 +104,7 @@ protected:
     NSAPIObj.reset(new NSAPI(Context));
     Editor.reset(new edit::EditedSource(Context.getSourceManager(),
                                         Context.getLangOpts(),
-                                        PPRec));
+                                        PPRec, false));
   }
 
   virtual bool HandleTopLevelDecl(DeclGroupRef DG) {
@@ -134,15 +125,10 @@ protected:
 }
 
 ObjCMigrateAction::ObjCMigrateAction(FrontendAction *WrappedAction,
-                             StringRef migrateDir,
-                             bool migrateLiterals,
-                             bool migrateSubscripting,
-                             bool migrateProperty,
-                             bool migrateReadonlyProperty)
+                                     StringRef migrateDir,
+                                     unsigned migrateAction)
   : WrapperFrontendAction(WrappedAction), MigrateDir(migrateDir),
-    MigrateLiterals(migrateLiterals), MigrateSubscripting(migrateSubscripting),
-    MigrateProperty(migrateProperty),
-    MigrateReadonlyProperty(migrateReadonlyProperty),
+    ObjCMigAction(migrateAction),
     CompInst(0) {
   if (MigrateDir.empty())
     MigrateDir = "."; // user current directory if none is given.
@@ -156,10 +142,7 @@ ASTConsumer *ObjCMigrateAction::CreateASTConsumer(CompilerInstance &CI,
   ASTConsumer *
     WrappedConsumer = WrapperFrontendAction::CreateASTConsumer(CI, InFile);
   ASTConsumer *MTConsumer = new ObjCMigrateASTConsumer(MigrateDir,
-                                                       MigrateLiterals,
-                                                       MigrateSubscripting,
-                                                       MigrateProperty,
-                                                       MigrateReadonlyProperty,
+                                                       ObjCMigAction,
                                                        Remapper,
                                                     CompInst->getFileManager(),
                                                        PPRec,
@@ -189,13 +172,13 @@ public:
   bool shouldWalkTypesOfTypeLocs() const { return false; }
 
   bool VisitObjCMessageExpr(ObjCMessageExpr *E) {
-    if (Consumer.MigrateLiterals) {
+    if (Consumer.ASTMigrateActions & FrontendOptions::ObjCMT_Literals) {
       edit::Commit commit(*Consumer.Editor);
       edit::rewriteToObjCLiteralSyntax(E, *Consumer.NSAPIObj, commit, &PMap);
       Consumer.Editor->commit(commit);
     }
 
-    if (Consumer.MigrateSubscripting) {
+    if (Consumer.ASTMigrateActions & FrontendOptions::ObjCMT_Subscripting) {
       edit::Commit commit(*Consumer.Editor);
       edit::rewriteToObjCSubscriptSyntax(E, *Consumer.NSAPIObj, commit);
       Consumer.Editor->commit(commit);
@@ -352,12 +335,14 @@ void ObjCMigrateASTConsumer::migrateObjCInterfaceDecl(ASTContext &Ctx,
     if (Method->isDeprecated())
       continue;
     migrateProperty(Ctx, D, Method);
-    migrateNsReturnsInnerPointer(Ctx, Method);
+    if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+      migrateNsReturnsInnerPointer(Ctx, Method);
   }
   for (ObjCContainerDecl::prop_iterator P = D->prop_begin(),
        E = D->prop_end(); P != E; ++P) {
     ObjCPropertyDecl *Prop = *P;
-    if (!P->isDeprecated())
+    if ((ASTMigrateActions & FrontendOptions::ObjCMT_Annotation) &&
+        !P->isDeprecated())
       migratePropertyNsReturnsInnerPointer(Ctx, Prop);
   }
 }
@@ -823,6 +808,8 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
   }
   
   if (SetterMethod) {
+    if ((ASTMigrateActions & FrontendOptions::ObjCMT_ReadwriteProperty) == 0)
+      return false;
     if (SetterMethod->isDeprecated() ||
         !AttributesMatch(Method, SetterMethod))
       return false;
@@ -841,7 +828,7 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
     Editor->commit(commit);
     return true;
   }
-  else if (MigrateReadonlyProperty) {
+  else if (ASTMigrateActions & FrontendOptions::ObjCMT_ReadonlyProperty) {
     // Try a non-void method with no argument (and no setter or property of same name
     // as a 'readonly' property.
     edit::Commit commit(*Editor);
@@ -882,7 +869,7 @@ void ObjCMigrateASTConsumer::migratePropertyNsReturnsInnerPointer(ASTContext &Ct
   Editor->commit(commit);
 }
 
-void ObjCMigrateASTConsumer::migrateMethods(ASTContext &Ctx,
+void ObjCMigrateASTConsumer::migrateAllMethodInstaceType(ASTContext &Ctx,
                                                  ObjCContainerDecl *CDecl) {
   if (CDecl->isDeprecated())
     return;
@@ -1310,17 +1297,47 @@ public:
 
 }
 
+static bool
+IsReallyASystemHeader(ASTContext &Ctx, const FileEntry *file, FileID FID) {
+  bool Invalid = false;
+  const SrcMgr::SLocEntry &SEntry =
+  Ctx.getSourceManager().getSLocEntry(FID, &Invalid);
+  if (!Invalid && SEntry.isFile()) {
+    const SrcMgr::FileInfo &FI = SEntry.getFile();
+    if (!FI.hasLineDirectives()) {
+      if (FI.getFileCharacteristic() == SrcMgr::C_ExternCSystem)
+        return true;
+      if (FI.getFileCharacteristic() == SrcMgr::C_System) {
+        // This file is in a system header directory. Continue with commiting change
+        // only if it is a user specified system directory because user put a
+        // .system_framework file in the framework directory.
+        StringRef Directory(file->getDir()->getName());
+        size_t Ix = Directory.rfind(".framework");
+        if (Ix == StringRef::npos)
+          return true;
+        std::string PatchToSystemFramework = Directory.slice(0, Ix+sizeof(".framework"));
+        PatchToSystemFramework += ".system_framework";
+        if (!llvm::sys::fs::exists(PatchToSystemFramework.data()))
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
 void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
   
   TranslationUnitDecl *TU = Ctx.getTranslationUnitDecl();
-  if (MigrateProperty) {
+  if (ASTMigrateActions & FrontendOptions::ObjCMT_MigrateDecls) {
     for (DeclContext::decl_iterator D = TU->decls_begin(), DEnd = TU->decls_end();
          D != DEnd; ++D) {
       if (unsigned FID =
             PP.getSourceManager().getFileID((*D)->getLocation()).getHashValue())
-        if (FileId && FileId != FID)
-          AnnotateImplicitBridging(Ctx);
-          
+        if (FileId && FileId != FID) {
+          if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+            AnnotateImplicitBridging(Ctx);
+        }
+      
       if (ObjCInterfaceDecl *CDecl = dyn_cast<ObjCInterfaceDecl>(*D))
         migrateObjCInterfaceDecl(Ctx, CDecl);
       if (ObjCCategoryDecl *CatDecl = dyn_cast<ObjCCategoryDecl>(*D))
@@ -1328,26 +1345,35 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
       else if (ObjCProtocolDecl *PDecl = dyn_cast<ObjCProtocolDecl>(*D))
         ObjCProtocolDecls.insert(PDecl);
       else if (const ObjCImplementationDecl *ImpDecl =
-               dyn_cast<ObjCImplementationDecl>(*D))
-        migrateProtocolConformance(Ctx, ImpDecl);
+               dyn_cast<ObjCImplementationDecl>(*D)) {
+        if (ASTMigrateActions & FrontendOptions::ObjCMT_ProtocolConformance)
+          migrateProtocolConformance(Ctx, ImpDecl);
+      }
       else if (const EnumDecl *ED = dyn_cast<EnumDecl>(*D)) {
         DeclContext::decl_iterator N = D;
         ++N;
         if (N != DEnd)
-          if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N))
-            migrateNSEnumDecl(Ctx, ED, TD);
+          if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N)) {
+            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros)
+              migrateNSEnumDecl(Ctx, ED, TD);
+          }
       }
-      else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D))
-        migrateCFAnnotation(Ctx, FD);
+      else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D)) {
+        if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+          migrateCFAnnotation(Ctx, FD);
+      }
       
       if (ObjCContainerDecl *CDecl = dyn_cast<ObjCContainerDecl>(*D)) {
         // migrate methods which can have instancetype as their result type.
-        migrateMethods(Ctx, CDecl);
+        if (ASTMigrateActions & FrontendOptions::ObjCMT_Instancetype)
+          migrateAllMethodInstaceType(Ctx, CDecl);
         // annotate methods with CF annotations.
-        migrateARCSafeAnnotation(Ctx, CDecl);
+        if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+          migrateARCSafeAnnotation(Ctx, CDecl);
       }
     }
-    AnnotateImplicitBridging(Ctx);
+    if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+      AnnotateImplicitBridging(Ctx);
   }
   
   Rewriter rewriter(Ctx.getSourceManager(), Ctx.getLangOpts());
@@ -1360,6 +1386,8 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
     RewriteBuffer &buf = I->second;
     const FileEntry *file = Ctx.getSourceManager().getFileEntryForID(FID);
     assert(file);
+    if (IsReallyASystemHeader(Ctx, file, FID))
+      continue;
     SmallString<512> newText;
     llvm::raw_svector_ostream vecOS(newText);
     buf.write(vecOS);
@@ -1389,10 +1417,7 @@ ASTConsumer *MigrateSourceAction::CreateASTConsumer(CompilerInstance &CI,
     PPRec = new PPConditionalDirectiveRecord(CI.getSourceManager());
   CI.getPreprocessor().addPPCallbacks(PPRec);
   return new ObjCMigrateASTConsumer(CI.getFrontendOpts().OutputFile,
-                                    /*MigrateLiterals=*/true,
-                                    /*MigrateSubscripting=*/true,
-                                    /*MigrateProperty*/true,
-                                    /*MigrateReadonlyProperty*/true,
+                                    FrontendOptions::ObjCMT_MigrateAll,
                                     Remapper,
                                     CI.getFileManager(),
                                     PPRec,

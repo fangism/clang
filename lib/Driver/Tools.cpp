@@ -573,8 +573,36 @@ static bool isNoCommonDefault(const llvm::Triple &Triple) {
 //
 // FIXME: Centralize feature selection, defaulting shouldn't be also in the
 // frontend target.
-static void getFPUFeatures(const Driver &D, const Arg *A, const ArgList &Args,
-                           std::vector<const char *> &Features) {
+static void getAArch64FPUFeatures(const Driver &D, const Arg *A,
+                                  const ArgList &Args,
+                                  std::vector<const char *> &Features) {
+  StringRef FPU = A->getValue();
+  if (FPU == "fp-armv8") {
+    Features.push_back("+fp-armv8");
+  } else if (FPU == "neon-fp-armv8") {
+    Features.push_back("+fp-armv8");
+    Features.push_back("+neon");
+  } else if (FPU == "crypto-neon-fp-armv8") {
+    Features.push_back("+fp-armv8");
+    Features.push_back("+neon");
+    Features.push_back("+crypto");
+  } else if (FPU == "neon") {
+    Features.push_back("+neon");
+  } else if (FPU == "none") {
+    Features.push_back("-fp-armv8");
+    Features.push_back("-crypto");
+    Features.push_back("-neon");
+  } else
+    D.Diag(diag::err_drv_clang_unsupported) << A->getAsString(Args);
+}
+
+// Handle -mfpu=.
+//
+// FIXME: Centralize feature selection, defaulting shouldn't be also in the
+// frontend target.
+static void getARMFPUFeatures(const Driver &D, const Arg *A,
+                              const ArgList &Args,
+                              std::vector<const char *> &Features) {
   StringRef FPU = A->getValue();
 
   // Set the target features based on the FPU.
@@ -603,6 +631,13 @@ static void getFPUFeatures(const Driver &D, const Arg *A, const ArgList &Args,
     Features.push_back("+fp-armv8");
   } else if (FPU == "neon") {
     Features.push_back("+neon");
+  } else if (FPU == "none") {
+    Features.push_back("-vfp2");
+    Features.push_back("-vfp3");
+    Features.push_back("-vfp4");
+    Features.push_back("-fp-armv8");
+    Features.push_back("-crypto");
+    Features.push_back("-neon");
   } else
     D.Diag(diag::err_drv_clang_unsupported) << A->getAsString(Args);
 }
@@ -704,7 +739,7 @@ static void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
 
   // Honor -mfpu=.
   if (const Arg *A = Args.getLastArg(options::OPT_mfpu_EQ))
-    getFPUFeatures(D, A, Args, Features);
+    getARMFPUFeatures(D, A, Args, Features);
 
   // Setting -msoft-float effectively disables NEON because of the GCC
   // implementation, although the same isn't true of VFP or VFP3.
@@ -730,7 +765,8 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   } else if (Triple.isOSDarwin()) {
     // The backend is hardwired to assume AAPCS for M-class processors, ensure
     // the frontend matches that.
-    if (StringRef(CPUName).startswith("cortex-m")) {
+    if (Triple.getEnvironment() == llvm::Triple::EABI ||
+        StringRef(CPUName).startswith("cortex-m")) {
       ABIName = "aapcs";
     } else {
       ABIName = "apcs-gnu";
@@ -1384,7 +1420,7 @@ static void getAArch64TargetFeatures(const Driver &D, const ArgList &Args,
                                      std::vector<const char *> &Features) {
   // Honor -mfpu=.
   if (const Arg *A = Args.getLastArg(options::OPT_mfpu_EQ))
-    getFPUFeatures(D, A, Args, Features);
+    getAArch64FPUFeatures(D, A, Args, Features);
 }
 
 static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
@@ -2183,9 +2219,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     options::OPT_fno_strict_aliasing,
                     getToolChain().IsStrictAliasingDefault()))
     CmdArgs.push_back("-relaxed-aliasing");
-  if (!Args.hasFlag(options::OPT_fstruct_path_tbaa,
-                    options::OPT_fno_struct_path_tbaa))
-    CmdArgs.push_back("-no-struct-path-tbaa");
+  if (Args.hasArg(options::OPT_fstruct_path_tbaa))
+    CmdArgs.push_back("-struct-path-tbaa");
   if (Args.hasFlag(options::OPT_fstrict_enums, options::OPT_fno_strict_enums,
                    false))
     CmdArgs.push_back("-fstrict-enums");
