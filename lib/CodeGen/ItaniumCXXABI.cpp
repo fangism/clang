@@ -173,6 +173,13 @@ public:
 
   void emitVirtualInheritanceTables(const CXXRecordDecl *RD);
 
+  void setThunkLinkage(llvm::Function *Thunk, bool ForVTable) {
+    // Allow inlining of thunks by emitting them with available_externally
+    // linkage together with vtables when needed.
+    if (ForVTable)
+      Thunk->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
+  }
+
   StringRef GetPureVirtualCallName() { return "__cxa_pure_virtual"; }
   StringRef GetDeletedVirtualCallName() { return "__cxa_deleted_virtual"; }
 
@@ -914,7 +921,7 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
   if (VTable->hasInitializer())
     return;
 
-  VTableContext &VTContext = CGM.getVTableContext();
+  ItaniumVTableContext &VTContext = CGM.getVTableContext();
   const VTableLayout &VTLayout = VTContext.getVTableLayout(RD);
   llvm::GlobalVariable::LinkageTypes Linkage = CGM.getVTableLinkage(RD);
 
@@ -1005,7 +1012,7 @@ llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
   Out.flush();
   StringRef Name = OutName.str();
 
-  VTableContext &VTContext = CGM.getVTableContext();
+  ItaniumVTableContext &VTContext = CGM.getVTableContext();
   llvm::ArrayType *ArrayType = llvm::ArrayType::get(
       CGM.Int8PtrTy, VTContext.getVTableLayout(RD).getNumVTableComponents());
 

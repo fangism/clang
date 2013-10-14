@@ -204,3 +204,50 @@ typedef enum {
   Random5 = 0xbadbeef,
   Random6
 } UIP8_3;
+
+// rdar://15200602
+#define NS_AVAILABLE_MAC(X)  __attribute__((availability(macosx,introduced=X)))
+#define NS_ENUM_AVAILABLE_MAC(X) __attribute__((availability(macosx,introduced=X)))
+
+enum {
+    NSModalResponseStop                 = (-1000), // Also used as the default response for sheets
+    NSModalResponseAbort                = (-1001),
+    NSModalResponseContinue             = (-1002), 
+} NS_ENUM_AVAILABLE_MAC(10.9);
+typedef NSInteger NSModalResponse NS_AVAILABLE_MAC(10.9);
+
+// rdar://15200915
+typedef NSUInteger NSWorkspaceLaunchOptions;
+enum {
+     NSWorkspaceLaunchAndPrint =                 0x00000002,
+     NSWorkspaceLaunchWithErrorPresentation    = 0x00000040,
+     NSWorkspaceLaunchInhibitingBackgroundOnly = 0x00000080,
+     NSWorkspaceLaunchWithoutAddingToRecents   = 0x00000100,
+     NSWorkspaceLaunchWithoutActivation        = 0x00000200,
+     NSWorkspaceLaunchAsync                    = 0x00010000,
+     NSWorkspaceLaunchAllowingClassicStartup   = 0x00020000,
+     NSWorkspaceLaunchPreferringClassic        = 0x00040000,
+     NSWorkspaceLaunchNewInstance              = 0x00080000,
+     NSWorkspaceLaunchAndHide                  = 0x00100000,
+     NSWorkspaceLaunchAndHideOthers            = 0x00200000,
+     NSWorkspaceLaunchDefault = NSWorkspaceLaunchAsync | 
+NSWorkspaceLaunchAllowingClassicStartup
+};
+
+typedef NSUInteger NSWorkspaceIconCreationOptions;
+enum {
+    NSExcludeQuickDrawElementsIconCreationOption    = 1 << 1,
+    NSExclude10_4ElementsIconCreationOption         = 1 << 2
+};
+
+typedef NSUInteger NSWorkspaceCreationOptions;
+enum {
+    NSExcludeQuickDrawElementsCreationOption    = 1 << 1,
+    NSExclude10_4ElementsCreationOption         = 1 << 2
+};
+
+enum {
+    NSExcludeQuickDrawElementsIconOption    = 1 << 1,
+    NSExclude10_4ElementsIconOption         = 1 << 2
+};
+typedef NSUInteger NSWorkspaceIconOptions;

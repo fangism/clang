@@ -98,6 +98,7 @@ def OP_DIV  : Op;
 def OP_LONG_HI : Op;
 def OP_NARROW_HI : Op;
 def OP_MOVL_HI : Op;
+def OP_COPY : Op;
 
 class Inst <string n, string p, string t, Op o> {
   string Name = n;
@@ -167,6 +168,8 @@ class NoTestOpInst<string n, string p, string t, Op o> : Inst<n, p, t, o> {}
 // s: scalar of element type
 // r: scalar of double width element type
 // a: scalar of element type (splat to vector type)
+// y: scalar of float
+// o: scalar of double
 // k: default elt width, double num elts
 // #: array of default vectors
 // p: pointer type
@@ -496,6 +499,26 @@ def VFMA : SInst<"vfma", "dddd", "fQf">;
 let isA64 = 1 in {
 
 ////////////////////////////////////////////////////////////////////////////////
+// Load/Store
+// With additional QUl, Ql, Qd type.
+def LD1 : WInst<"vld1", "dc",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def LD2 : WInst<"vld2", "2c",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def LD3 : WInst<"vld3", "3c",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def LD4 : WInst<"vld4", "4c",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def ST1 : WInst<"vst1", "vpd",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def ST2 : WInst<"vst2", "vp2",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def ST3 : WInst<"vst3", "vp3",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+def ST4 : WInst<"vst4", "vp4",
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+
+////////////////////////////////////////////////////////////////////////////////
 // Addition
 // With additional Qd type.
 def ADD : IOpInst<"vadd", "ddd", "csilfUcUsUiUlQcQsQiQlQfQUcQUsQUiQUlQd", OP_ADD>;
@@ -641,6 +664,35 @@ def VQDMLAL_HIGH : SOpInst<"vqdmlal_high", "wwkk", "si", OP_QDMLALHi>;
 def VQDMLSL_HIGH : SOpInst<"vqdmlsl_high", "wwkk", "si", OP_QDMLSLHi>;
 
 ////////////////////////////////////////////////////////////////////////////////
+// Extract or insert element from vector
+def GET_LANE : IInst<"vget_lane", "sdi",
+                        "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPs">;
+def SET_LANE : IInst<"vset_lane", "dsdi",
+                 "csilPcPsUiUlUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPshfdQhQfQd">;
+def COPY_LANE : IOpInst<"vcopy_lane", "ddidi",
+                     "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPs", OP_COPY>;
+def COPY_LANEQ : IOpInst<"vcopy_laneq", "ggidi",
+                     "QcQsQiQlQUcQUsQUiQUlQPcQPs", OP_COPY>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Set all lanes to same value
+def VDUP_LANE1: WOpInst<"vdup_lane", "dgi",
+                        "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQd",
+                        OP_DUP_LN>;
+def VDUP_LANE2: WOpInst<"vdup_laneq", "dki",
+                        "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQd",
+                        OP_DUP_LN>;
+def DUP_N   : WOpInst<"vdup_n", "ds",
+                       "UcUsUicsiPcPsfQUcQUsQUiQcQsQiQPcQPsQflUlQlQUldQd",
+                       OP_DUP>;
+def MOV_N   : WOpInst<"vmov_n", "ds",
+                       "UcUsUicsiPcPsfQUcQUsQUiQcQsQiQPcQPsQflUlQlQUldQd",
+                       OP_DUP>;
+////////////////////////////////////////////////////////////////////////////////
+//Initialize a vector from bit pattern
+def CREATE : NoTestOpInst<"vcreate", "dl", "csihfdUcUsUiUlPcPsl", OP_CAST>;
+
+////////////////////////////////////////////////////////////////////////////////
 
 def VMLA_LANEQ   : IOpInst<"vmla_laneq", "dddji",
                            "siUsUifQsQiQUsQUiQf", OP_MLA_LN>;
@@ -764,5 +816,43 @@ def SCALAR_FRECPS : IInst<"vrecps", "sss", "SfSd">;
 ////////////////////////////////////////////////////////////////////////////////
 // Scalar Floating-point Reciprocal Square Root Step
 def SCALAR_FRSQRTS : IInst<"vrsqrts", "sss", "SfSd">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Signed Integer Convert To Floating-point
+def SCALAR_SCVTFS : SInst<"vcvt_f32", "ys", "Si">;
+def SCALAR_SCVTFD : SInst<"vcvt_f64", "os", "Sl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Unsigned Integer Convert To Floating-point
+def SCALAR_UCVTFS : SInst<"vcvt_f32", "ys", "SUi">;
+def SCALAR_UCVTFD : SInst<"vcvt_f64", "os", "SUl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Floating-point Reciprocal Estimate
+def SCALAR_FRECPE : IInst<"vrecpe", "ss", "SfSd">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Floating-point Reciprocal Exponent
+def SCALAR_FRECPX : IInst<"vrecpx", "ss", "SfSd">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Floating-point Reciprocal Square Root Estimate
+def SCALAR_FRSQRTE : IInst<"vrsqrte", "ss", "SfSd">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Integer Comparison
+def SCALAR_CMEQ : SInst<"vceq", "sss", "SlSUl">;
+def SCALAR_CMEQZ : SInst<"vceqz", "ss", "SlSUl">;
+def SCALAR_CMGE : SInst<"vcge", "sss", "Sl">;
+def SCALAR_CMGEZ : SInst<"vcgez", "ss", "Sl">;
+def SCALAR_CMHS : SInst<"vcge", "sss", "SUl">;
+def SCALAR_CMLE : SInst<"vcle", "sss", "SlSUl">;
+def SCALAR_CMLEZ : SInst<"vclez", "ss", "Sl">;
+def SCALAR_CMLT : SInst<"vclt", "sss", "SlSUl">;
+def SCALAR_CMLTZ : SInst<"vcltz", "ss", "Sl">;
+def SCALAR_CMGT : SInst<"vcgt", "sss", "Sl">;
+def SCALAR_CMGTZ : SInst<"vcgtz", "ss", "Sl">;
+def SCALAR_CMHI : SInst<"vcgt", "sss", "SUl">;
+def SCALAR_CMTST : SInst<"vtst", "sss", "SlSUl">;
 
 }

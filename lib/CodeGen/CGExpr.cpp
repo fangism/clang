@@ -476,7 +476,9 @@ void CodeGenFunction::EmitTypeCheck(TypeCheckKind TCK, SourceLocation Loc,
     // The glvalue must refer to a large enough storage region.
     // FIXME: If Address Sanitizer is enabled, insert dynamic instrumentation
     //        to check this.
-    llvm::Value *F = CGM.getIntrinsic(llvm::Intrinsic::objectsize, IntPtrTy);
+    // FIXME: Get object address space
+    llvm::Type *Tys[2] = { IntPtrTy, Int8PtrTy };
+    llvm::Value *F = CGM.getIntrinsic(llvm::Intrinsic::objectsize, Tys);
     llvm::Value *Min = Builder.getFalse();
     llvm::Value *CastAddr = Builder.CreateBitCast(Address, Int8PtrTy);
     llvm::Value *LargeEnough =
@@ -1109,7 +1111,8 @@ llvm::Value *CodeGenFunction::EmitLoadOfScalar(llvm::Value *Addr, bool Volatile,
   if (TBAAInfo) {
     llvm::MDNode *TBAAPath = CGM.getTBAAStructTagInfo(TBAABaseType, TBAAInfo,
                                                       TBAAOffset);
-    CGM.DecorateInstruction(Load, TBAAPath, false/*ConvertTypeToTag*/);
+    if (TBAAPath)
+      CGM.DecorateInstruction(Load, TBAAPath, false/*ConvertTypeToTag*/);
   }
 
   if ((SanOpts->Bool && hasBooleanRepresentation(Ty)) ||
@@ -1222,7 +1225,8 @@ void CodeGenFunction::EmitStoreOfScalar(llvm::Value *Value, llvm::Value *Addr,
   if (TBAAInfo) {
     llvm::MDNode *TBAAPath = CGM.getTBAAStructTagInfo(TBAABaseType, TBAAInfo,
                                                       TBAAOffset);
-    CGM.DecorateInstruction(Store, TBAAPath, false/*ConvertTypeToTag*/);
+    if (TBAAPath)
+      CGM.DecorateInstruction(Store, TBAAPath, false/*ConvertTypeToTag*/);
   }
 }
 
@@ -2509,7 +2513,8 @@ LValue CodeGenFunction::EmitLValueForField(LValue base,
           tbaa = CGM.getTBAAInfo(getContext().CharTy);
         else
           tbaa = CGM.getTBAAInfo(type);
-        CGM.DecorateInstruction(load, tbaa);
+        if (tbaa)
+          CGM.DecorateInstruction(load, tbaa);
       }
 
       addr = load;

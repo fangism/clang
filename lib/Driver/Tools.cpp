@@ -846,20 +846,6 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
     }
 }
 
-// Translate MIPS CPU name alias option to CPU name.
-static StringRef getMipsCPUFromAlias(const Arg &A) {
-  if (A.getOption().matches(options::OPT_mips32))
-    return "mips32";
-  if (A.getOption().matches(options::OPT_mips32r2))
-    return "mips32r2";
-  if (A.getOption().matches(options::OPT_mips64))
-    return "mips64";
-  if (A.getOption().matches(options::OPT_mips64r2))
-    return "mips64r2";
-  llvm_unreachable("Unexpected option");
-  return "";
-}
-
 // Get CPU and ABI names. They are not independent
 // so we have to calculate them together.
 static void getMipsCPUAndABI(const ArgList &Args,
@@ -870,13 +856,8 @@ static void getMipsCPUAndABI(const ArgList &Args,
   const char *DefMips64CPU = "mips64";
 
   if (Arg *A = Args.getLastArg(options::OPT_march_EQ,
-                               options::OPT_mcpu_EQ,
-                               options::OPT_mips_CPUs_Group)) {
-    if (A->getOption().matches(options::OPT_mips_CPUs_Group))
-      CPUName = getMipsCPUFromAlias(*A);
-    else
-      CPUName = A->getValue();
-  }
+                               options::OPT_mcpu_EQ))
+    CPUName = A->getValue();
 
   if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
     ABIName = A->getValue();
@@ -1744,7 +1725,7 @@ static void addSanitizerRTLinkFlagsLinux(
 /// This needs to be called before we add the C run-time (malloc, etc).
 static void addAsanRTLinux(const ToolChain &TC, const ArgList &Args,
                            ArgStringList &CmdArgs) {
-  if(TC.getTriple().getEnvironment() == llvm::Triple::Android) {
+  if (TC.getTriple().getEnvironment() == llvm::Triple::Android) {
     SmallString<128> LibAsan(TC.getDriver().ResourceDir);
     llvm::sys::path::append(LibAsan, "lib", "linux",
         (Twine("libclang_rt.asan-") +
@@ -2126,7 +2107,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
-  // Inroduce a Darwin-specific hack. If the default is PIC but the flags
+  // Introduce a Darwin-specific hack. If the default is PIC but the flags
   // specified while enabling PIC enabled level 1 PIC, just force it back to
   // level 2 PIC instead. This matches the behavior of Darwin GCC (based on my
   // informal testing).
@@ -2219,8 +2200,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     options::OPT_fno_strict_aliasing,
                     getToolChain().IsStrictAliasingDefault()))
     CmdArgs.push_back("-relaxed-aliasing");
-  if (Args.hasArg(options::OPT_fstruct_path_tbaa))
-    CmdArgs.push_back("-struct-path-tbaa");
+  if (!Args.hasFlag(options::OPT_fstruct_path_tbaa,
+                    options::OPT_fno_struct_path_tbaa))
+    CmdArgs.push_back("-no-struct-path-tbaa");
   if (Args.hasFlag(options::OPT_fstrict_enums, options::OPT_fno_strict_enums,
                    false))
     CmdArgs.push_back("-fstrict-enums");
@@ -6820,4 +6802,59 @@ Command *visualstudio::Compile::GetCommand(Compilation &C, const JobAction &JA,
   std::string Exec = FindFallback("cl.exe", D.getClangProgramPath());
 
   return new Command(JA, *this, Args.MakeArgString(Exec), CmdArgs);
+}
+
+
+/// XCore Tools
+// We pass assemble and link construction to the xcc tool.
+
+void XCore::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
+                                       const InputInfo &Output,
+                                       const InputInfoList &Inputs,
+                                       const ArgList &Args,
+                                       const char *LinkingOutput) const {
+  ArgStringList CmdArgs;
+
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+
+  CmdArgs.push_back("-c");
+
+  if (Args.hasArg(options::OPT_g_Group)) {
+    CmdArgs.push_back("-g");
+  }
+
+  Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA,
+                       options::OPT_Xassembler);
+
+  for (InputInfoList::const_iterator
+       it = Inputs.begin(), ie = Inputs.end(); it != ie; ++it) {
+    const InputInfo &II = *it;
+    CmdArgs.push_back(II.getFilename());
+  }
+
+  const char *Exec =
+    Args.MakeArgString(getToolChain().GetProgramPath("xcc"));
+  C.addCommand(new Command(JA, *this, Exec, CmdArgs));
+}
+
+void XCore::Link::ConstructJob(Compilation &C, const JobAction &JA,
+                                   const InputInfo &Output,
+                                   const InputInfoList &Inputs,
+                                   const ArgList &Args,
+                                   const char *LinkingOutput) const {
+  ArgStringList CmdArgs;
+
+  if (Output.isFilename()) {
+    CmdArgs.push_back("-o");
+    CmdArgs.push_back(Output.getFilename());
+  } else {
+    assert(Output.isNothing() && "Invalid output.");
+  }
+
+  AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs);
+
+  const char *Exec =
+    Args.MakeArgString(getToolChain().GetProgramPath("xcc"));
+  C.addCommand(new Command(JA, *this, Exec, CmdArgs));
 }

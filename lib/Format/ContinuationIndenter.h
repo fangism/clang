@@ -125,10 +125,10 @@ private:
 };
 
 struct ParenState {
-  ParenState(unsigned Indent, unsigned LastSpace, bool AvoidBinPacking,
-             bool NoLineBreak)
-      : Indent(Indent), LastSpace(LastSpace), FirstLessLess(0),
-        BreakBeforeClosingBrace(false), QuestionColumn(0),
+  ParenState(unsigned Indent, unsigned IndentLevel, unsigned LastSpace,
+             bool AvoidBinPacking, bool NoLineBreak)
+      : Indent(Indent), IndentLevel(IndentLevel), LastSpace(LastSpace),
+        FirstLessLess(0), BreakBeforeClosingBrace(false), QuestionColumn(0),
         AvoidBinPacking(AvoidBinPacking), BreakBeforeParameter(false),
         NoLineBreak(NoLineBreak), ColonPos(0), StartOfFunctionCall(0),
         StartOfArraySubscripts(0), NestedNameSpecifierContinuation(0),
@@ -138,6 +138,9 @@ struct ParenState {
   /// \brief The position to which a specific parenthesis level needs to be
   /// indented.
   unsigned Indent;
+
+  /// \brief The number of indentation levels of the block.
+  unsigned IndentLevel;
 
   /// \brief The position of the last space on each level.
   ///
@@ -250,7 +253,7 @@ struct LineState {
   unsigned Column;
 
   /// \brief The token that needs to be next formatted.
-  const FormatToken *NextToken;
+  FormatToken *NextToken;
 
   /// \brief \c true if this line contains a continued for-loop section.
   bool LineContainsContinuedForLoopSection;

@@ -1481,6 +1481,13 @@ public:
     }
   }
   
+  void warnLoopStateMismatch(SourceLocation Loc, StringRef VariableName) {
+    PartialDiagnosticAt Warning(Loc, S.PDiag(diag::warn_loop_state_mismatch) <<
+      VariableName);
+    
+    Warnings.push_back(DelayedDiag(Warning, OptionalNotes()));
+  }
+  
   void warnReturnTypestateForUnconsumableType(SourceLocation Loc,
                                               StringRef TypeName) {
     PartialDiagnosticAt Warning(Loc, S.PDiag(
@@ -1494,15 +1501,6 @@ public:
                                     
     PartialDiagnosticAt Warning(Loc, S.PDiag(
       diag::warn_return_typestate_mismatch) << ExpectedState << ObservedState);
-    
-    Warnings.push_back(DelayedDiag(Warning, OptionalNotes()));
-  }
-  
-  void warnUnnecessaryTest(StringRef VariableName, StringRef VariableState,
-                           SourceLocation Loc) {
-
-    PartialDiagnosticAt Warning(Loc, S.PDiag(diag::warn_unnecessary_test) <<
-                                 VariableName << VariableState);
     
     Warnings.push_back(DelayedDiag(Warning, OptionalNotes()));
   }

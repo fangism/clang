@@ -105,16 +105,15 @@ void Replacement::setFromSourceLocation(SourceManager &Sources,
   const std::pair<FileID, unsigned> DecomposedLocation =
       Sources.getDecomposedLoc(Start);
   const FileEntry *Entry = Sources.getFileEntryForID(DecomposedLocation.first);
-
   if (Entry != NULL) {
     // Make FilePath absolute so replacements can be applied correctly when
     // relative paths for files are used.
     llvm::SmallString<256> FilePath(Entry->getName());
     llvm::error_code EC = llvm::sys::fs::make_absolute(FilePath);
-    // Don't change the FilePath if the file is a virtual file.
     this->FilePath = EC ? FilePath.c_str() : Entry->getName();
-  } else
+  } else {
     this->FilePath = InvalidLocation;
+  }
   this->ReplacementRange = Range(DecomposedLocation.second, Length);
   this->ReplacementText = ReplacementText;
 }

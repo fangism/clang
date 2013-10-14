@@ -46,7 +46,7 @@ class ObjCMigrateASTConsumer : public ASTConsumer {
   void migrateObjCInterfaceDecl(ASTContext &Ctx, ObjCContainerDecl *D);
   void migrateProtocolConformance(ASTContext &Ctx,
                                   const ObjCImplementationDecl *ImpDecl);
-  void migrateNSEnumDecl(ASTContext &Ctx, const EnumDecl *EnumDcl,
+  bool migrateNSEnumDecl(ASTContext &Ctx, const EnumDecl *EnumDcl,
                      const TypedefDecl *TypedefDcl);
   void migrateAllMethodInstaceType(ASTContext &Ctx, ObjCContainerDecl *CDecl);
   void migrateMethodInstanceType(ASTContext &Ctx, ObjCContainerDecl *CDecl,
@@ -230,12 +230,47 @@ static void append_attr(std::string &PropertyString, const char *attr) {
   PropertyString += attr;
 }
 
+static
+void MigrateBlockOrFunctionPointerTypeVariable(std::string & PropertyString,
+                                               const std::string& TypeString,
+                                               const char *name) {
+  const char *argPtr = TypeString.c_str();
+  int paren = 0;
+  while (*argPtr) {
+    switch (*argPtr) {
+      case '(':
+        PropertyString += *argPtr;
+        paren++;
+        break;
+      case ')':
+        PropertyString += *argPtr;
+        paren--;
+        break;
+      case '^':
+      case '*':
+        PropertyString += (*argPtr);
+        if (paren == 1) {
+          PropertyString += name;
+          name = "";
+        }
+        break;
+      default:
+        PropertyString += *argPtr;
+        break;
+    }
+    argPtr++;
+  }
+}
+
+
 static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
                                   const ObjCMethodDecl *Setter,
                                   const NSAPI &NS, edit::Commit &commit,
-                                  unsigned LengthOfPrefix) {
+                                  unsigned LengthOfPrefix,
+                                  bool Atomic) {
   ASTContext &Context = NS.getASTContext();
-  std::string PropertyString = "@property (nonatomic";
+  std::string PropertyString = "@property (";
+  PropertyString += (Atomic ? "atomic" : "nonatomic");
   std::string PropertyNameString = Getter->getNameAsString();
   StringRef PropertyName(PropertyNameString);
   if (LengthOfPrefix > 0) {
@@ -245,7 +280,7 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
   // Property with no setter may be suggested as a 'readonly' property.
   if (!Setter)
     append_attr(PropertyString, "readonly");
-
+  
   // Short circuit properties that contain the name "delegate" or "dataSource",
   // or have exact name "target" to have unsafe_unretained attribute.
   if (PropertyName.equals("target") ||
@@ -267,15 +302,17 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
         else
           append_attr(PropertyString, "retain");
       }
+      else if (ArgType->isBlockPointerType())
+        append_attr(PropertyString, "copy");
     } else if (propertyLifetime == Qualifiers::OCL_Weak)
       // TODO. More precise determination of 'weak' attribute requires
       // looking into setter's implementation for backing weak ivar.
       append_attr(PropertyString, "weak");
     else if (RetainableObject)
-      append_attr(PropertyString, "retain");
+      append_attr(PropertyString,
+                  ArgType->isBlockPointerType() ? "copy" : "retain");
   }
   PropertyString += ')';
-  
   QualType RT = Getter->getResultType();
   if (!isa<TypedefType>(RT)) {
     // strip off any ARC lifetime qualifier.
@@ -287,26 +324,33 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
     }
   }
   PropertyString += " ";
-  PropertyString += RT.getAsString(Context.getPrintingPolicy());
-  char LastChar = PropertyString[PropertyString.size()-1];
-  if (LastChar != '*')
-    PropertyString += " ";
+  PrintingPolicy SubPolicy(Context.getPrintingPolicy());
+  SubPolicy.SuppressStrongLifetime = true;
+  SubPolicy.SuppressLifetimeQualifiers = true;
+  std::string TypeString = RT.getAsString(SubPolicy);
   if (LengthOfPrefix > 0) {
     // property name must strip off "is" and lower case the first character
     // after that; e.g. isContinuous will become continuous.
     StringRef PropertyNameStringRef(PropertyNameString);
     PropertyNameStringRef = PropertyNameStringRef.drop_front(LengthOfPrefix);
     PropertyNameString = PropertyNameStringRef;
-    std::string NewPropertyNameString = PropertyNameString;
-    bool NoLowering = (isUppercase(NewPropertyNameString[0]) &&
-                       NewPropertyNameString.size() > 1 &&
-                       isUppercase(NewPropertyNameString[1]));
+    bool NoLowering = (isUppercase(PropertyNameString[0]) &&
+                       PropertyNameString.size() > 1 &&
+                       isUppercase(PropertyNameString[1]));
     if (!NoLowering)
-      NewPropertyNameString[0] = toLowercase(NewPropertyNameString[0]);
-    PropertyString += NewPropertyNameString;
+      PropertyNameString[0] = toLowercase(PropertyNameString[0]);
   }
-  else
+  if (RT->isBlockPointerType() || RT->isFunctionPointerType())
+    MigrateBlockOrFunctionPointerTypeVariable(PropertyString,
+                                              TypeString,
+                                              PropertyNameString.c_str());
+  else {
+    char LastChar = TypeString[TypeString.size()-1];
+    PropertyString += TypeString;
+    if (LastChar != '*')
+      PropertyString += ' ';
     PropertyString += PropertyNameString;
+  }
   SourceLocation StartGetterSelectorLoc = Getter->getSelectorStartLoc();
   Selector GetterSelector = Getter->getSelector();
   
@@ -466,9 +510,14 @@ static bool rewriteToNSEnumDecl(const EnumDecl *EnumDcl,
   SourceRange R(EnumDcl->getLocStart(), EnumDcl->getLocStart());
   commit.replace(R, ClassString);
   SourceLocation EndOfTypedefLoc = TypedefDcl->getLocEnd();
-  EndOfTypedefLoc = trans::findLocationAfterSemi(EndOfTypedefLoc, NS.getASTContext());
+  EndOfTypedefLoc = trans::findLocationAfterSemi(EndOfTypedefLoc, NS.getASTContext(),
+                                                 /*IsDecl*/true);
+  SourceLocation BeginOfTypedefLoc = TypedefDcl->getLocStart();
   if (!EndOfTypedefLoc.isInvalid()) {
-    commit.remove(SourceRange(TypedefDcl->getLocStart(), EndOfTypedefLoc));
+    // FIXME. This assumes that typedef decl; is immediately preceeded by eoln.
+    // It is trying to remove the typedef decl. line entirely.
+    BeginOfTypedefLoc = BeginOfTypedefLoc.getLocWithOffset(-1);
+    commit.remove(SourceRange(BeginOfTypedefLoc, EndOfTypedefLoc));
     return true;
   }
   return false;
@@ -589,13 +638,13 @@ void ObjCMigrateASTConsumer::migrateProtocolConformance(ASTContext &Ctx,
   Editor->commit(commit);
 }
 
-void ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
+bool ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
                                            const EnumDecl *EnumDcl,
                                            const TypedefDecl *TypedefDcl) {
   if (!EnumDcl->isCompleteDefinition() || EnumDcl->getIdentifier() ||
       !TypedefDcl->getIdentifier() ||
       EnumDcl->isDeprecated() || TypedefDcl->isDeprecated())
-    return;
+    return false;
   
   QualType qt = TypedefDcl->getTypeSourceInfo()->getType();
   bool IsNSIntegerType = NSAPIObj->isObjCNSIntegerType(qt);
@@ -608,29 +657,30 @@ void ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
         bool NSOptions = UseNSOptionsMacro(PP, Ctx, EnumDcl);
         if (NSOptions) {
           if (!Ctx.Idents.get("NS_OPTIONS").hasMacroDefinition())
-            return;
+            return false;
         }
         else if (!Ctx.Idents.get("NS_ENUM").hasMacroDefinition())
-          return;
+          return false;
         edit::Commit commit(*Editor);
         rewriteToNSMacroDecl(EnumDcl, TypedefDcl, *NSAPIObj, commit, !NSOptions);
         Editor->commit(commit);
       }
     }
-    return;
+    return false;
   }
   
   // We may still use NS_OPTIONS based on what we find in the enumertor list.
   bool NSOptions = UseNSOptionsMacro(PP, Ctx, EnumDcl);
   // NS_ENUM must be available.
   if (IsNSIntegerType && !Ctx.Idents.get("NS_ENUM").hasMacroDefinition())
-    return;
+    return false;
   // NS_OPTIONS must be available.
   if (IsNSUIntegerType && !Ctx.Idents.get("NS_OPTIONS").hasMacroDefinition())
-    return;
+    return false;
   edit::Commit commit(*Editor);
   rewriteToNSEnumDecl(EnumDcl, TypedefDcl, *NSAPIObj, commit, IsNSIntegerType, NSOptions);
   Editor->commit(commit);
+  return true;
 }
 
 static void ReplaceWithInstancetype(const ObjCMigrateASTConsumer &ASTC,
@@ -646,6 +696,28 @@ static void ReplaceWithInstancetype(const ObjCMigrateASTConsumer &ASTC,
     R = SourceRange(OM->getLocStart(), OM->getLocStart());
     ClassString = OM->isInstanceMethod() ? '-' : '+';
     ClassString += " (instancetype)";
+  }
+  edit::Commit commit(*ASTC.Editor);
+  commit.replace(R, ClassString);
+  ASTC.Editor->commit(commit);
+}
+
+static void ReplaceWithClasstype(const ObjCMigrateASTConsumer &ASTC,
+                                    ObjCMethodDecl *OM) {
+  ObjCInterfaceDecl *IDecl = OM->getClassInterface();
+  SourceRange R;
+  std::string ClassString;
+  if (TypeSourceInfo *TSInfo =  OM->getResultTypeSourceInfo()) {
+    TypeLoc TL = TSInfo->getTypeLoc();
+    R = SourceRange(TL.getBeginLoc(), TL.getEndLoc()); {
+      ClassString  = IDecl->getName();
+      ClassString += "*";
+    }
+  }
+  else {
+    R = SourceRange(OM->getLocStart(), OM->getLocStart());
+    ClassString = "+ (";
+    ClassString += IDecl->getName(); ClassString += "*)";
   }
   edit::Commit commit(*ASTC.Editor);
   commit.replace(R, ClassString);
@@ -675,6 +747,9 @@ void ObjCMigrateASTConsumer::migrateMethodInstanceType(ASTContext &Ctx,
     case OIT_Init:
       if (OM->getResultType()->isObjCIdType())
         ReplaceWithInstancetype(*this, OM);
+      return;
+    case OIT_ReturnsSelf:
+      migrateFactoryMethod(Ctx, CDecl, OM, OIT_ReturnsSelf);
       return;
   }
   if (!OM->getResultType()->isObjCIdType())
@@ -824,7 +899,9 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
       return false;
     edit::Commit commit(*Editor);
     rewriteToObjCProperty(Method, SetterMethod, *NSAPIObj, commit,
-                          LengthOfPrefix);
+                          LengthOfPrefix,
+                          (ASTMigrateActions &
+                           FrontendOptions::ObjCMT_AtomicProperty) != 0);
     Editor->commit(commit);
     return true;
   }
@@ -833,7 +910,9 @@ bool ObjCMigrateASTConsumer::migrateProperty(ASTContext &Ctx,
     // as a 'readonly' property.
     edit::Commit commit(*Editor);
     rewriteToObjCProperty(Method, 0 /*SetterMethod*/, *NSAPIObj, commit,
-                          LengthOfPrefix);
+                          LengthOfPrefix,
+                          (ASTMigrateActions &
+                           FrontendOptions::ObjCMT_AtomicProperty) != 0);
     Editor->commit(commit);
     return true;
   }
@@ -917,7 +996,7 @@ void ObjCMigrateASTConsumer::migrateFactoryMethod(ASTContext &Ctx,
     return;
   
   std::string MethodName = MethodIdName->getName();
-  if (OIT_Family == OIT_Singleton) {
+  if (OIT_Family == OIT_Singleton || OIT_Family == OIT_ReturnsSelf) {
     StringRef STRefMethodName(MethodName);
     size_t len = 0;
     if (STRefMethodName.startswith("standard"))
@@ -943,7 +1022,10 @@ void ObjCMigrateASTConsumer::migrateFactoryMethod(ASTContext &Ctx,
   LoweredMethodName = StringLoweredMethodName;
   if (!LoweredMethodName.startswith(ClassNamePostfix))
     return;
-  ReplaceWithInstancetype(*this, OM);
+  if (OIT_Family == OIT_ReturnsSelf)
+    ReplaceWithClasstype(*this, OM);
+  else
+    ReplaceWithInstancetype(*this, OM);
 }
 
 static bool IsVoidStarType(QualType Ty) {
@@ -1354,8 +1436,21 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
         ++N;
         if (N != DEnd)
           if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N)) {
-            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros)
-              migrateNSEnumDecl(Ctx, ED, TD);
+            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
+              if (migrateNSEnumDecl(Ctx, ED, TD))
+                D++;
+            }
+          }
+      }
+      else if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*D)) {
+        DeclContext::decl_iterator N = D;
+        ++N;
+        if (N != DEnd)
+          if (const EnumDecl *ED = dyn_cast<EnumDecl>(*N)) {
+            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
+              if (migrateNSEnumDecl(Ctx, ED, TD))
+                ++D;
+            }
           }
       }
       else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D)) {
