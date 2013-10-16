@@ -1785,26 +1785,36 @@ static void addDfsanRTLinux(const ToolChain &TC, const ArgList &Args,
     addSanitizerRTLinkFlagsLinux(TC, Args, CmdArgs, "dfsan", true);
 }
 
+static bool shouldUseFramePointerForTarget(const ArgList &Args,
+                                           const llvm::Triple &Triple) {
+  switch (Triple.getArch()) {
+  // Don't use a frame pointer on linux if optimizing for certain targets.
+  case llvm::Triple::mips64:
+  case llvm::Triple::mips64el:
+  case llvm::Triple::mips:
+  case llvm::Triple::mipsel:
+  case llvm::Triple::systemz:
+  case llvm::Triple::x86:
+  case llvm::Triple::x86_64:
+    if (Triple.isOSLinux())
+      if (Arg *A = Args.getLastArg(options::OPT_O_Group))
+        if (!A->getOption().matches(options::OPT_O0))
+          return false;
+    return true;
+  case llvm::Triple::xcore:
+    return false;
+  default:
+    return true;
+  }
+}
+
 static bool shouldUseFramePointer(const ArgList &Args,
                                   const llvm::Triple &Triple) {
   if (Arg *A = Args.getLastArg(options::OPT_fno_omit_frame_pointer,
                                options::OPT_fomit_frame_pointer))
     return A->getOption().matches(options::OPT_fno_omit_frame_pointer);
 
-  // Don't use a frame pointer on linux x86, x86_64 and z if optimizing.
-  if ((Triple.getArch() == llvm::Triple::x86_64 ||
-       Triple.getArch() == llvm::Triple::x86 ||
-       Triple.getArch() == llvm::Triple::systemz) &&
-      Triple.isOSLinux()) {
-    if (Arg *A = Args.getLastArg(options::OPT_O_Group))
-      if (!A->getOption().matches(options::OPT_O0))
-        return false;
-  }
-
-  if (Triple.getArch() == llvm::Triple::xcore)
-    return false;
-
-  return true;
+  return shouldUseFramePointerForTarget(Args, Triple);
 }
 
 static bool shouldUseLeafFramePointer(const ArgList &Args,
@@ -1813,20 +1823,7 @@ static bool shouldUseLeafFramePointer(const ArgList &Args,
                                options::OPT_momit_leaf_frame_pointer))
     return A->getOption().matches(options::OPT_mno_omit_leaf_frame_pointer);
 
-  // Don't use a leaf frame pointer on linux x86, x86_64 and z if optimizing.
-  if ((Triple.getArch() == llvm::Triple::x86_64 ||
-       Triple.getArch() == llvm::Triple::x86 ||
-       Triple.getArch() == llvm::Triple::systemz) &&
-      Triple.isOSLinux()) {
-    if (Arg *A = Args.getLastArg(options::OPT_O_Group))
-      if (!A->getOption().matches(options::OPT_O0))
-        return false;
-  }
-
-  if (Triple.getArch() == llvm::Triple::xcore)
-    return false;
-
-  return true;
+  return shouldUseFramePointerForTarget(Args, Triple);
 }
 
 /// Add a CC1 option to specify the debug compilation directory.
@@ -3195,8 +3192,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   ObjCRuntime objcRuntime = AddObjCRuntimeArgs(Args, CmdArgs, rewriteKind);
 
   // -fobjc-dispatch-method is only relevant with the nonfragile-abi, and
-  // legacy is the default.
-  if (objcRuntime.isNonFragile()) {
+  // legacy is the default. Next runtime is always legacy dispatch and
+  // -fno-objc-legacy-dispatch gets ignored silently.
+  if (objcRuntime.isNonFragile() && !objcRuntime.isNeXTFamily()) {
     if (!Args.hasFlag(options::OPT_fobjc_legacy_dispatch,
                       options::OPT_fno_objc_legacy_dispatch,
                       objcRuntime.isLegacyDispatchDefaultForArch(
@@ -5881,34 +5879,39 @@ void netbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
   AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs);
 
+  unsigned Major, Minor, Micro;
+  getToolChain().getTriple().getOSVersion(Major, Minor, Micro);
+  bool useLibgcc = true;
+  if (Major >= 7 || (Major == 6 && Minor == 99 && Micro >= 23) || Major == 0) {
+    if (getToolChain().getArch() == llvm::Triple::x86 ||
+        getToolChain().getArch() == llvm::Triple::x86_64)
+      useLibgcc = false;
+  }
+
   if (!Args.hasArg(options::OPT_nostdlib) &&
       !Args.hasArg(options::OPT_nodefaultlibs)) {
     if (D.CCCIsCXX()) {
       getToolChain().AddCXXStdlibLibArgs(Args, CmdArgs);
       CmdArgs.push_back("-lm");
     }
-    // FIXME: For some reason GCC passes -lgcc and -lgcc_s before adding
-    // the default system libraries. Just mimic this for now.
-    if (Args.hasArg(options::OPT_static)) {
-      CmdArgs.push_back("-lgcc_eh");
-    } else {
-      CmdArgs.push_back("--as-needed");
-      CmdArgs.push_back("-lgcc_s");
-      CmdArgs.push_back("--no-as-needed");
-    }
-    CmdArgs.push_back("-lgcc");
-
     if (Args.hasArg(options::OPT_pthread))
       CmdArgs.push_back("-lpthread");
     CmdArgs.push_back("-lc");
 
-    CmdArgs.push_back("-lgcc");
-    if (Args.hasArg(options::OPT_static)) {
-      CmdArgs.push_back("-lgcc_eh");
-    } else {
-      CmdArgs.push_back("--as-needed");
-      CmdArgs.push_back("-lgcc_s");
-      CmdArgs.push_back("--no-as-needed");
+    if (useLibgcc) {
+      if (Args.hasArg(options::OPT_static)) {
+        // libgcc_eh depends on libc, so resolve as much as possible,
+        // pull in any new requirements from libc and then get the rest
+        // of libgcc.
+        CmdArgs.push_back("-lgcc_eh");
+        CmdArgs.push_back("-lc");
+        CmdArgs.push_back("-lgcc");
+      } else {
+        CmdArgs.push_back("-lgcc");
+        CmdArgs.push_back("--as-needed");
+        CmdArgs.push_back("-lgcc_s");
+        CmdArgs.push_back("--no-as-needed");
+      }
     }
   }
 

@@ -15,6 +15,10 @@
 // RUN: FileCheck --check-prefix=TEST9-W %s < %t
 // RUN: FileCheck --check-prefix=TEST9-T %s < %t
 // RUN: FileCheck --check-prefix=TEST10 %s < %t
+// RUN: FileCheck --check-prefix=VDTORS-Y %s < %t
+// RUN: FileCheck --check-prefix=VDTORS-U %s < %t
+// RUN: FileCheck --check-prefix=VDTORS-V %s < %t
+// RUN: FileCheck --check-prefix=VDTORS-P %s < %t
 // RUN: FileCheck --check-prefix=RET-W %s < %t
 // RUN: FileCheck --check-prefix=RET-T %s < %t
 
@@ -42,7 +46,6 @@ struct C: virtual A {
 
   // MANGLING-DAG: @"\01??_7C@@6B@"
 
-  ~C();  // Currently required to have correct record layout, see PR16406
   virtual void f();
 };
 
@@ -148,7 +151,7 @@ struct X: virtual C {
 
   // TEST4: VFTable for 'A' in 'C' in 'Test4::X' (2 entries).
   // TEST4-NEXT: 0 | void C::f()
-  // TEST4-NEXT: [this adjustment: 12 non-virtual]
+  // TEST4-NEXT: [this adjustment: 8 non-virtual]
   // TEST4-NEXT: 1 | void A::z()
 
   // TEST4-NOT: VFTable indices for 'Test4::X'
@@ -156,7 +159,7 @@ struct X: virtual C {
   // MANGLING-DAG: @"\01??_7X@Test4@@6B@"
 
   // Also check the mangling of the thunk.
-  // MANGLING-DAG: define weak x86_thiscallcc void @"\01?f@C@@WPPPPPPPE@AEXXZ"
+  // MANGLING-DAG: define weak x86_thiscallcc void @"\01?f@C@@WPPPPPPPI@AEXXZ"
 };
 
 X x;
@@ -215,11 +218,11 @@ struct X : C {
 struct Y : virtual X {
   // TEST7: VFTable for 'A' in 'C' in 'Test7::X' in 'Test7::Y' (2 entries).
   // TEST7-NEXT: 0 | void C::f()
-  // TEST7-NEXT:     [this adjustment: 12 non-virtual]
+  // TEST7-NEXT:     [this adjustment: 8 non-virtual]
   // TEST7-NEXT: 1 | void A::z()
 
   // TEST7: Thunks for 'void C::f()' (1 entry).
-  // TEST7-NEXT: 0 | this adjustment: 12 non-virtual
+  // TEST7-NEXT: 0 | this adjustment: 8 non-virtual
 
   // TEST7-NOT: VFTable indices for 'Test7::Y'
 
@@ -336,8 +339,6 @@ struct W : Z, D, virtual A, virtual B {
 W w;
 
 struct T : Z, D, virtual A, virtual B {
-  ~T();  // Currently required to have correct record layout, see PR16406
-
   // TEST9-T: VFTable for 'Test9::Y' in 'Test9::Z' in 'Test9::T' (1 entries).
   // TEST9-T-NEXT: 0 | void Test9::T::h()
 
@@ -357,15 +358,15 @@ struct T : Z, D, virtual A, virtual B {
 
   // TEST9-T: VFTable for 'A' in 'D' in 'Test9::T' (2 entries).
   // TEST9-T-NEXT: 0 | void Test9::T::f()
-  // TEST9-T-NEXT:     [this adjustment: -16 non-virtual]
+  // TEST9-T-NEXT:     [this adjustment: -8 non-virtual]
   // TEST9-T-NEXT: 1 | void Test9::T::z()
-  // TEST9-T-NEXT:     [this adjustment: -16 non-virtual]
+  // TEST9-T-NEXT:     [this adjustment: -8 non-virtual]
 
   // TEST9-T: Thunks for 'void Test9::T::f()' (1 entry).
-  // TEST9-T-NEXT: 0 | this adjustment: -16 non-virtual
+  // TEST9-T-NEXT: 0 | this adjustment: -8 non-virtual
 
   // TEST9-T: Thunks for 'void Test9::T::z()' (1 entry).
-  // TEST9-T-NEXT: 0 | this adjustment: -16 non-virtual
+  // TEST9-T-NEXT: 0 | this adjustment: -8 non-virtual
 
   // TEST9-T: VFTable indices for 'Test9::T' (4 entries).
   // TEST9-T-NEXT: via vfptr at offset 0
@@ -409,6 +410,87 @@ struct X : virtual C, virtual A {
 
 void X::f() {}
 X x;
+}
+
+namespace vdtors {
+struct X {
+  virtual ~X();
+  virtual void zzz();
+};
+
+struct Y : virtual X {
+  // VDTORS-Y: VFTable for 'vdtors::X' in 'vdtors::Y' (2 entries).
+  // VDTORS-Y-NEXT: 0 | vdtors::Y::~Y() [scalar deleting]
+  // VDTORS-Y-NEXT: 1 | void vdtors::X::zzz()
+
+  // VDTORS-Y-NOT: Thunks for 'vdtors::Y::~Y()'
+  virtual ~Y();
+};
+
+Y y;
+
+struct Z {
+  virtual void z();
+};
+
+struct W : Z, X {
+  // Implicit virtual dtor.
+};
+
+struct U : virtual W {
+  // VDTORS-U: VFTable for 'vdtors::Z' in 'vdtors::W' in 'vdtors::U' (1 entries).
+  // VDTORS-U-NEXT: 0 | void vdtors::Z::z()
+
+  // VDTORS-U: VFTable for 'vdtors::X' in 'vdtors::W' in 'vdtors::U' (2 entries).
+  // VDTORS-U-NEXT: 0 | vdtors::U::~U() [scalar deleting]
+  // VDTORS-U-NEXT:     [this adjustment: -4 non-virtual]
+  // VDTORS-U-NEXT: 1 | void vdtors::X::zzz()
+
+  // VDTORS-U: Thunks for 'vdtors::W::~W()' (1 entry).
+  // VDTORS-U-NEXT: 0 | this adjustment: -4 non-virtual
+
+  // VDTORS-U: VFTable indices for 'vdtors::U' (1 entries).
+  // VDTORS-U-NEXT: -- accessible via vbtable index 1, vfptr at offset 4 --
+  // VDTORS-U-NEXT: 0 | vdtors::U::~U() [scalar deleting]
+  virtual ~U();
+};
+
+U u;
+
+struct V : virtual W {
+  // VDTORS-V: VFTable for 'vdtors::Z' in 'vdtors::W' in 'vdtors::V' (1 entries).
+  // VDTORS-V-NEXT: 0 | void vdtors::Z::z()
+
+  // VDTORS-V: VFTable for 'vdtors::X' in 'vdtors::W' in 'vdtors::V' (2 entries).
+  // VDTORS-V-NEXT: 0 | vdtors::V::~V() [scalar deleting]
+  // VDTORS-V-NEXT:     [this adjustment: -4 non-virtual]
+  // VDTORS-V-NEXT: 1 | void vdtors::X::zzz()
+
+  // VDTORS-V: Thunks for 'vdtors::W::~W()' (1 entry).
+  // VDTORS-V-NEXT: 0 | this adjustment: -4 non-virtual
+
+  // VDTORS-V: VFTable indices for 'vdtors::V' (1 entries).
+  // VDTORS-V-NEXT: -- accessible via vbtable index 1, vfptr at offset 4 --
+  // VDTORS-V-NEXT: 0 | vdtors::V::~V() [scalar deleting]
+};
+
+V v;
+
+struct T : virtual X {
+  virtual ~T();
+};
+
+struct P : T, Y {
+  // VDTORS-P: VFTable for 'vdtors::X' in 'vdtors::T' in 'vdtors::P' (2 entries).
+  // VDTORS-P-NEXT: 0 | vdtors::P::~P() [scalar deleting]
+  // VDTORS-P-NEXT: 1 | void vdtors::X::zzz()
+
+  // VDTORS-P-NOT: Thunks for 'vdtors::P::~P()'
+  virtual ~P();
+};
+
+P p;
+
 }
 
 namespace return_adjustment {

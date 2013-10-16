@@ -855,4 +855,19 @@ def SCALAR_CMGTZ : SInst<"vcgtz", "ss", "Sl">;
 def SCALAR_CMHI : SInst<"vcgt", "sss", "SUl">;
 def SCALAR_CMTST : SInst<"vtst", "sss", "SlSUl">;
 
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Signed Saturating Absolute Value
+def SCALAR_SQABS : SInst<"vqabs", "ss", "ScSsSiSl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Signed Saturating Negate
+def SCALAR_SQNEG : SInst<"vqneg", "ss", "ScSsSiSl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Signed Saturating Accumulated of Unsigned Value
+def SCALAR_SUQADD : SInst<"vuqadd", "sss", "ScSsSiSl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Scalar Unsigned Saturating Accumulated of Signed Value
+def SCALAR_USQADD : SInst<"vsqadd", "sss", "SUcSUsSUiSUl">;
 }

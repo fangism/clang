@@ -46,6 +46,7 @@ class ObjCMigrateASTConsumer : public ASTConsumer {
   void migrateObjCInterfaceDecl(ASTContext &Ctx, ObjCContainerDecl *D);
   void migrateProtocolConformance(ASTContext &Ctx,
                                   const ObjCImplementationDecl *ImpDecl);
+  void CacheObjCNSIntegerTypedefed(const TypedefDecl *TypedefDcl);
   bool migrateNSEnumDecl(ASTContext &Ctx, const EnumDecl *EnumDcl,
                      const TypedefDecl *TypedefDcl);
   void migrateAllMethodInstaceType(ASTContext &Ctx, ObjCContainerDecl *CDecl);
@@ -77,6 +78,8 @@ public:
   std::string MigrateDir;
   unsigned ASTMigrateActions;
   unsigned  FileId;
+  const TypedefDecl *NSIntegerTypedefed;
+  const TypedefDecl *NSUIntegerTypedefed;
   OwningPtr<NSAPI> NSAPIObj;
   OwningPtr<edit::EditedSource> Editor;
   FileRemapper &Remapper;
@@ -96,7 +99,8 @@ public:
                          bool isOutputFile = false)
   : MigrateDir(migrateDir),
     ASTMigrateActions(astMigrateActions),
-    FileId(0), Remapper(remapper), FileMgr(fileMgr), PPRec(PPRec), PP(PP),
+    FileId(0), NSIntegerTypedefed(0), NSUIntegerTypedefed(0),
+    Remapper(remapper), FileMgr(fileMgr), PPRec(PPRec), PP(PP),
     IsOutputFile(isOutputFile) { }
 
 protected:
@@ -225,8 +229,14 @@ void ObjCMigrateASTConsumer::migrateDecl(Decl *D) {
   BodyMigrator(*this).TraverseDecl(D);
 }
 
-static void append_attr(std::string &PropertyString, const char *attr) {
-  PropertyString += ", ";
+static void append_attr(std::string &PropertyString, const char *attr,
+                        bool &LParenAdded) {
+  if (!LParenAdded) {
+    PropertyString += "(";
+    LParenAdded = true;
+  }
+  else
+    PropertyString += ", ";
   PropertyString += attr;
 }
 
@@ -269,24 +279,40 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
                                   unsigned LengthOfPrefix,
                                   bool Atomic) {
   ASTContext &Context = NS.getASTContext();
-  std::string PropertyString = "@property (";
-  PropertyString += (Atomic ? "atomic" : "nonatomic");
+  bool LParenAdded = false;
+  std::string PropertyString = "@property ";
+  if (!Atomic) {
+    PropertyString += "(nonatomic";
+    LParenAdded = true;
+  }
+  
   std::string PropertyNameString = Getter->getNameAsString();
   StringRef PropertyName(PropertyNameString);
   if (LengthOfPrefix > 0) {
-    PropertyString += ", getter=";
+    if (!LParenAdded) {
+      PropertyString += "(getter=";
+      LParenAdded = true;
+    }
+    else
+      PropertyString += ", getter=";
     PropertyString += PropertyNameString;
   }
   // Property with no setter may be suggested as a 'readonly' property.
-  if (!Setter)
-    append_attr(PropertyString, "readonly");
+  if (!Setter) {
+    if (!LParenAdded) {
+      PropertyString += "(readonly";
+      LParenAdded = true;
+    }
+    else
+      append_attr(PropertyString, "readonly", LParenAdded);
+  }
   
-  // Short circuit properties that contain the name "delegate" or "dataSource",
-  // or have exact name "target" to have unsafe_unretained attribute.
+  // Short circuit 'delegate' properties that contain the name "delegate" or
+  // "dataSource", or have exact name "target" to have 'assign' attribute.
   if (PropertyName.equals("target") ||
       (PropertyName.find("delegate") != StringRef::npos) ||
       (PropertyName.find("dataSource") != StringRef::npos))
-    append_attr(PropertyString, "unsafe_unretained");
+    append_attr(PropertyString, "assign", LParenAdded);
   else if (Setter) {
     const ParmVarDecl *argDecl = *Setter->param_begin();
     QualType ArgType = Context.getCanonicalType(argDecl->getType());
@@ -298,21 +324,22 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
         ObjCInterfaceDecl *IDecl = ObjPtrTy->getObjectType()->getInterface();
         if (IDecl &&
             IDecl->lookupNestedProtocol(&Context.Idents.get("NSCopying")))
-          append_attr(PropertyString, "copy");
+          append_attr(PropertyString, "copy", LParenAdded);
         else
-          append_attr(PropertyString, "retain");
+          append_attr(PropertyString, "retain", LParenAdded);
       }
       else if (ArgType->isBlockPointerType())
-        append_attr(PropertyString, "copy");
+        append_attr(PropertyString, "copy", LParenAdded);
     } else if (propertyLifetime == Qualifiers::OCL_Weak)
       // TODO. More precise determination of 'weak' attribute requires
       // looking into setter's implementation for backing weak ivar.
-      append_attr(PropertyString, "weak");
+      append_attr(PropertyString, "weak", LParenAdded);
     else if (RetainableObject)
       append_attr(PropertyString,
-                  ArgType->isBlockPointerType() ? "copy" : "retain");
+                  ArgType->isBlockPointerType() ? "copy" : "retain", LParenAdded);
   }
-  PropertyString += ')';
+  if (LParenAdded)
+    PropertyString += ')';
   QualType RT = Getter->getResultType();
   if (!isa<TypedefType>(RT)) {
     // strip off any ARC lifetime qualifier.
@@ -509,15 +536,34 @@ static bool rewriteToNSEnumDecl(const EnumDecl *EnumDcl,
   ClassString += ')';
   SourceRange R(EnumDcl->getLocStart(), EnumDcl->getLocStart());
   commit.replace(R, ClassString);
-  SourceLocation EndOfTypedefLoc = TypedefDcl->getLocEnd();
-  EndOfTypedefLoc = trans::findLocationAfterSemi(EndOfTypedefLoc, NS.getASTContext(),
+  SourceLocation EndOfEnumDclLoc = EnumDcl->getLocEnd();
+  EndOfEnumDclLoc = trans::findSemiAfterLocation(EndOfEnumDclLoc,
+                                                 NS.getASTContext(), /*IsDecl*/true);
+  if (!EndOfEnumDclLoc.isInvalid()) {
+    SourceRange EnumDclRange(EnumDcl->getLocStart(), EndOfEnumDclLoc);
+    commit.insertFromRange(TypedefDcl->getLocStart(), EnumDclRange);
+  }
+  else
+    return false;
+  
+  SourceLocation EndTypedefDclLoc = TypedefDcl->getLocEnd();
+  EndTypedefDclLoc = trans::findSemiAfterLocation(EndTypedefDclLoc,
+                                                 NS.getASTContext(), /*IsDecl*/true);
+  if (!EndTypedefDclLoc.isInvalid()) {
+    SourceRange TDRange(TypedefDcl->getLocStart(), EndTypedefDclLoc);
+    commit.remove(TDRange);
+  }
+  else
+    return false;
+
+  EndOfEnumDclLoc = trans::findLocationAfterSemi(EnumDcl->getLocEnd(), NS.getASTContext(),
                                                  /*IsDecl*/true);
-  SourceLocation BeginOfTypedefLoc = TypedefDcl->getLocStart();
-  if (!EndOfTypedefLoc.isInvalid()) {
-    // FIXME. This assumes that typedef decl; is immediately preceeded by eoln.
-    // It is trying to remove the typedef decl. line entirely.
-    BeginOfTypedefLoc = BeginOfTypedefLoc.getLocWithOffset(-1);
-    commit.remove(SourceRange(BeginOfTypedefLoc, EndOfTypedefLoc));
+  if (!EndOfEnumDclLoc.isInvalid()) {
+    SourceLocation BeginOfEnumDclLoc = EnumDcl->getLocStart();
+    // FIXME. This assumes that enum decl; is immediately preceeded by eoln.
+    // It is trying to remove the enum decl. lines entirely.
+    BeginOfEnumDclLoc = BeginOfEnumDclLoc.getLocWithOffset(-1);
+    commit.remove(SourceRange(BeginOfEnumDclLoc, EndOfEnumDclLoc));
     return true;
   }
   return false;
@@ -638,12 +684,41 @@ void ObjCMigrateASTConsumer::migrateProtocolConformance(ASTContext &Ctx,
   Editor->commit(commit);
 }
 
+void ObjCMigrateASTConsumer::CacheObjCNSIntegerTypedefed(
+                                          const TypedefDecl *TypedefDcl) {
+  
+  QualType qt = TypedefDcl->getTypeSourceInfo()->getType();
+  if (NSAPIObj->isObjCNSIntegerType(qt))
+    NSIntegerTypedefed = TypedefDcl;
+  else if (NSAPIObj->isObjCNSUIntegerType(qt))
+    NSUIntegerTypedefed = TypedefDcl;
+}
+
 bool ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
                                            const EnumDecl *EnumDcl,
                                            const TypedefDecl *TypedefDcl) {
   if (!EnumDcl->isCompleteDefinition() || EnumDcl->getIdentifier() ||
-      !TypedefDcl->getIdentifier() ||
-      EnumDcl->isDeprecated() || TypedefDcl->isDeprecated())
+      EnumDcl->isDeprecated())
+    return false;
+  if (!TypedefDcl) {
+    if (NSIntegerTypedefed) {
+      TypedefDcl = NSIntegerTypedefed;
+      NSIntegerTypedefed = 0;
+    }
+    else if (NSUIntegerTypedefed) {
+      TypedefDcl = NSUIntegerTypedefed;
+      NSUIntegerTypedefed = 0;
+    }
+    else
+      return false;
+    unsigned FileIdOfTypedefDcl =
+      PP.getSourceManager().getFileID(TypedefDcl->getLocation()).getHashValue();
+    unsigned FileIdOfEnumDcl =
+      PP.getSourceManager().getFileID(EnumDcl->getLocation()).getHashValue();
+    if (FileIdOfTypedefDcl != FileIdOfEnumDcl)
+      return false;
+  }
+  if (TypedefDcl->isDeprecated())
     return false;
   
   QualType qt = TypedefDcl->getTypeSourceInfo()->getType();
@@ -678,9 +753,10 @@ bool ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
   if (IsNSUIntegerType && !Ctx.Idents.get("NS_OPTIONS").hasMacroDefinition())
     return false;
   edit::Commit commit(*Editor);
-  rewriteToNSEnumDecl(EnumDcl, TypedefDcl, *NSAPIObj, commit, IsNSIntegerType, NSOptions);
+  bool Res = rewriteToNSEnumDecl(EnumDcl, TypedefDcl, *NSAPIObj,
+                                 commit, IsNSIntegerType, NSOptions);
   Editor->commit(commit);
-  return true;
+  return Res;
 }
 
 static void ReplaceWithInstancetype(const ObjCMigrateASTConsumer &ASTC,
@@ -1432,26 +1508,29 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
           migrateProtocolConformance(Ctx, ImpDecl);
       }
       else if (const EnumDecl *ED = dyn_cast<EnumDecl>(*D)) {
+        if (!(ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros))
+          continue;
         DeclContext::decl_iterator N = D;
-        ++N;
-        if (N != DEnd)
-          if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N)) {
-            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
-              if (migrateNSEnumDecl(Ctx, ED, TD))
-                D++;
-            }
-          }
+        if (++N != DEnd) {
+          const TypedefDecl *TD = dyn_cast<TypedefDecl>(*N);
+          if (migrateNSEnumDecl(Ctx, ED, TD) && TD)
+            D++;
+        }
+        else
+          migrateNSEnumDecl(Ctx, ED, /*TypedefDecl */0);
       }
       else if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*D)) {
-        DeclContext::decl_iterator N = D;
-        ++N;
-        if (N != DEnd)
-          if (const EnumDecl *ED = dyn_cast<EnumDecl>(*N)) {
-            if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
-              if (migrateNSEnumDecl(Ctx, ED, TD))
+        if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
+          DeclContext::decl_iterator N = D;
+          if (++N != DEnd)
+            if (const EnumDecl *ED = dyn_cast<EnumDecl>(*N)) {
+              if (migrateNSEnumDecl(Ctx, ED, TD)) {
                 ++D;
+                continue;
+              }
             }
-          }
+          CacheObjCNSIntegerTypedefed(TD);
+        }
       }
       else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D)) {
         if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
