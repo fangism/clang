@@ -641,18 +641,19 @@ public:
     return cast<CXXRecordDecl>(RecordDecl::getCanonicalDecl());
   }
 
-  const CXXRecordDecl *getPreviousDecl() const {
-    return cast_or_null<CXXRecordDecl>(RecordDecl::getPreviousDecl());
-  }
   CXXRecordDecl *getPreviousDecl() {
     return cast_or_null<CXXRecordDecl>(RecordDecl::getPreviousDecl());
   }
+  const CXXRecordDecl *getPreviousDecl() const {
+    return const_cast<CXXRecordDecl*>(this)->getPreviousDecl();
+  }
+
+  CXXRecordDecl *getMostRecentDecl() {
+    return cast<CXXRecordDecl>(RecordDecl::getMostRecentDecl());
+  }
 
   const CXXRecordDecl *getMostRecentDecl() const {
-    return cast_or_null<CXXRecordDecl>(RecordDecl::getMostRecentDecl());
-  }
-  CXXRecordDecl *getMostRecentDecl() {
-    return cast_or_null<CXXRecordDecl>(RecordDecl::getMostRecentDecl());
+    return const_cast<CXXRecordDecl*>(this)->getMostRecentDecl();
   }
 
   CXXRecordDecl *getDefinition() const {
@@ -1430,7 +1431,7 @@ public:
   /// returns false if the class has non-computable base classes.
   ///
   /// \param BaseMatches Callback invoked for each (direct or indirect) base
-  /// class of this type, or if \p AllowShortCircut is true then until a call
+  /// class of this type, or if \p AllowShortCircuit is true then until a call
   /// returns false.
   ///
   /// \param UserData Passed as the second argument of every call to
@@ -1716,11 +1717,18 @@ public:
   /// \brief Determine whether this is a move assignment operator.
   bool isMoveAssignmentOperator() const;
 
-  const CXXMethodDecl *getCanonicalDecl() const {
-    return cast<CXXMethodDecl>(FunctionDecl::getCanonicalDecl());
-  }
   CXXMethodDecl *getCanonicalDecl() {
     return cast<CXXMethodDecl>(FunctionDecl::getCanonicalDecl());
+  }
+  const CXXMethodDecl *getCanonicalDecl() const {
+    return const_cast<CXXMethodDecl*>(this)->getCanonicalDecl();
+  }
+
+  CXXMethodDecl *getMostRecentDecl() {
+    return cast<CXXMethodDecl>(FunctionDecl::getMostRecentDecl());
+  }
+  const CXXMethodDecl *getMostRecentDecl() const {
+    return const_cast<CXXMethodDecl*>(this)->getMostRecentDecl();
   }
 
   /// True if this method is user-declared and was not
@@ -2111,8 +2119,7 @@ public:
 
   /// \brief Determine whether this constructor was marked "explicit" or not.
   bool isExplicit() const {
-    return cast<CXXConstructorDecl>(getFirstDeclaration())
-      ->isExplicitSpecified();
+    return cast<CXXConstructorDecl>(getFirstDecl())->isExplicitSpecified();
   }
 
   /// \brief Iterates through the member/base initializer list.
@@ -2352,8 +2359,7 @@ public:
   /// Explicit conversion operators are only considered for direct
   /// initialization, e.g., when the user has explicitly written a cast.
   bool isExplicit() const {
-    return cast<CXXConversionDecl>(getFirstDeclaration())
-      ->isExplicitSpecified();
+    return cast<CXXConversionDecl>(getFirstDecl())->isExplicitSpecified();
   }
 
   /// \brief Returns the type that this conversion function is converting to.

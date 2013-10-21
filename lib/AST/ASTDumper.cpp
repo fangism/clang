@@ -501,7 +501,8 @@ void ASTDumper::dumpDeclContext(const DeclContext *DC) {
   if (!DC)
     return;
   bool HasUndeserializedDecls = DC->hasExternalLexicalStorage();
-  for (DeclContext::decl_iterator I = DC->noload_decls_begin(), E = DC->noload_decls_end();
+  for (DeclContext::decl_iterator I = DC->noload_decls_begin(),
+                                  E = DC->noload_decls_end();
        I != E; ++I) {
     DeclContext::decl_iterator Next = I;
     ++Next;
@@ -582,7 +583,7 @@ static void dumpPreviousDeclImpl(raw_ostream &OS, ...) {}
 
 template<typename T>
 static void dumpPreviousDeclImpl(raw_ostream &OS, const Mergeable<T> *D) {
-  const T *First = D->getFirstDeclaration();
+  const T *First = D->getFirstDecl();
   if (First != D)
     OS << " first " << First;
 }

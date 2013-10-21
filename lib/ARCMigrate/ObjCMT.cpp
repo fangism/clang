@@ -273,7 +273,7 @@ void MigrateBlockOrFunctionPointerTypeVariable(std::string & PropertyString,
 }
 
 
-static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
+static void rewriteToObjCProperty(const ObjCMethodDecl *Getter,
                                   const ObjCMethodDecl *Setter,
                                   const NSAPI &NS, edit::Commit &commit,
                                   unsigned LengthOfPrefix,
@@ -311,8 +311,11 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
   // "dataSource", or have exact name "target" to have 'assign' attribute.
   if (PropertyName.equals("target") ||
       (PropertyName.find("delegate") != StringRef::npos) ||
-      (PropertyName.find("dataSource") != StringRef::npos))
-    append_attr(PropertyString, "assign", LParenAdded);
+      (PropertyName.find("dataSource") != StringRef::npos)) {
+    QualType QT = Getter->getResultType();
+    if (!QT->isRealType())
+      append_attr(PropertyString, "assign", LParenAdded);
+  }
   else if (Setter) {
     const ParmVarDecl *argDecl = *Setter->param_begin();
     QualType ArgType = Context.getCanonicalType(argDecl->getType());
@@ -390,9 +393,12 @@ static bool rewriteToObjCProperty(const ObjCMethodDecl *Getter,
     SourceLocation EndLoc = Setter->getDeclaratorEndLoc();
     // Get location past ';'
     EndLoc = EndLoc.getLocWithOffset(1);
-    commit.remove(CharSourceRange::getCharRange(Setter->getLocStart(), EndLoc));
+    SourceLocation BeginOfSetterDclLoc = Setter->getLocStart();
+    // FIXME. This assumes that setter decl; is immediately preceeded by eoln.
+    // It is trying to remove the setter method decl. line entirely.
+    BeginOfSetterDclLoc = BeginOfSetterDclLoc.getLocWithOffset(-1);
+    commit.remove(SourceRange(BeginOfSetterDclLoc, EndLoc));
   }
-  return true;
 }
 
 void ObjCMigrateASTConsumer::migrateObjCInterfaceDecl(ASTContext &Ctx,
@@ -569,7 +575,7 @@ static bool rewriteToNSEnumDecl(const EnumDecl *EnumDcl,
   return false;
 }
 
-static bool rewriteToNSMacroDecl(const EnumDecl *EnumDcl,
+static void rewriteToNSMacroDecl(const EnumDecl *EnumDcl,
                                 const TypedefDecl *TypedefDcl,
                                 const NSAPI &NS, edit::Commit &commit,
                                  bool IsNSIntegerType) {
@@ -581,7 +587,6 @@ static bool rewriteToNSMacroDecl(const EnumDecl *EnumDcl,
   commit.replace(R, ClassString);
   SourceLocation TypedefLoc = TypedefDcl->getLocEnd();
   commit.remove(SourceRange(TypedefLoc, TypedefLoc));
-  return true;
 }
 
 static bool UseNSOptionsMacro(Preprocessor &PP, ASTContext &Ctx,
@@ -739,6 +744,7 @@ bool ObjCMigrateASTConsumer::migrateNSEnumDecl(ASTContext &Ctx,
         edit::Commit commit(*Editor);
         rewriteToNSMacroDecl(EnumDcl, TypedefDcl, *NSAPIObj, commit, !NSOptions);
         Editor->commit(commit);
+        return true;
       }
     }
     return false;
@@ -1520,17 +1526,27 @@ void ObjCMigrateASTConsumer::HandleTranslationUnit(ASTContext &Ctx) {
           migrateNSEnumDecl(Ctx, ED, /*TypedefDecl */0);
       }
       else if (const TypedefDecl *TD = dyn_cast<TypedefDecl>(*D)) {
-        if (ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros) {
-          DeclContext::decl_iterator N = D;
+        if (!(ASTMigrateActions & FrontendOptions::ObjCMT_NsMacros))
+          continue;
+        DeclContext::decl_iterator N = D;
+        if (++N == DEnd)
+          continue;
+        if (const EnumDecl *ED = dyn_cast<EnumDecl>(*N)) {
           if (++N != DEnd)
-            if (const EnumDecl *ED = dyn_cast<EnumDecl>(*N)) {
-              if (migrateNSEnumDecl(Ctx, ED, TD)) {
-                ++D;
+            if (const TypedefDecl *TDF = dyn_cast<TypedefDecl>(*N)) {
+              // prefer typedef-follows-enum to enum-follows-typedef pattern.
+              if (migrateNSEnumDecl(Ctx, ED, TDF)) {
+                ++D; ++D;
+                CacheObjCNSIntegerTypedefed(TD);
                 continue;
               }
             }
-          CacheObjCNSIntegerTypedefed(TD);
+          if (migrateNSEnumDecl(Ctx, ED, TD)) {
+            ++D;
+            continue;
+          }
         }
+        CacheObjCNSIntegerTypedefed(TD);
       }
       else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*D)) {
         if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)

@@ -395,7 +395,8 @@ def FastCall : InheritableAttr {
 }
 
 def Final : InheritableAttr {
-  let Spellings = [];
+  let Spellings = [Keyword<"final">, Keyword<"sealed">];
+  let Accessors = [Accessor<"isSpelledAsSealed", [Keyword<"sealed">]>];
   let SemaHandler = 0;
 }
 
@@ -774,7 +775,7 @@ def VecReturn : InheritableAttr {
 }
 
 def WarnUnused : InheritableAttr {
-  let Spellings = [GNU<"warn_unused">, CXX11<"gnu", "warn_unused">];
+  let Spellings = [GNU<"warn_unused">];
   let Subjects = [Record];
 }
 
@@ -967,9 +968,17 @@ def CallableWhen : InheritableAttr {
                                    ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
+def ParamTypestate : InheritableAttr {
+  let Spellings = [GNU<"param_typestate">];
+  let Subjects = [ParmVar];
+  let Args = [EnumArgument<"ParamState", "ConsumedState",
+                           ["unknown", "consumed", "unconsumed"],
+                           ["Unknown", "Consumed", "Unconsumed"]>];
+}
+
 def ReturnTypestate : InheritableAttr {
   let Spellings = [GNU<"return_typestate">];
-  let Subjects = [Function];
+  let Subjects = [Function, ParmVar];
   let Args = [EnumArgument<"State", "ConsumedState",
                            ["unknown", "consumed", "unconsumed"],
                            ["Unknown", "Consumed", "Unconsumed"]>];

@@ -96,8 +96,15 @@ private:
     }
 
     if (Left->Previous && Left->Previous->isOneOf(tok::kw_static_assert,
-                                                  tok::kw_if, tok::kw_while))
+                                                  tok::kw_if, tok::kw_while)) {
+      // static_assert, if and while usually contain expressions.
       Contexts.back().IsExpression = true;
+    } else if (Left->Previous && Left->Previous->is(tok::r_square) &&
+               Left->Previous->MatchingParen &&
+               Left->Previous->MatchingParen->Type == TT_LambdaLSquare) {
+      // This is a parameter list of a lambda expression.
+      Contexts.back().IsExpression = false;
+    }
 
     if (StartsObjCMethodExpr) {
       Contexts.back().ColonIsObjCMethodExpr = true;
@@ -1157,7 +1164,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   if (Left.is(tok::r_paren) && Line.Type != LT_ObjCProperty &&
       (Right.is(tok::kw_const) || (Right.is(tok::identifier) && Right.Next &&
                                    Right.Next->isNot(tok::l_paren))))
-    return 150;
+    return 100;
 
   // In for-loops, prefer breaking at ',' and ';'.
   if (Line.First->is(tok::kw_for) && Left.is(tok::equal))
@@ -1237,7 +1244,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   if (Left.is(tok::less) || Right.isOneOf(tok::greater, tok::less))
     return false;
   if (Right.is(tok::ellipsis))
-    return false;
+    return Left.Tok.isLiteral();
   if (Left.is(tok::l_square) && Right.is(tok::amp))
     return false;
   if (Right.Type == TT_PointerOrReference)

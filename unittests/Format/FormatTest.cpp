@@ -590,6 +590,14 @@ TEST_F(FormatTest, FormatsSwitchStatement) {
                "});");
 }
 
+TEST_F(FormatTest, CaseRanges) {
+  verifyFormat("switch (x) {\n"
+               "case 'A' ... 'Z':\n"
+               "case 1 ... 5:\n"
+               "  break;\n"
+               "}");
+}
+
 TEST_F(FormatTest, FormatsLabels) {
   verifyFormat("void f() {\n"
                "  some_code();\n"
@@ -2321,6 +2329,19 @@ TEST_F(FormatTest, LayoutStatementsAroundPreprocessorDirectives) {
                "int i;");
 }
 
+TEST_F(FormatTest, FormatsJoinedLinesOnSubsequentRuns) {
+  FormatStyle SingleLine = getLLVMStyle();
+  SingleLine.AllowShortIfStatementsOnASingleLine = true;
+  verifyFormat(
+      "#if 0\n"
+      "#elif 1\n"
+      "#endif\n"
+      "void foo() {\n"
+      "  if (test) foo2();\n"
+      "}",
+      SingleLine);
+}
+
 TEST_F(FormatTest, LayoutBlockInsideParens) {
   EXPECT_EQ("functionCall({ int i; });", format(" functionCall ( {int i;} );"));
   EXPECT_EQ("functionCall({\n"
@@ -2389,6 +2410,12 @@ TEST_F(FormatTest, LayoutNestedBlocks) {
                    "});",
                    getLLVMStyleWithColumns(29)));
   EXPECT_EQ("DEBUG({ int i; });", format("DEBUG({ int   i; });"));
+  EXPECT_EQ("DEBUG({ // comment\n"
+            "  int i;\n"
+            "});",
+            format("DEBUG({ // comment\n"
+                   "int  i;\n"
+                   "});"));
   EXPECT_EQ("DEBUG({\n"
             "  int i;\n"
             "\n"
@@ -2840,33 +2867,36 @@ TEST_F(FormatTest, TrailingReturnType) {
 }
 
 TEST_F(FormatTest, BreaksFunctionDeclarationsWithTrailingTokens) {
-  // Avoid breaking before trailing 'const'.
-  verifyFormat("void someLongFunction(\n"
-               "    int someLongParameter) const {}",
-               getLLVMStyleWithColumns(46));
+  // Avoid breaking before trailing 'const' or other trailing annotations, if
+  // they are not function-like.
   FormatStyle Style = getGoogleStyle();
   Style.ColumnLimit = 47;
   verifyFormat("void\n"
                "someLongFunction(int someLongParameter) const {\n}",
                getLLVMStyleWithColumns(47));
-  verifyFormat("void someLongFunction(\n"
-               "    int someLongParameter) const {}",
-               Style);
   verifyFormat("LoooooongReturnType\n"
                "someLoooooooongFunction() const {}",
                getLLVMStyleWithColumns(47));
   verifyFormat("LoooooongReturnType someLoooooooongFunction()\n"
                "    const {}",
                Style);
+  verifyFormat("void SomeFunction(aaaaa aaaaaaaaaaaaaaaaaaaa,\n"
+               "                  aaaaa aaaaaaaaaaaaaaaaaaaa) OVERRIDE;");
+  verifyFormat("void SomeFunction(aaaaa aaaaaaaaaaaaaaaaaaaa,\n"
+               "                  aaaaa aaaaaaaaaaaaaaaaaaaa) OVERRIDE FINAL;");
+  verifyFormat("void SomeFunction(aaaaa aaaaaaaaaaaaaaaaaaaa,\n"
+               "                  aaaaa aaaaaaaaaaaaaaaaaaaa) override final;");
 
-  // Avoid breaking before other trailing annotations, if they are not
-  // function-like.
-  verifyFormat("void SomeFunction(aaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
-               "                  aaaaaaaaaaaaaaaaaaaaaaaaaa) OVERRIDE;");
-  verifyFormat("void SomeFunction(aaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
-               "                  aaaaaaaaaaaaaaaaaaaaaaaaaa) OVERRIDE FINAL;");
-  verifyFormat("void SomeFunction(aaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
-               "                  aaaaaaaaaaaaaaaaaaaaaaaaaa) override final;");
+  // Unless this would lead to the first parameter being broken.
+  verifyFormat("void someLongFunction(int someLongParameter)\n"
+               "    const {}",
+               getLLVMStyleWithColumns(46));
+  verifyFormat("void someLongFunction(int someLongParameter)\n"
+               "    const {}",
+               Style);
+  verifyFormat("void SomeFunction(aaaaaaaaaa aaaaaaaaaaaaaaa,\n"
+               "                  aaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
+               "    LONG_AND_UGLY_ANNOTATION;");
 
   // Breaking before function-like trailing annotations is fine to keep them
   // close to their arguments.
@@ -3109,6 +3139,13 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
   verifyFormat("aaaaaaaaaaaaa->aaaaaaaaaaaaaaaaaaaaaaaa()\n"
                "    ->aaaaaaaaaaaaaae(0)\n"
                "    ->aaaaaaaaaaaaaaa();");
+
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .has<bbbbbbbbbbbbbbbbbbbbb>();");
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa<\n"
+               "         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>();");
 
   // Prefer not to break after empty parentheses.
   verifyFormat("FirstToken->WhitespaceRange.getBegin().getLocWithOffset(\n"
@@ -3909,6 +3946,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyIndependentOfContext("Type **A = static_cast<Type **>(P);");
   verifyGoogleFormat("Type** A = static_cast<Type**>(P);");
   verifyFormat("auto a = [](int **&, int ***) {};");
+  verifyFormat("auto PointerBinding = [](const char *S) {};");
   verifyFormat("typedef typeof(int(int, int)) *MyFunc;");
 
   verifyIndependentOfContext("InvalidRegions[*R] = 0;");
@@ -4363,16 +4401,16 @@ TEST_F(FormatTest, DoesNotTouchUnwrappedLinesWithErrors) {
 }
 
 TEST_F(FormatTest, IncorrectCodeErrorDetection) {
-  EXPECT_EQ("{\n{}\n", format("{\n{\n}\n"));
+  EXPECT_EQ("{\n  {}\n", format("{\n{\n}\n"));
   EXPECT_EQ("{\n  {}\n", format("{\n  {\n}\n"));
   EXPECT_EQ("{\n  {}\n", format("{\n  {\n  }\n"));
-  EXPECT_EQ("{\n  {}\n  }\n}\n", format("{\n  {\n    }\n  }\n}\n"));
+  EXPECT_EQ("{\n  {}\n}\n}\n", format("{\n  {\n    }\n  }\n}\n"));
 
   EXPECT_EQ("{\n"
-            "    {\n"
-            " breakme(\n"
-            "     qwe);\n"
-            "}\n",
+            "  {\n"
+            "    breakme(\n"
+            "        qwe);\n"
+            "  }\n",
             format("{\n"
                    "    {\n"
                    " breakme(qwe);\n"
@@ -5353,14 +5391,17 @@ TEST_F(FormatTest, ObjCLiterals) {
   verifyFormat(
       "NSDictionary *settings = @{ AVEncoderKey : @(AVAudioQualityMax) };");
 
-  // FIXME: Nested and multi-line array and dictionary literals need more work.
   verifyFormat(
-      "NSDictionary *d = @{ @\"nam\" : NSUserNam(), @\"dte\" : [NSDate date],\n"
-      "                     @\"processInfo\" : [NSProcessInfo processInfo] };");
+      "NSDictionary *d = @{\n"
+      "  @\"nam\" : NSUserNam(),\n"
+      "  @\"dte\" : [NSDate date],\n"
+      "  @\"processInfo\" : [NSProcessInfo processInfo]\n"
+      "};");
   verifyFormat(
-      "@{ NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee :\n"
-      "   regularFont, };");
-
+      "@{\n"
+      "  NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee : "
+      "regularFont,\n"
+      "};");
 }
 
 TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
@@ -5579,6 +5620,12 @@ TEST_F(FormatTest, BreakStringLiterals) {
             format("aaaaaaaaaaaa(aaaaaaaaaaaaa, \"aaaaaaaaaaaaaaaaaaaaaa "
                    "aaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaa "
                    "aaaaaaaaaaaaaaaaaaaaaa\");",
+                   getGoogleStyle()));
+  EXPECT_EQ("return \"aaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaa \"\n"
+            "       \"aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaa\";",
+            format("return \"aaaaaaaaaaaaaaaaaaaaaa "
+                   "aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaa "
+                   "aaaaaaaaaaaaaaaaaaaaaa\";",
                    getGoogleStyle()));
   EXPECT_EQ("llvm::outs() << \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"\n"
             "                \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";",
@@ -6495,6 +6542,7 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE("SpacesBeforeTrailingComments: 1234",
               SpacesBeforeTrailingComments, 1234u);
   CHECK_PARSE("IndentWidth: 32", IndentWidth, 32u);
+  CHECK_PARSE("ContinuationIndentWidth: 11", ContinuationIndentWidth, 11u);
 
   Style.Standard = FormatStyle::LS_Auto;
   CHECK_PARSE("Standard: Cpp03", Standard, FormatStyle::LS_Cpp03);
@@ -6874,6 +6922,24 @@ TEST_F(FormatTest, MunchSemicolonAfterBlocks) {
                "  int i;\n"
                "  int j;\n"
                "};");
+}
+
+TEST_F(FormatTest, ConfigurableContinuationIndentWidth) {
+  FormatStyle TwoIndent = getLLVMStyleWithColumns(15);
+  TwoIndent.ContinuationIndentWidth = 2;
+
+  EXPECT_EQ("int i =\n"
+            "  longFunction(\n"
+            "    arg);",
+            format("int i = longFunction(arg);", TwoIndent));
+
+  FormatStyle SixIndent = getLLVMStyleWithColumns(20);
+  SixIndent.ContinuationIndentWidth = 6;
+
+  EXPECT_EQ("int i =\n"
+            "      longFunction(\n"
+            "            arg);",
+            format("int i = longFunction(arg);", SixIndent));
 }
 
 } // end namespace tooling

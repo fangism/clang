@@ -1201,14 +1201,11 @@ public:
   using redeclarable_base::redecls_end;
   using redeclarable_base::getPreviousDecl;
   using redeclarable_base::getMostRecentDecl;
+  using redeclarable_base::isFirstDecl;
 
   /// Retrieves the canonical declaration of this Objective-C class.
-  ObjCInterfaceDecl *getCanonicalDecl() {
-    return getFirstDeclaration();
-  }
-  const ObjCInterfaceDecl *getCanonicalDecl() const {
-    return getFirstDeclaration();
-  }
+  ObjCInterfaceDecl *getCanonicalDecl() { return getFirstDecl(); }
+  const ObjCInterfaceDecl *getCanonicalDecl() const { return getFirstDecl(); }
 
   // Low-level accessor
   const Type *getTypeForDecl() const { return TypeForDecl; }
@@ -1507,14 +1504,11 @@ public:
   using redeclarable_base::redecls_end;
   using redeclarable_base::getPreviousDecl;
   using redeclarable_base::getMostRecentDecl;
+  using redeclarable_base::isFirstDecl;
 
   /// Retrieves the canonical declaration of this Objective-C protocol.
-  ObjCProtocolDecl *getCanonicalDecl() {
-    return getFirstDeclaration();
-  }
-  const ObjCProtocolDecl *getCanonicalDecl() const {
-    return getFirstDeclaration();
-  }
+  ObjCProtocolDecl *getCanonicalDecl() { return getFirstDecl(); }
+  const ObjCProtocolDecl *getCanonicalDecl() const { return getFirstDecl(); }
 
   virtual void collectPropertiesToImplement(PropertyMap &PM,
                                             PropertyDeclOrder &PO) const;
