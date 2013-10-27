@@ -197,13 +197,15 @@ private:
          getBinOpPrecedence(Parent->Tok.getKind(), true, true) > prec::Unknown);
     ScopedContextCreator ContextCreator(*this, tok::l_square, 10);
     Contexts.back().IsExpression = true;
-    bool StartsObjCArrayLiteral = Parent && Parent->is(tok::at);
+    bool ColonFound = false;
 
     if (StartsObjCMethodExpr) {
       Contexts.back().ColonIsObjCMethodExpr = true;
       Left->Type = TT_ObjCMethodExpr;
-    } else if (StartsObjCArrayLiteral) {
-      Left->Type = TT_ObjCArrayLiteral;
+    } else if (Parent && Parent->is(tok::at)) {
+      Left->Type = TT_ArrayInitializerLSquare;
+    } else if (Left->Type == TT_Unknown) {
+      Left->Type = TT_ArraySubscriptLSquare;
     }
 
     while (CurrentToken != NULL) {
@@ -222,8 +224,6 @@ private:
           // binary operator.
           if (Parent != NULL && Parent->Type == TT_PointerOrReference)
             Parent->Type = TT_BinaryOperator;
-        } else if (StartsObjCArrayLiteral) {
-          CurrentToken->Type = TT_ObjCArrayLiteral;
         }
         Left->MatchingParen = CurrentToken;
         CurrentToken->MatchingParen = Left;
@@ -235,6 +235,12 @@ private:
       }
       if (CurrentToken->isOneOf(tok::r_paren, tok::r_brace))
         return false;
+      if (CurrentToken->is(tok::colon))
+        ColonFound = true;
+      if (CurrentToken->is(tok::comma) &&
+          (Left->Type == TT_ArraySubscriptLSquare ||
+           (Left->Type == TT_ObjCMethodExpr && !ColonFound)))
+        Left->Type = TT_ArrayInitializerLSquare;
       updateParameterCount(Left, CurrentToken);
       if (!consumeToken())
         return false;
@@ -244,20 +250,12 @@ private:
 
   bool parseBrace() {
     if (CurrentToken != NULL) {
-      ScopedContextCreator ContextCreator(*this, tok::l_brace, 1);
       FormatToken *Left = CurrentToken->Previous;
-
-      FormatToken *Parent = Left->getPreviousNonComment();
-      bool StartsObjCDictLiteral = Parent && Parent->is(tok::at);
-      if (StartsObjCDictLiteral) {
-        Contexts.back().ColonIsObjCDictLiteral = true;
-        Left->Type = TT_ObjCDictLiteral;
-      }
+      ScopedContextCreator ContextCreator(*this, tok::l_brace, 1);
+      Contexts.back().ColonIsDictLiteral = true;
 
       while (CurrentToken != NULL) {
         if (CurrentToken->is(tok::r_brace)) {
-          if (StartsObjCDictLiteral)
-            CurrentToken->Type = TT_ObjCDictLiteral;
           Left->MatchingParen = CurrentToken;
           CurrentToken->MatchingParen = Left;
           next();
@@ -266,6 +264,8 @@ private:
         if (CurrentToken->isOneOf(tok::r_paren, tok::r_square))
           return false;
         updateParameterCount(Left, CurrentToken);
+        if (CurrentToken->is(tok::colon))
+          Left->Type = TT_DictLiteral;
         if (!consumeToken())
           return false;
       }
@@ -327,8 +327,8 @@ private:
       // Colons from ?: are handled in parseConditional().
       if (Tok->Previous->is(tok::r_paren) && Contexts.size() == 1) {
         Tok->Type = TT_CtorInitializerColon;
-      } else if (Contexts.back().ColonIsObjCDictLiteral) {
-        Tok->Type = TT_ObjCDictLiteral;
+      } else if (Contexts.back().ColonIsDictLiteral) {
+        Tok->Type = TT_DictLiteral;
       } else if (Contexts.back().ColonIsObjCMethodExpr ||
                  Line.First->Type == TT_ObjCMethodSpecifier) {
         Tok->Type = TT_ObjCMethodExpr;
@@ -554,7 +554,7 @@ private:
             bool IsExpression)
         : ContextKind(ContextKind), BindingStrength(BindingStrength),
           LongestObjCSelectorName(0), ColonIsForRangeExpr(false),
-          ColonIsObjCDictLiteral(false), ColonIsObjCMethodExpr(false),
+          ColonIsDictLiteral(false), ColonIsObjCMethodExpr(false),
           FirstObjCSelectorName(NULL), FirstStartOfName(NULL),
           IsExpression(IsExpression), CanBeExpression(true),
           InCtorInitializer(false) {}
@@ -563,7 +563,7 @@ private:
     unsigned BindingStrength;
     unsigned LongestObjCSelectorName;
     bool ColonIsForRangeExpr;
-    bool ColonIsObjCDictLiteral;
+    bool ColonIsDictLiteral;
     bool ColonIsObjCMethodExpr;
     FormatToken *FirstObjCSelectorName;
     FormatToken *FirstStartOfName;
@@ -1180,7 +1180,8 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   if (Left.is(tok::l_paren) && Line.MightBeFunctionDecl)
     return 100;
   if (Left.opensScope())
-    return Left.ParameterCount > 1 ? prec::Comma : 19;
+    return Left.ParameterCount > 1 ? Style.PenaltyBreakBeforeFirstCallParameter
+                                   : 19;
 
   if (Right.is(tok::lessless)) {
     if (Left.is(tok::string_literal)) {
@@ -1263,9 +1264,11 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   if (Right.is(tok::star) && Left.is(tok::l_paren))
     return false;
   if (Left.is(tok::l_square))
-    return Left.Type == TT_ObjCArrayLiteral && Right.isNot(tok::r_square);
+    return Left.Type == TT_ArrayInitializerLSquare &&
+           Right.isNot(tok::r_square);
   if (Right.is(tok::r_square))
-    return Right.Type == TT_ObjCArrayLiteral;
+    return Right.MatchingParen &&
+           Right.MatchingParen->Type == TT_ArrayInitializerLSquare;
   if (Right.is(tok::l_square) && Right.Type != TT_ObjCMethodExpr &&
       Right.Type != TT_LambdaLSquare && Left.isNot(tok::numeric_constant))
     return false;
@@ -1407,10 +1410,10 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
   if (Right.Type == TT_StartOfName || Right.is(tok::kw_operator))
     return true;
   if (Right.is(tok::colon) &&
-      (Right.Type == TT_ObjCDictLiteral || Right.Type == TT_ObjCMethodExpr))
+      (Right.Type == TT_DictLiteral || Right.Type == TT_ObjCMethodExpr))
     return false;
   if (Left.is(tok::colon) &&
-      (Left.Type == TT_ObjCDictLiteral || Left.Type == TT_ObjCMethodExpr))
+      (Left.Type == TT_DictLiteral || Left.Type == TT_ObjCMethodExpr))
     return true;
   if (Right.Type == TT_ObjCSelectorName)
     return true;
@@ -1481,15 +1484,17 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
   if (Left.is(tok::greater) && Right.is(tok::greater) &&
       Left.Type != TT_TemplateCloser)
     return false;
+  if (Left.Type == TT_ArrayInitializerLSquare)
+    return true;
   return (Left.isBinaryOperator() && Left.isNot(tok::lessless) &&
           !Style.BreakBeforeBinaryOperators) ||
          Left.isOneOf(tok::comma, tok::coloncolon, tok::semi, tok::l_brace,
                       tok::kw_class, tok::kw_struct) ||
-         Right.isOneOf(tok::lessless, tok::arrow, tok::period, tok::colon) ||
+         Right.isOneOf(tok::lessless, tok::arrow, tok::period, tok::colon,
+                       tok::l_square, tok::at) ||
          (Left.is(tok::r_paren) &&
           Right.isOneOf(tok::identifier, tok::kw_const, tok::kw___attribute)) ||
-         (Left.is(tok::l_paren) && !Right.is(tok::r_paren)) ||
-         Right.is(tok::l_square);
+         (Left.is(tok::l_paren) && !Right.is(tok::r_paren));
 }
 
 void TokenAnnotator::printDebugInfo(const AnnotatedLine &Line) {

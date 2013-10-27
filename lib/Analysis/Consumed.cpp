@@ -27,6 +27,7 @@
 #include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -592,12 +593,7 @@ void ConsumedStmtVisitor::VisitCallExpr(const CallExpr *Call) {
     // Special case for the std::move function.
     // TODO: Make this more specific. (Deferred)
     if (FunDecl->getNameAsString() == "move") {
-      InfoEntry Entry = PropagationMap.find(Call->getArg(0));
-      
-      if (Entry != PropagationMap.end()) {
-        PropagationMap.insert(PairType(Call, Entry->second));
-      }
-      
+      forwardInfo(Call->getArg(0), Call);
       return;
     }
     
@@ -690,33 +686,31 @@ void ConsumedStmtVisitor::VisitCXXConstructExpr(const CXXConstructExpr *Call) {
     
   } else if (Constructor->isMoveConstructor()) {
     
-    PropagationInfo PInfo =
-      PropagationMap.find(Call->getArg(0))->second;
+    InfoEntry Entry = PropagationMap.find(Call->getArg(0));
     
-    if (PInfo.isVar()) {
-      const VarDecl* Var = PInfo.getVar();
+    if (Entry != PropagationMap.end()) {
+      PropagationInfo PInfo = Entry->second;
       
-      PropagationMap.insert(PairType(Call,
-        PropagationInfo(StateMap->getState(Var), ThisType)));
-      
-      StateMap->setState(Var, consumed::CS_Consumed);
-      
-    } else {
-      PropagationMap.insert(PairType(Call, PInfo));
+      if (PInfo.isVar()) {
+        const VarDecl* Var = PInfo.getVar();
+        
+        PropagationMap.insert(PairType(Call,
+          PropagationInfo(StateMap->getState(Var), ThisType)));
+        
+        StateMap->setState(Var, consumed::CS_Consumed);
+        
+      } else {
+        PropagationMap.insert(PairType(Call, PInfo));
+      }
     }
-      
   } else if (Constructor->isCopyConstructor()) {
-    MapType::iterator Entry = PropagationMap.find(Call->getArg(0));
-  
-    if (Entry != PropagationMap.end())
-      PropagationMap.insert(PairType(Call, Entry->second));
+    forwardInfo(Call->getArg(0), Call);
     
   } else {
     ConsumedState RetState = mapConsumableAttrState(ThisType);
     PropagationMap.insert(PairType(Call, PropagationInfo(RetState, ThisType)));
   }
 }
-
 
 void ConsumedStmtVisitor::VisitCXXMemberCallExpr(
   const CXXMemberCallExpr *Call) {
@@ -854,10 +848,7 @@ void ConsumedStmtVisitor::VisitDeclStmt(const DeclStmt *DeclS) {
 void ConsumedStmtVisitor::VisitMaterializeTemporaryExpr(
   const MaterializeTemporaryExpr *Temp) {
   
-  InfoEntry Entry = PropagationMap.find(Temp->GetTemporaryExpr());
-  
-  if (Entry != PropagationMap.end())
-    PropagationMap.insert(PairType(Temp, Entry->second));
+  forwardInfo(Temp->GetTemporaryExpr(), Temp);
 }
 
 void ConsumedStmtVisitor::VisitMemberExpr(const MemberExpr *MExpr) {
@@ -1269,7 +1260,7 @@ void ConsumedAnalyzer::determineExpectedReturnState(AnalysisDeclContext &AC,
 bool ConsumedAnalyzer::splitState(const CFGBlock *CurrBlock,
                                   const ConsumedStmtVisitor &Visitor) {
   
-  ConsumedStateMap *FalseStates = new ConsumedStateMap(*CurrStates);
+  OwningPtr<ConsumedStateMap> FalseStates(new ConsumedStateMap(*CurrStates));
   PropagationInfo PInfo;
   
   if (const IfStmt *IfNode =
@@ -1284,15 +1275,15 @@ bool ConsumedAnalyzer::splitState(const CFGBlock *CurrBlock,
     if (PInfo.isTest()) {
       CurrStates->setSource(Cond);
       FalseStates->setSource(Cond);
-      splitVarStateForIf(IfNode, PInfo.getTest(), CurrStates, FalseStates);
+      splitVarStateForIf(IfNode, PInfo.getTest(), CurrStates,
+                         FalseStates.get());
       
     } else if (PInfo.isBinTest()) {
       CurrStates->setSource(PInfo.testSourceNode());
       FalseStates->setSource(PInfo.testSourceNode());
-      splitVarStateForIfBinOp(PInfo, CurrStates, FalseStates);
+      splitVarStateForIfBinOp(PInfo, CurrStates, FalseStates.get());
       
     } else {
-      delete FalseStates;
       return false;
     }
     
@@ -1304,13 +1295,10 @@ bool ConsumedAnalyzer::splitState(const CFGBlock *CurrBlock,
       if ((BinOp = dyn_cast_or_null<BinaryOperator>(BinOp->getLHS()))) {
         PInfo = Visitor.getInfo(BinOp->getRHS());
         
-        if (!PInfo.isTest()) {
-          delete FalseStates;
+        if (!PInfo.isTest())
           return false;
-        }
         
       } else {
-        delete FalseStates;
         return false;
       }
     }
@@ -1336,7 +1324,6 @@ bool ConsumedAnalyzer::splitState(const CFGBlock *CurrBlock,
     }
     
   } else {
-    delete FalseStates;
     return false;
   }
   
@@ -1348,9 +1335,7 @@ bool ConsumedAnalyzer::splitState(const CFGBlock *CurrBlock,
     delete CurrStates;
     
   if (*++SI)
-    BlockInfo.addInfo(*SI, FalseStates);
-  else
-    delete FalseStates;
+    BlockInfo.addInfo(*SI, FalseStates.take());
   
   CurrStates = NULL;
   return true;

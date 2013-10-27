@@ -575,11 +575,10 @@ static LinkageInfo getLVForNamespaceScopeDecl(const NamedDecl *D,
     // Explicitly declared static.
     if (Function->getCanonicalDecl()->getStorageClass() == SC_Static)
       return LinkageInfo(InternalLinkage, DefaultVisibility, false);
-  } else if (const FieldDecl *Field = dyn_cast<FieldDecl>(D)) {
-    //   - a data member of an anonymous union.
-    if (cast<RecordDecl>(Field->getDeclContext())->isAnonymousStructOrUnion())
-      return LinkageInfo::internal();
   }
+  //   - a data member of an anonymous union.
+  assert(!isa<IndirectFieldDecl>(D) && "Didn't expect an IndirectFieldDecl!");
+  assert(!isa<FieldDecl>(D) && "Didn't expect a FieldDecl!");
 
   if (D->isInAnonymousNamespace()) {
     const VarDecl *Var = dyn_cast<VarDecl>(D);
@@ -786,6 +785,7 @@ static LinkageInfo getLVForClassMember(const NamedDecl *D,
   if (!(isa<CXXMethodDecl>(D) ||
         isa<VarDecl>(D) ||
         isa<FieldDecl>(D) ||
+        isa<IndirectFieldDecl>(D) ||
         isa<TagDecl>(D)))
     return LinkageInfo::none();
 
@@ -1762,6 +1762,9 @@ VarDecl::DefinitionKind VarDecl::isThisDeclarationADefinition(
   if (hasInit())
     return Definition;
 
+  if (hasAttr<AliasAttr>())
+    return Definition;
+
   // A variable template specialization (other than a static data member
   // template or an explicit specialization) is a declaration until we
   // instantiate its initializer.
@@ -2223,7 +2226,8 @@ bool FunctionDecl::hasTrivialBody() const
 
 bool FunctionDecl::isDefined(const FunctionDecl *&Definition) const {
   for (redecl_iterator I = redecls_begin(), E = redecls_end(); I != E; ++I) {
-    if (I->IsDeleted || I->IsDefaulted || I->Body || I->IsLateTemplateParsed) {
+    if (I->IsDeleted || I->IsDefaulted || I->Body || I->IsLateTemplateParsed ||
+        I->hasAttr<AliasAttr>()) {
       Definition = I->IsDeleted ? I->getCanonicalDecl() : *I;
       return true;
     }

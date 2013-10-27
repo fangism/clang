@@ -1864,14 +1864,14 @@ TEST_F(FormatTest, NestedStaticInitializers) {
       "      333333333333333333333333333333}},\n"
       "    {{1, 2, 3}}, {{1, 2, 3}}};");
 
-  // FIXME: We might at some point want to handle this similar to parameter
-  // lists, where we have an option to put each on a single line.
   verifyFormat(
       "struct {\n"
       "  unsigned bit;\n"
       "  const char *const name;\n"
-      "} kBitsToOs[] = { { kOsMac, \"Mac\" },     { kOsWin, \"Windows\" },\n"
-      "                  { kOsLinux, \"Linux\" }, { kOsCrOS, \"Chrome OS\" } };");
+      "} kBitsToOs[] = { { kOsMac, \"Mac\" },\n"
+      "                  { kOsWin, \"Windows\" },\n"
+      "                  { kOsLinux, \"Linux\" },\n"
+      "                  { kOsCrOS, \"Chrome OS\" } };");
 }
 
 TEST_F(FormatTest, FormatsSmallMacroDefinitionsInSingleLine) {
@@ -2327,6 +2327,19 @@ TEST_F(FormatTest, LayoutStatementsAroundPreprocessorDirectives) {
                getLLVMStyleWithColumns(28));
   verifyFormat("#if 1\n"
                "int i;");
+  verifyFormat(
+      "#if 1\n"
+      "#endif\n"
+      "#if 1\n"
+      "#else\n"
+      "#endif\n");
+  verifyFormat("DEBUG({\n"
+               "  return aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +\n"
+               "         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;\n"
+               "});\n"
+               "#if a\n"
+               "#else\n"
+               "#endif");
 }
 
 TEST_F(FormatTest, FormatsJoinedLinesOnSubsequentRuns) {
@@ -2960,9 +2973,9 @@ TEST_F(FormatTest, BreaksDesireably) {
       "aaaaaa(aaa, new Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
       "                aaaaaaaaaaaaaaaaaaaaaaaaaaaaa));");
   verifyFormat(
-      "aaaaaaaaaaaaaaaaa(\n"
-      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
-      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
+      "aaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +\n"
+      "                      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+      "                  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
 
   // Indent consistently indenpendent of call expression.
   verifyFormat("aaaaaaaaaaa(bbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccc(\n"
@@ -3109,7 +3122,7 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
       "        ->aaaaaaaaaaaaaaaa(\n"
       "              aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
       "        ->aaaaaaaaaaaaaaaaa();");
-  verifyFormat(
+  verifyGoogleFormat(
       "someobj->Add((new util::filetools::Handler(dir))\n"
       "                 ->OnEvent1(NewPermanentCallback(\n"
       "                       this, &HandlerHolderClass::EventHandlerCBA))\n"
@@ -4484,7 +4497,7 @@ TEST_F(FormatTest, LayoutCxx11ConstructorBraceInitializers) {
                  NoSpaces);
 }
 
-TEST_F(FormatTest, FormatsBracedListsinColumnLayout) {
+TEST_F(FormatTest, FormatsBracedListsInColumnLayout) {
   verifyFormat("vector<int> x = { 1, 22, 333, 4444, 55555, 666666, 7777777,\n"
                "                  1, 22, 333, 4444, 55555, 666666, 7777777,\n"
                "                  1, 22, 333, 4444, 55555, 666666, 7777777,\n"
@@ -4525,16 +4538,18 @@ TEST_F(FormatTest, FormatsBracedListsinColumnLayout) {
   verifyFormat("vector<int> x = { 1, 1, 1, 1,\n"
                "                  1, 1, 1, 1, };",
                getLLVMStyleWithColumns(39));
-  verifyFormat("vector<int> x = {\n"
-               "  1, 1, 1, 1, 1, 1, 1, 1, //\n"
+  verifyFormat("vector<int> x = { 1, 1, 1, 1,\n"
+               "                  1, 1, 1, 1, //\n"
                "};",
                getLLVMStyleWithColumns(39));
   verifyFormat("vector<int> x = { 1, 1, 1, 1,\n"
                "                  1, 1, 1, 1,\n"
                "                  /**/ /**/ };",
                getLLVMStyleWithColumns(39));
-  verifyFormat("return { { aaaaaaaaaaaaaaaaaaaaa }, { aaaaaaaaaaaaaaaaaaa },\n"
-               "         { aaaaaaaaaaaaaaaaaaaaa }, { aaaaaaaaaaaaaaaaa } };",
+  verifyFormat("return { { aaaaaaaaaaaaaaaaaaaaa },\n"
+               "         { aaaaaaaaaaaaaaaaaaa },\n"
+               "         { aaaaaaaaaaaaaaaaaaaaa },\n"
+               "         { aaaaaaaaaaaaaaaaa } };",
                getLLVMStyleWithColumns(60));
 }
 
@@ -5289,6 +5304,10 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
                "    aaaaaaaaaa:bbbbbbbbbbbbbbbbb\n"
                "         aaaaa:bbbbbbbbbbb + bbbbbbbbbbbb\n"
                "          aaaa:bbb];");
+
+  // Variadic parameters.
+  verifyFormat(
+      "NSArray *myStrings = [NSArray stringarray:@\"a\", @\"b\", nil];");
 }
 
 TEST_F(FormatTest, ObjCAt) {
@@ -5366,13 +5385,9 @@ TEST_F(FormatTest, ObjCLiterals) {
   verifyFormat("NSNumber *piOverTwo = @(M_PI / 2);");
   verifyFormat("NSNumber *favoriteColor = @(Green);");
   verifyFormat("NSString *path = @(getenv(\"PATH\"));");
+}
 
-  verifyFormat("@[");
-  verifyFormat("@[]");
-  verifyFormat(
-      "NSArray *array = @[ @\" Hey \", NSApp, [NSNumber numberWithInt:42] ];");
-  verifyFormat("return @[ @3, @[], @[ @4, @5 ] ];");
-
+TEST_F(FormatTest, ObjCDictLiterals) {
   verifyFormat("@{");
   verifyFormat("@{}");
   verifyFormat("@{ @\"one\" : @1 }");
@@ -5402,6 +5417,56 @@ TEST_F(FormatTest, ObjCLiterals) {
       "  NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee : "
       "regularFont,\n"
       "};");
+  verifyGoogleFormat(
+      "@{\n"
+      "  NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee : "
+      "regularFont,\n"
+      "};");
+
+  // We should try to be robust in case someone forgets the "@".
+  verifyFormat(
+      "NSDictionary *d = {\n"
+      "  @\"nam\" : NSUserNam(),\n"
+      "  @\"dte\" : [NSDate date],\n"
+      "  @\"processInfo\" : [NSProcessInfo processInfo]\n"
+      "};");
+}
+
+TEST_F(FormatTest, ObjCArrayLiterals) {
+  verifyFormat("@[");
+  verifyFormat("@[]");
+  verifyFormat(
+      "NSArray *array = @[ @\" Hey \", NSApp, [NSNumber numberWithInt:42] ];");
+  verifyFormat("return @[ @3, @[], @[ @4, @5 ] ];");
+  verifyFormat("NSArray *array = @[ [foo description] ];");
+
+  verifyFormat(
+      "NSArray *some_variable = @[\n"
+      "  aaaa == bbbbbbbbbbb ? @\"aaaaaaaaaaaa\" : @\"aaaaaaaaaaaaaa\",\n"
+      "  @\"aaaaaaaaaaaaaaaaa\",\n"
+      "  @\"aaaaaaaaaaaaaaaaa\",\n"
+      "  @\"aaaaaaaaaaaaaaaaa\"\n"
+      "];");
+  verifyFormat("NSArray *some_variable = @[\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "];");
+  verifyGoogleFormat("NSArray *some_variable = @[\n"
+                     "  @\"aaaaaaaaaaaaaaaaa\",\n"
+                     "  @\"aaaaaaaaaaaaaaaaa\",\n"
+                     "  @\"aaaaaaaaaaaaaaaaa\",\n"
+                     "  @\"aaaaaaaaaaaaaaaaa\"\n"
+                     "];");
+
+  // We should try to be robust in case someone forgets the "@".
+  verifyFormat("NSArray *some_variable = [\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "  @\"aaaaaaaaaaaaaaaaa\",\n"
+               "];");
 }
 
 TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
@@ -6536,6 +6601,8 @@ TEST_F(FormatTest, ParsesConfiguration) {
               ConstructorInitializerIndentWidth, 1234u);
   CHECK_PARSE("ColumnLimit: 1234", ColumnLimit, 1234u);
   CHECK_PARSE("MaxEmptyLinesToKeep: 1234", MaxEmptyLinesToKeep, 1234u);
+  CHECK_PARSE("PenaltyBreakBeforeFirstCallParameter: 1234",
+              PenaltyBreakBeforeFirstCallParameter, 1234u);
   CHECK_PARSE("PenaltyExcessCharacter: 1234", PenaltyExcessCharacter, 1234u);
   CHECK_PARSE("PenaltyReturnTypeOnItsOwnLine: 1234",
               PenaltyReturnTypeOnItsOwnLine, 1234u);

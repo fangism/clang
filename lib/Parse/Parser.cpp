@@ -390,15 +390,6 @@ void Parser::ExitScope() {
     ScopeCache[NumCachedScopes++] = OldScope;
 }
 
-void Parser::SetScopeFlags(unsigned Flags) {
-  Actions.CurScope->SetFlags(Flags);
-}
-
-void Parser::ClearScopeFlags(unsigned Flags) {
-  Actions.CurScope->ClearFlags(Flags);
-}
-
-
 /// Set the flags for the current scope to ScopeFlags. If ManageFlags is false,
 /// this object does nothing.
 Parser::ParseScopeFlags::ParseScopeFlags(Parser *Self, unsigned ScopeFlags,
@@ -999,9 +990,9 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // In delayed template parsing mode, for function template we consume the
   // tokens and store them for late parsing at the end of the translation unit.
-  if (getLangOpts().DelayedTemplateParsing &&
-      Tok.isNot(tok::equal) &&
-      TemplateInfo.Kind == ParsedTemplateInfo::Template) {
+  if (getLangOpts().DelayedTemplateParsing && Tok.isNot(tok::equal) &&
+      TemplateInfo.Kind == ParsedTemplateInfo::Template &&
+      !D.getDeclSpec().isConstexprSpecified()) {
     MultiTemplateParamsArg TemplateParameterLists(*TemplateInfo.TemplateParams);
     
     ParseScope BodyScope(this, Scope::FnScope|Scope::DeclScope);

@@ -2152,19 +2152,22 @@ Decl *TemplateDeclInstantiator::VisitUsingDecl(UsingDecl *D) {
          I != E; ++I) {
     UsingShadowDecl *Shadow = *I;
     NamedDecl *InstTarget =
-      cast_or_null<NamedDecl>(SemaRef.FindInstantiatedDecl(
-                                                          Shadow->getLocation(),
-                                                        Shadow->getTargetDecl(),
-                                                           TemplateArgs));
+        cast_or_null<NamedDecl>(SemaRef.FindInstantiatedDecl(
+            Shadow->getLocation(), Shadow->getTargetDecl(), TemplateArgs));
     if (!InstTarget)
       return 0;
 
-    if (CheckRedeclaration &&
-        SemaRef.CheckUsingShadowDecl(NewUD, InstTarget, Prev))
-      continue;
+    UsingShadowDecl *PrevDecl = 0;
+    if (CheckRedeclaration) {
+      if (SemaRef.CheckUsingShadowDecl(NewUD, InstTarget, Prev, PrevDecl))
+        continue;
+    } else if (UsingShadowDecl *OldPrev = Shadow->getPreviousDecl()) {
+      PrevDecl = cast_or_null<UsingShadowDecl>(SemaRef.FindInstantiatedDecl(
+          Shadow->getLocation(), OldPrev, TemplateArgs));
+    }
 
-    UsingShadowDecl *InstShadow
-      = SemaRef.BuildUsingShadowDecl(/*Scope*/ 0, NewUD, InstTarget);
+    UsingShadowDecl *InstShadow =
+        SemaRef.BuildUsingShadowDecl(/*Scope*/0, NewUD, InstTarget, PrevDecl);
     SemaRef.Context.setInstantiatedFromUsingShadowDecl(InstShadow, Shadow);
 
     if (isFunctionScope)
@@ -3375,7 +3378,8 @@ void Sema::BuildVariableInstantiation(
   NewVar->setAccess(OldVar->getAccess());
 
   if (!OldVar->isStaticDataMember()) {
-    NewVar->setIsUsed(OldVar->isUsed(false));
+    if (OldVar->isUsed(false))
+      NewVar->setIsUsed();
     NewVar->setReferenced(OldVar->isReferenced());
   }
 
@@ -4171,6 +4175,25 @@ DeclContext *Sema::FindInstantiatedContext(SourceLocation Loc, DeclContext* DC,
 NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
                           const MultiLevelTemplateArgumentList &TemplateArgs) {
   DeclContext *ParentDC = D->getDeclContext();
+  // FIXME: Parmeters of pointer to functions (y below) that are themselves 
+  // parameters (p below) can have their ParentDC set to the translation-unit
+  // - thus we can not consistently check if the ParentDC of such a parameter 
+  // is Dependent or/and a FunctionOrMethod.
+  // For e.g. this code, during Template argument deduction tries to 
+  // find an instantiated decl for (T y) when the ParentDC for y is
+  // the translation unit.  
+  //   e.g. template <class T> void Foo(auto (*p)(T y) -> decltype(y())) {} 
+  //   float baz(float(*)()) { return 0.0; }
+  //   Foo(baz);
+  // The better fix here is perhaps to ensure that a ParmVarDecl, by the time
+  // it gets here, always has a FunctionOrMethod as its ParentDC??
+  // For now:
+  //  - as long as we have a ParmVarDecl whose parent is non-dependent and
+  //    whose type is not instantiation dependent, do nothing to the decl
+  //  - otherwise find its instantiated decl.
+  if (isa<ParmVarDecl>(D) && !ParentDC->isDependentContext() &&
+      !cast<ParmVarDecl>(D)->getType()->isInstantiationDependentType())
+    return D;
   if (isa<ParmVarDecl>(D) || isa<NonTypeTemplateParmDecl>(D) ||
       isa<TemplateTypeParmDecl>(D) || isa<TemplateTemplateParmDecl>(D) ||
       (ParentDC->isFunctionOrMethod() && ParentDC->isDependentContext()) ||
