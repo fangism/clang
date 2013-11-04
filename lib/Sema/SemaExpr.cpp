@@ -3641,7 +3641,8 @@ static bool checkArithmeticOnObjCPointer(Sema &S,
                                          SourceLocation opLoc,
                                          Expr *op) {
   assert(op->getType()->isObjCObjectPointerType());
-  if (S.LangOpts.ObjCRuntime.allowsPointerArithmetic())
+  if (S.LangOpts.ObjCRuntime.allowsPointerArithmetic() &&
+      !S.LangOpts.ObjCSubscriptingLegacyRuntime)
     return false;
 
   S.Diag(opLoc, diag::err_arithmetic_nonfragile_interface)
@@ -3746,15 +3747,10 @@ Sema::CreateBuiltinArraySubscriptExpr(Expr *Base, SourceLocation LLoc,
 
     // Use custom logic if this should be the pseudo-object subscript
     // expression.
-    if (!LangOpts.ObjCRuntime.isSubscriptPointerArithmetic())
+    if (!LangOpts.isSubscriptPointerArithmetic())
       return BuildObjCSubscriptExpression(RLoc, BaseExpr, IndexExpr, 0, 0);
 
     ResultType = PTy->getPointeeType();
-    if (!LangOpts.ObjCRuntime.allowsPointerArithmetic()) {
-      Diag(LLoc, diag::err_subscript_nonfragile_interface)
-        << ResultType << BaseExpr->getSourceRange();
-      return ExprError();
-    }
   } else if (const PointerType *PTy = RHSTy->getAs<PointerType>()) {
      // Handle the uncommon case of "123[Ptr]".
     BaseExpr = RHSExp;
@@ -3766,7 +3762,7 @@ Sema::CreateBuiltinArraySubscriptExpr(Expr *Base, SourceLocation LLoc,
     BaseExpr = RHSExp;
     IndexExpr = LHSExp;
     ResultType = PTy->getPointeeType();
-    if (!LangOpts.ObjCRuntime.allowsPointerArithmetic()) {
+    if (!LangOpts.isSubscriptPointerArithmetic()) {
       Diag(LLoc, diag::err_subscript_nonfragile_interface)
         << ResultType << BaseExpr->getSourceRange();
       return ExprError();
@@ -7671,7 +7667,8 @@ QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
   if (!LHSType->hasFloatingRepresentation() &&
       !(LHSType->isBlockPointerType() && IsRelational) &&
       !LHS.get()->getLocStart().isMacroID() &&
-      !RHS.get()->getLocStart().isMacroID()) {
+      !RHS.get()->getLocStart().isMacroID() &&
+      ActiveTemplateInstantiations.empty()) {
     // For non-floating point types, check for self-comparisons of the form
     // x == x, x != x, x < x, etc.  These always evaluate to a constant, and
     // often indicate logic errors in the program.
@@ -8057,7 +8054,8 @@ QualType Sema::CheckVectorCompareOperands(ExprResult &LHS, ExprResult &RHS,
   // For non-floating point types, check for self-comparisons of the form
   // x == x, x != x, x < x, etc.  These always evaluate to a constant, and
   // often indicate logic errors in the program.
-  if (!LHSType->hasFloatingRepresentation()) {
+  if (!LHSType->hasFloatingRepresentation() &&
+      ActiveTemplateInstantiations.empty()) {
     if (DeclRefExpr* DRL
           = dyn_cast<DeclRefExpr>(LHS.get()->IgnoreParenImpCasts()))
       if (DeclRefExpr* DRR

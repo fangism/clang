@@ -9,7 +9,8 @@
 // RUN: FileCheck --check-prefix=TEST5 %s < %t
 // RUN: FileCheck --check-prefix=TEST6 %s < %t
 // RUN: FileCheck --check-prefix=TEST7 %s < %t
-// RUN: FileCheck --check-prefix=TEST8 %s < %t
+// RUN: FileCheck --check-prefix=TEST8-X %s < %t
+// RUN: FileCheck --check-prefix=TEST8-Z %s < %t
 // RUN: FileCheck --check-prefix=TEST9-Y %s < %t
 // RUN: FileCheck --check-prefix=TEST9-Z %s < %t
 // RUN: FileCheck --check-prefix=TEST9-W %s < %t
@@ -21,6 +22,7 @@
 // RUN: FileCheck --check-prefix=VDTORS-P %s < %t
 // RUN: FileCheck --check-prefix=RET-W %s < %t
 // RUN: FileCheck --check-prefix=RET-T %s < %t
+// RUN: FileCheck --check-prefix=RET-V %s < %t
 
 // RUN: FileCheck --check-prefix=MANGLING %s < %t
 
@@ -151,7 +153,7 @@ struct X: virtual C {
 
   // TEST4: VFTable for 'A' in 'C' in 'Test4::X' (2 entries).
   // TEST4-NEXT: 0 | void C::f()
-  // TEST4-NEXT: [this adjustment: 8 non-virtual]
+  // TEST4-NEXT:     [this adjustment: 8 non-virtual]
   // TEST4-NEXT: 1 | void A::z()
 
   // TEST4-NOT: VFTable indices for 'Test4::X'
@@ -222,7 +224,7 @@ struct Y : virtual X {
   // TEST7-NEXT: 1 | void A::z()
 
   // TEST7: Thunks for 'void C::f()' (1 entry).
-  // TEST7-NEXT: 0 | this adjustment: 8 non-virtual
+  // TEST7-NEXT: 0 | [this adjustment: 8 non-virtual]
 
   // TEST7-NOT: VFTable indices for 'Test7::Y'
 
@@ -236,15 +238,16 @@ namespace Test8 {
 
 // This is a typical diamond inheritance with a shared 'A' vbase.
 struct X : D, C {
-  // TEST8: VFTable for 'D' in 'Test8::X' (1 entries).
-  // TEST8-NEXT: 0 | void D::h()
+  // TEST8-X: VFTable for 'D' in 'Test8::X' (1 entries).
+  // TEST8-X-NEXT: 0 | void D::h()
 
-  // TEST8: VFTable for 'A' in 'D' in 'Test8::X' (2 entries).
-  // TEST8-NEXT: 0 | void Test8::X::f()
-  // TEST8-NEXT: 1 | void A::z()
+  // TEST8-X: VFTable for 'A' in 'D' in 'Test8::X' (2 entries).
+  // TEST8-X-NEXT: 0 | void Test8::X::f()
+  // TEST8-X-NEXT: 1 | void A::z()
 
-  // TEST8: VFTable indices for 'Test8::X' (1 entries).
-  // TEST8-NEXT: via vbtable index 1, vfptr at offset 0
+  // TEST8-X: VFTable indices for 'Test8::X' (1 entries).
+  // TEST8-X-NEXT: via vbtable index 1, vfptr at offset 0
+  // TEST8-X-NEXT: 0 | void Test8::X::f()
 
   // MANGLING-DAG: @"\01??_7X@Test8@@6BA@@@"
   // MANGLING-DAG: @"\01??_7X@Test8@@6BD@@@"
@@ -253,6 +256,21 @@ struct X : D, C {
 };
 
 X x;
+
+// Another diamond inheritance which led to AST crashes.
+struct Y : virtual A {};
+
+class Z : Y, C {
+  // TEST8-Z: VFTable for 'A' in 'Test8::Y' in 'Test8::Z' (2 entries).
+  // TEST8-Z-NEXT: 0 | void Test8::Z::f()
+  // TEST8-Z-NEXT: 1 | void A::z()
+
+  // TEST8-Z: VFTable indices for 'Test8::Z' (1 entries).
+  // TEST8-Z-NEXT: via vbtable index 1, vfptr at offset 0
+  // TEST8-Z-NEXT: 0 | void Test8::Z::f()
+  virtual void f();
+};
+Z z;
 }
 
 namespace Test9 {
@@ -321,7 +339,7 @@ struct W : Z, D, virtual A, virtual B {
   // TEST9-W-NEXT: 1 | void A::z()
 
   // TEST9-W: Thunks for 'void D::f()' (1 entry).
-  // TEST9-W-NEXT: 0 | this adjustment: -8 non-virtual
+  // TEST9-W-NEXT: 0 | [this adjustment: -8 non-virtual]
 
   // TEST9-W-NOT: VFTable indices for 'Test9::W'
 
@@ -354,7 +372,7 @@ struct T : Z, D, virtual A, virtual B {
   // TEST9-T-NEXT:     [this adjustment: -8 non-virtual]
 
   // TEST9-T: Thunks for 'void Test9::T::h()' (1 entry).
-  // TEST9-T-NEXT: 0 | this adjustment: -8 non-virtual
+  // TEST9-T-NEXT: 0 | [this adjustment: -8 non-virtual]
 
   // TEST9-T: VFTable for 'A' in 'D' in 'Test9::T' (2 entries).
   // TEST9-T-NEXT: 0 | void Test9::T::f()
@@ -363,10 +381,10 @@ struct T : Z, D, virtual A, virtual B {
   // TEST9-T-NEXT:     [this adjustment: -8 non-virtual]
 
   // TEST9-T: Thunks for 'void Test9::T::f()' (1 entry).
-  // TEST9-T-NEXT: 0 | this adjustment: -8 non-virtual
+  // TEST9-T-NEXT: 0 | [this adjustment: -8 non-virtual]
 
   // TEST9-T: Thunks for 'void Test9::T::z()' (1 entry).
-  // TEST9-T-NEXT: 0 | this adjustment: -8 non-virtual
+  // TEST9-T-NEXT: 0 | [this adjustment: -8 non-virtual]
 
   // TEST9-T: VFTable indices for 'Test9::T' (4 entries).
   // TEST9-T-NEXT: via vfptr at offset 0
@@ -447,7 +465,7 @@ struct U : virtual W {
   // VDTORS-U-NEXT: 1 | void vdtors::X::zzz()
 
   // VDTORS-U: Thunks for 'vdtors::W::~W()' (1 entry).
-  // VDTORS-U-NEXT: 0 | this adjustment: -4 non-virtual
+  // VDTORS-U-NEXT: 0 | [this adjustment: -4 non-virtual]
 
   // VDTORS-U: VFTable indices for 'vdtors::U' (1 entries).
   // VDTORS-U-NEXT: -- accessible via vbtable index 1, vfptr at offset 4 --
@@ -467,7 +485,7 @@ struct V : virtual W {
   // VDTORS-V-NEXT: 1 | void vdtors::X::zzz()
 
   // VDTORS-V: Thunks for 'vdtors::W::~W()' (1 entry).
-  // VDTORS-V-NEXT: 0 | this adjustment: -4 non-virtual
+  // VDTORS-V-NEXT: 0 | [this adjustment: -4 non-virtual]
 
   // VDTORS-V: VFTable indices for 'vdtors::V' (1 entries).
   // VDTORS-V-NEXT: -- accessible via vbtable index 1, vfptr at offset 4 --
@@ -536,4 +554,22 @@ struct T : W {
 };
 
 T t;
+
+struct U : virtual A {
+  virtual void g();  // adds a vfptr
+};
+
+struct V : Z {
+  // RET-V: VFTable for 'return_adjustment::Z' in 'return_adjustment::V' (2 entries).
+  // RET-V-NEXT: 0 | return_adjustment::U *return_adjustment::V::foo()
+  // RET-V-NEXT:     [return adjustment: vbptr at offset 4, vbase #1, 0 non-virtual]
+  // RET-V-NEXT: 1 | return_adjustment::U *return_adjustment::V::foo()
+
+  // RET-V: VFTable indices for 'return_adjustment::V' (1 entries).
+  // RET-V-NEXT: 1 | return_adjustment::U *return_adjustment::V::foo()
+
+  virtual U* foo();
+};
+
+V v;
 }

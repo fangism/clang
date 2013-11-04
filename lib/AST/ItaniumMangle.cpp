@@ -1239,7 +1239,12 @@ void CXXNameMangler::mangleNestedName(const NamedDecl *ND,
 
   Out << 'N';
   if (const CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(ND)) {
-    mangleQualifiers(Qualifiers::fromCVRMask(Method->getTypeQualifiers()));
+    Qualifiers MethodQuals =
+        Qualifiers::fromCVRMask(Method->getTypeQualifiers());
+    // We do not consider restrict a distinguishing attribute for overloading
+    // purposes so we must not mangle it.
+    MethodQuals.removeRestrict();
+    mangleQualifiers(MethodQuals);
     mangleRefQualifier(Method->getRefQualifier());
   }
   
@@ -3657,8 +3662,8 @@ void ItaniumMangleContextImpl::mangleThunk(const CXXMethodDecl *MD,
   // Mangle the return pointer adjustment if there is one.
   if (!Thunk.Return.isEmpty())
     Mangler.mangleCallOffset(Thunk.Return.NonVirtual,
-                             Thunk.Return.VBaseOffsetOffset);
-  
+                             Thunk.Return.Virtual.Itanium.VBaseOffsetOffset);
+
   Mangler.mangleFunctionEncoding(MD);
 }
 

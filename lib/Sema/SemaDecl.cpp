@@ -128,9 +128,6 @@ bool Sema::isSimpleTypeSpecifier(tok::TokenKind Kind) const {
 /// determine whether the name refers to a type. If so, returns an
 /// opaque pointer (actually a QualType) corresponding to that
 /// type. Otherwise, returns NULL.
-///
-/// If name lookup results in an ambiguity, this routine will complain
-/// and then return NULL.
 ParsedType Sema::getTypeName(const IdentifierInfo &II, SourceLocation NameLoc,
                              Scope *S, CXXScopeSpec *SS,
                              bool isClassName, bool HasTrailingDot,
@@ -1537,8 +1534,17 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned bid,
         << Context.BuiltinInfo.GetName(BID);
   }
 
+  DeclContext *Parent = Context.getTranslationUnitDecl();
+  if (getLangOpts().CPlusPlus) {
+    LinkageSpecDecl *CLinkageDecl =
+        LinkageSpecDecl::Create(Context, Parent, Loc, Loc,
+                                LinkageSpecDecl::lang_c, false);
+    Parent->addDecl(CLinkageDecl);
+    Parent = CLinkageDecl;
+  }
+
   FunctionDecl *New = FunctionDecl::Create(Context,
-                                           Context.getTranslationUnitDecl(),
+                                           Parent,
                                            Loc, Loc, II, R, /*TInfo=*/0,
                                            SC_Extern,
                                            false,
@@ -1562,13 +1568,14 @@ NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned bid,
   }
 
   AddKnownFunctionAttributes(New);
+  RegisterLocallyScopedExternCDecl(New, S);
 
   // TUScope is the translation-unit scope to insert this function into.
   // FIXME: This is hideous. We need to teach PushOnScopeChains to
   // relate Scopes to DeclContexts, and probably eliminate CurContext
   // entirely, but we're not there yet.
   DeclContext *SavedContext = CurContext;
-  CurContext = Context.getTranslationUnitDecl();
+  CurContext = Parent;
   PushOnScopeChains(New, TUScope);
   CurContext = SavedContext;
   return New;
@@ -7611,7 +7618,7 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
     // during delayed parsing anyway.
     if (!CurContext->isRecord())
       CheckCXXDefaultArguments(NewFD);
-    
+
     // If this function declares a builtin function, check the type of this
     // declaration against the expected type for the builtin. 
     if (unsigned BuiltinID = NewFD->getBuiltinID()) {
@@ -7624,7 +7631,7 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
         Context.BuiltinInfo.ForgetBuiltin(BuiltinID, Context.Idents);
       }
     }
-  
+
     // If this function is declared as being extern "C", then check to see if 
     // the function returns a UDT (class, struct, or union type) that is not C
     // compatible, and if it does, warn the user.
@@ -11815,34 +11822,38 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
       // Microsoft and g++ is more permissive regarding flexible array.
       // It will accept flexible array in union and also
       // as the sole element of a struct/class.
-      if (getLangOpts().MicrosoftExt) {
-        if (Record->isUnion()) 
-          Diag(FD->getLocation(), diag::ext_flexible_array_union_ms)
-            << FD->getDeclName();
-        else if (Fields.size() == 1) 
-          Diag(FD->getLocation(), diag::ext_flexible_array_empty_aggregate_ms)
-            << FD->getDeclName() << Record->getTagKind();
-      } else if (getLangOpts().CPlusPlus) {
-        if (Record->isUnion()) 
-          Diag(FD->getLocation(), diag::ext_flexible_array_union_gnu)
-            << FD->getDeclName();
-        else if (Fields.size() == 1) 
-          Diag(FD->getLocation(), diag::ext_flexible_array_empty_aggregate_gnu)
-            << FD->getDeclName() << Record->getTagKind();
-      } else if (!getLangOpts().C99) {
+      unsigned DiagID = 0;
       if (Record->isUnion())
-        Diag(FD->getLocation(), diag::ext_flexible_array_union_gnu)
-          << FD->getDeclName();
-      else
+        DiagID = getLangOpts().MicrosoftExt
+                     ? diag::ext_flexible_array_union_ms
+                     : getLangOpts().CPlusPlus
+                           ? diag::ext_flexible_array_union_gnu
+                           : diag::err_flexible_array_union;
+      else if (Fields.size() == 1)
+        DiagID = getLangOpts().MicrosoftExt
+                     ? diag::ext_flexible_array_empty_aggregate_ms
+                     : getLangOpts().CPlusPlus
+                           ? diag::ext_flexible_array_empty_aggregate_gnu
+                           : NumNamedMembers < 1
+                                 ? diag::err_flexible_array_empty_aggregate
+                                 : 0;
+
+      if (DiagID)
+        Diag(FD->getLocation(), DiagID) << FD->getDeclName()
+                                        << Record->getTagKind();
+      // While the layout of types that contain virtual bases is not specified
+      // by the C++ standard, both the Itanium and Microsoft C++ ABIs place
+      // virtual bases after the derived members.  This would make a flexible
+      // array member declared at the end of an object not adjacent to the end
+      // of the type.
+      if (CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(Record))
+        if (RD->getNumVBases() != 0)
+          Diag(FD->getLocation(), diag::err_flexible_array_virtual_base)
+            << FD->getDeclName() << Record->getTagKind();
+      if (!getLangOpts().C99)
         Diag(FD->getLocation(), diag::ext_c99_flexible_array_member)
           << FD->getDeclName() << Record->getTagKind();
-      } else if (NumNamedMembers < 1) {
-        Diag(FD->getLocation(), diag::err_flexible_array_empty_struct)
-          << FD->getDeclName();
-        FD->setInvalidDecl();
-        EnclosingDecl->setInvalidDecl();
-        continue;
-      }
+
       if (!FD->getType()->isDependentType() &&
           !Context.getBaseElementType(FD->getType()).isPODType(Context)) {
         Diag(FD->getLocation(), diag::err_flexible_array_has_nonpod_type)

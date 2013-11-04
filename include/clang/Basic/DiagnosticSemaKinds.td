@@ -531,7 +531,7 @@ def note_suppressed_class_declare : Note<
 def err_objc_root_class_subclass : Error<
   "objc_root_class attribute may only be specified on a root class declaration">;
 def warn_objc_root_class_missing : Warning<
-	"class %0 defined without specifying a base class">,
+  "class %0 defined without specifying a base class">,
   InGroup<ObjCRootClass>;
 def note_objc_needs_superclass : Note<
   "add a super class to fix this problem">;
@@ -2399,6 +2399,8 @@ def warn_attribute_ibaction: Warning<
   InGroup<IgnoredAttributes>;
 def err_iboutletcollection_type : Error<
   "invalid type %0 as argument of iboutletcollection attribute">;
+def err_iboutletcollection_builtintype : Error<
+  "type argument of iboutletcollection attribute cannot be a builtin type">;
 def warn_iboutlet_object_type : Warning<
   "%select{instance variable|property}2 with %0 attribute must "
   "be an object type (invalid %1)">, InGroup<ObjCInvalidIBOutletProperty>;
@@ -3933,8 +3935,14 @@ def ext_variable_sized_type_in_struct : ExtWarn<
   "field %0 with variable sized type %1 not at the end of a struct or class is"
   " a GNU extension">, InGroup<GNUVariableSizedTypeNotAtEnd>;
 
-def err_flexible_array_empty_struct : Error<
-  "flexible array %0 not allowed in otherwise empty struct">;
+def ext_c99_flexible_array_member : Extension<
+  "flexible array members are a C99 feature">, InGroup<C99>;
+def err_flexible_array_virtual_base : Error<
+  "flexible array member %0 not allowed in "
+  "%select{struct|interface|union|class|enum}1 which has a virtual base class">;
+def err_flexible_array_empty_aggregate : Error<
+  "flexible array member %0 not allowed in otherwise empty "
+  "%select{struct|interface|union|class|enum}1">;
 def err_flexible_array_has_nonpod_type : Error<
   "flexible array member %0 of non-POD element type %1">;
 def ext_flexible_array_in_struct : Extension<
@@ -3949,6 +3957,8 @@ def ext_flexible_array_empty_aggregate_ms : Extension<
   "flexible array member %0 in otherwise empty "
   "%select{struct|interface|union|class|enum}1 is a Microsoft extension">,
   InGroup<Microsoft>;
+def err_flexible_array_union : Error<
+  "flexible array member %0 in a union is not allowed">;
 def ext_flexible_array_union_ms : Extension<
   "flexible array member %0 in a union is a Microsoft extension">,
   InGroup<Microsoft>;
@@ -5875,6 +5885,8 @@ def err_base_must_be_class : Error<"base specifier must name a class">;
 def err_union_as_base_class : Error<"unions cannot be base classes">;
 def err_circular_inheritance : Error<
   "circular inheritance between %0 and %1">;
+def err_base_class_has_flexible_array_member : Error<
+  "base class %0 has a flexible array member">;
 def err_incomplete_base_class : Error<"base class has incomplete type">;
 def err_duplicate_base_class : Error<
   "base class %0 specified more than once as a direct base class">;
@@ -6042,6 +6054,13 @@ def err_out_of_line_default_deletes : Error<
   "defaulting this %select{default constructor|copy constructor|move "
   "constructor|copy assignment operator|move assignment operator|destructor}0 "
   "would delete it after its first declaration">;
+def warn_vbase_moved_multiple_times : Warning<
+  "defaulted move assignment operator of %0 will move assign virtual base "
+  "class %1 multiple times">, InGroup<DiagGroup<"multiple-move-vbase">>;
+def note_vbase_moved_here : Note<
+  "%select{%1 is a virtual base class of base class %2 declared here|"
+  "virtual base class %1 declared here}0">;
+
 def ext_implicit_exception_spec_mismatch : ExtWarn<
   "function previously declared with an %select{explicit|implicit}0 exception "
   "specification redeclared with an %select{implicit|explicit}0 exception "

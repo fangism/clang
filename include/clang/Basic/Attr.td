@@ -314,7 +314,8 @@ def Common : InheritableAttr {
 }
 
 def Const : InheritableAttr {
-  let Spellings = [GNU<"const">, GNU<"__const">, CXX11<"gnu", "const">];
+  let Spellings = [GNU<"const">, GNU<"__const">,
+                   CXX11<"gnu", "const">, CXX11<"gnu", "__const">];
 }
 
 def Constructor : InheritableAttr {
@@ -434,7 +435,7 @@ def IBOutlet : InheritableAttr {
 
 def IBOutletCollection : InheritableAttr {
   let Spellings = [GNU<"iboutletcollection">];
-  let Args = [TypeArgument<"Interface", 1>, SourceLocArgument<"InterfaceLoc">];
+  let Args = [TypeArgument<"Interface", 1>];
 }
 
 def Malloc : InheritableAttr {
@@ -749,8 +750,7 @@ def VectorSize : TypeAttr {
 
 def VecTypeHint : InheritableAttr {
   let Spellings = [GNU<"vec_type_hint">];
-  let Args = [TypeArgument<"TypeHint">, SourceLocArgument<"TypeLoc">];
-  let HasCustomParsing = 1;
+  let Args = [TypeArgument<"TypeHint">];
 }
 
 def Visibility : InheritableAttr {
@@ -806,7 +806,9 @@ def X86ForceAlignArgPointer : InheritableAttr, TargetSpecificAttr {
 // Attribute to disable AddressSanitizer (or equivalent) checks.
 def NoSanitizeAddress : InheritableAttr {
   let Spellings = [GNU<"no_address_safety_analysis">,
-                   GNU<"no_sanitize_address">];
+                   GNU<"no_sanitize_address">,
+                   CXX11<"gnu", "no_address_safety_analysis">,
+                   CXX11<"gnu", "no_sanitize_address">];
 }
 
 // Attribute to disable ThreadSanitizer checks.
@@ -992,8 +994,8 @@ def SetTypestate : InheritableAttr {
                            ["Unknown", "Consumed", "Unconsumed"]>];
 }
 
-def TestsTypestate : InheritableAttr {
-  let Spellings = [GNU<"tests_typestate">];
+def TestTypestate : InheritableAttr {
+  let Spellings = [GNU<"test_typestate">];
   let Subjects = [CXXMethod];
   let Args = [EnumArgument<"TestState", "ConsumedState",
                            ["consumed", "unconsumed"],

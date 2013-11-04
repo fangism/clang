@@ -1071,11 +1071,16 @@ bool Sema::IsOverload(FunctionDecl *New, FunctionDecl *Old,
     // function yet (because we haven't yet resolved whether this is a static
     // or non-static member function). Add it now, on the assumption that this
     // is a redeclaration of OldMethod.
+    unsigned OldQuals = OldMethod->getTypeQualifiers();
     unsigned NewQuals = NewMethod->getTypeQualifiers();
     if (!getLangOpts().CPlusPlus1y && NewMethod->isConstexpr() &&
         !isa<CXXConstructorDecl>(NewMethod))
       NewQuals |= Qualifiers::Const;
-    if (OldMethod->getTypeQualifiers() != NewQuals)
+
+    // We do not allow overloading based off of '__restrict'.
+    OldQuals &= ~Qualifiers::Restrict;
+    NewQuals &= ~Qualifiers::Restrict;
+    if (OldQuals != NewQuals)
       return true;
   }
 
@@ -5443,10 +5448,18 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
   if (!CandidateSet.isNewCandidate(Function))
     return;
 
+  // C++11 [class.copy]p11: [DR1402]
+  //   A defaulted move constructor that is defined as deleted is ignored by
+  //   overload resolution.
+  CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(Function);
+  if (Constructor && Constructor->isDefaulted() && Constructor->isDeleted() &&
+      Constructor->isMoveConstructor())
+    return;
+
   // Overload resolution is always an unevaluated context.
   EnterExpressionEvaluationContext Unevaluated(*this, Sema::Unevaluated);
 
-  if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(Function)){
+  if (Constructor) {
     // C++ [class.copy]p3:
     //   A member function template is never instantiated to perform the copy
     //   of a class object to an object of its class type.
@@ -5619,6 +5632,13 @@ Sema::AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
          "Use AddOverloadCandidate for constructors");
 
   if (!CandidateSet.isNewCandidate(Method))
+    return;
+
+  // C++11 [class.copy]p23: [DR1402]
+  //   A defaulted move assignment operator that is defined as deleted is
+  //   ignored by overload resolution.
+  if (Method->isDefaulted() && Method->isDeleted() &&
+      Method->isMoveAssignmentOperator())
     return;
 
   // Overload resolution is always an unevaluated context.
