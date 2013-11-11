@@ -15,11 +15,11 @@
 // CHECK-OPTIONS2: -fno-show-source-location
 
 // RUN: %clang -### -S -Wwrite-strings %s 2>&1 | FileCheck -check-prefix=WRITE-STRINGS1 %s
+// RUN: %clang -### -S -Weverything %s 2>&1 | FileCheck -check-prefix=WRITE-STRINGS1 %s
 // WRITE-STRINGS1: -fconst-strings
 // RUN: %clang -### -S -Wwrite-strings -Wno-write-strings %s 2>&1 | FileCheck -check-prefix=WRITE-STRINGS2 %s
+// RUN: %clang -### -S -Wwrite-strings -w %s 2>&1 | FileCheck -check-prefix=WRITE-STRINGS2 %s
 // WRITE-STRINGS2-NOT: -fconst-strings
-// RUN: %clang -### -S -Wwrite-strings -w %s 2>&1 | FileCheck -check-prefix=WRITE-STRINGS3 %s
-// WRITE-STRINGS3-NOT: -fconst-strings
 
 // RUN: %clang -### -x c++ -c %s 2>&1 | FileCheck -check-prefix=DEPRECATED-ON-CHECK %s
 // RUN: %clang -### -x c++ -c -Wdeprecated %s 2>&1 | FileCheck -check-prefix=DEPRECATED-ON-CHECK %s
@@ -99,6 +99,9 @@
 // RUN: %clang -### -S -O4 %s 2>&1 | FileCheck -check-prefix=CHECK-MAX-O %s
 // CHECK-MAX-O: warning: -O4 is equivalent to -O3
 // CHECK-MAX-O: -O3
+
+// RUN: %clang -### -S -O20 %s 2>&1 | FileCheck -check-prefix=CHECK-INVALID-O %s
+// CHECK-INVALID-O: warning: optimization level '-O20' is unsupported; using '-O3' instead.
 
 // Test that we don't error on these.
 // RUN: %clang -### -S -Werror                                                \

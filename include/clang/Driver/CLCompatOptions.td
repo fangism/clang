@@ -27,7 +27,7 @@ class CLCompileFlag<string name> : Option<["/", "-"], name, KIND_FLAG>,
   Group<cl_compile_Group>, Flags<[CLOption, DriverOption]>;
 
 class CLIgnoredFlag<string name> : Option<["/", "-"], name, KIND_FLAG>,
-  Group<cl_ignored_Group>, Flags<[CLOption, DriverOption]>;
+  Group<cl_ignored_Group>, Flags<[CLOption, DriverOption, HelpHidden]>;
 
 class CLJoined<string name> : Option<["/", "-"], name, KIND_JOINED>,
   Group<cl_Group>, Flags<[CLOption, DriverOption]>;
@@ -36,7 +36,7 @@ class CLCompileJoined<string name> : Option<["/", "-"], name, KIND_JOINED>,
   Group<cl_compile_Group>, Flags<[CLOption, DriverOption]>;
 
 class CLIgnoredJoined<string name> : Option<["/", "-"], name, KIND_JOINED>,
-  Group<cl_ignored_Group>, Flags<[CLOption, DriverOption]>;
+  Group<cl_ignored_Group>, Flags<[CLOption, DriverOption, HelpHidden]>;
 
 class CLJoinedOrSeparate<string name> : Option<["/", "-"], name,
   KIND_JOINED_OR_SEPARATE>, Group<cl_Group>, Flags<[CLOption, DriverOption]>;
@@ -151,6 +151,7 @@ def _SLASH_TP : CLCompileFlag<"TP">, HelpText<"Treat all source files as C++">;
 
 def _SLASH_analyze_ : CLIgnoredFlag<"analyze-">;
 def _SLASH_errorReport : CLIgnoredJoined<"errorReport">;
+def _SLASH_FS : CLIgnoredFlag<"FS">, HelpText<"Force synchronous PDB writes">;
 def _SLASH_GF : CLIgnoredFlag<"GF">;
 def _SLASH_GS_ : CLIgnoredFlag<"GS-">;
 def _SLASH_nologo : CLIgnoredFlag<"nologo">;

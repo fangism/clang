@@ -914,6 +914,14 @@ def err_friend_not_first_in_declaration : Error<
   "'friend' must appear first in a non-function declaration">;
 def err_using_decl_friend : Error<
   "cannot befriend target of using declaration">;
+def warn_template_qualified_friend_unsupported : Warning<
+  "dependent nested name specifier '%0' for friend class declaration is "
+  "not supported; turning off access control for %1">,
+  InGroup<UnsupportedFriend>;
+def warn_template_qualified_friend_ignored : Warning<
+  "dependent nested name specifier '%0' for friend template declaration is "
+  "not supported; ignoring this friend declaration">,
+  InGroup<UnsupportedFriend>;
   
 def err_invalid_member_in_interface : Error<
   "%select{data member |non-public member function |static member function |"
@@ -4493,6 +4501,8 @@ def ext_array_init_parens : ExtWarn<
   InGroup<DiagGroup<"gnu-array-member-paren-init">>, DefaultError;
 def warn_deprecated_string_literal_conversion : Warning<
   "conversion from string literal to %0 is deprecated">, InGroup<DeprecatedWritableStr>;
+def warn_deprecated_string_literal_conversion_c : Warning<
+  "dummy warning to enable -fconst-strings">, InGroup<DeprecatedWritableStr>, DefaultIgnore;
 def err_realimag_invalid_type : Error<"invalid type %0 to %1 operator">;
 def err_typecheck_sclass_fscope : Error<
   "illegal storage class on file-scoped variable">;
@@ -4776,6 +4786,7 @@ def warn_bad_receiver_type : Warning<
   "receiver type %0 is not 'id' or interface pointer, consider "
   "casting it to 'id'">,InGroup<ObjCReceiver>;
 def err_bad_receiver_type : Error<"bad receiver type %0">;
+def err_incomplete_receiver_type : Error<"incomplete receiver type %0">;
 def err_unknown_receiver_suggest : Error<
   "unknown receiver %0; did you mean %1?">;
 def error_objc_throw_expects_object : Error<
@@ -5130,10 +5141,6 @@ let CategoryName = "Lambda Issue" in {
     "cannot deduce type for lambda capture %0 from initializer list">;
 }
 
-// C++1y Generic Lambdas
-def err_glambda_not_fully_implemented : Error<
-  "unimplemented generic lambda feature: %0">;
-    
 def err_return_in_captured_stmt : Error<
   "cannot return from %0">;
 def err_capture_block_variable : Error<
@@ -5142,6 +5149,16 @@ def err_capture_block_variable : Error<
 
 def err_operator_arrow_circular : Error<
   "circular pointer delegation detected">;
+def err_operator_arrow_depth_exceeded : Error<
+  "use of 'operator->' on type %0 would invoke a sequence of more than %1 "
+  "'operator->' calls">;
+def note_operator_arrow_here : Note<
+  "'operator->' declared here produces an object of type %0">;
+def note_operator_arrows_suppressed : Note<
+  "(skipping %0 'operator->'%s0 in backtrace)">;
+def note_operator_arrow_depth : Note<
+  "use -foperator-arrow-depth=N to increase 'operator->' limit">;
+
 def err_pseudo_dtor_base_not_scalar : Error<
   "object expression of non-scalar type %0 cannot be used in a "
   "pseudo-destructor expression">;
@@ -6670,7 +6687,7 @@ def err_wrong_sampler_addressspace: Error<
   "sampler type cannot be used with the __local and __global address space qualifiers">;
 def err_opencl_global_invalid_addr_space : Error<
   "global variables must have a constant address space qualifier">;
-
+def err_opencl_no_main : Error<"%select{function|kernel}0 cannot be called 'main'">;
 } // end of sema category
 
 let CategoryName = "OpenMP Issue" in {

@@ -40,6 +40,7 @@
 #include "clang/Sema/ParsedTemplate.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
+#include "clang/Sema/Template.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Triple.h"
 #include <algorithm>
@@ -7694,6 +7695,13 @@ void Sema::CheckMain(FunctionDecl* FD, const DeclSpec& DS) {
     FD->setConstexpr(false);
   }
 
+  if (getLangOpts().OpenCL) {
+    Diag(FD->getLocation(), diag::err_opencl_no_main)
+        << FD->hasAttr<OpenCLKernelAttr>();
+    FD->setInvalidDecl();
+    return;
+  }
+
   QualType T = FD->getType();
   assert(T->isFunctionType() && "function decl is not of function type");
   const FunctionType* FT = T->castAs<FunctionType>();
@@ -9421,6 +9429,8 @@ Sema::CheckForFunctionRedefinition(FunctionDecl *FD,
   Diag(Definition->getLocation(), diag::note_previous_definition);
   FD->setInvalidDecl();
 }
+
+
 static void RebuildLambdaScopeInfo(CXXMethodDecl *CallOperator, 
                                    Sema &S) {
   CXXRecordDecl *const LambdaClass = CallOperator->getParent();
@@ -9442,7 +9452,27 @@ static void RebuildLambdaScopeInfo(CXXMethodDecl *CallOperator,
   LSI->IntroducerRange = DNI.getCXXOperatorNameRange(); 
   LSI->Mutable = !CallOperator->isConst();
 
-  // FIXME: Add the captures to the LSI.
+  // Add the captures to the LSI so they can be noted as already
+  // captured within tryCaptureVar. 
+  for (LambdaExpr::capture_iterator C = LambdaClass->captures_begin(),
+      CEnd = LambdaClass->captures_end(); C != CEnd; ++C) {
+    if (C->capturesVariable()) {
+      VarDecl *VD = C->getCapturedVar();
+      if (VD->isInitCapture())
+        S.CurrentInstantiationScope->InstantiatedLocal(VD, VD);
+      QualType CaptureType = VD->getType();
+      const bool ByRef = C->getCaptureKind() == LCK_ByRef;
+      LSI->addCapture(VD, /*IsBlock*/false, ByRef, 
+          /*RefersToEnclosingLocal*/true, C->getLocation(),
+          /*EllipsisLoc*/C->isPackExpansion() 
+                         ? C->getEllipsisLoc() : SourceLocation(),
+          CaptureType, /*Expr*/ 0);
+      
+    } else if (C->capturesThis()) {
+      LSI->addThisCapture(/*Nested*/ false, C->getLocation(), 
+                              S.getCurrentThisType(), /*Expr*/ 0);
+    }
+  }
 }
 
 Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D) {

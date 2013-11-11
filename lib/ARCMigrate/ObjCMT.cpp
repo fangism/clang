@@ -412,10 +412,18 @@ void ObjCMigrateASTConsumer::migrateObjCInterfaceDecl(ASTContext &Ctx,
     ObjCMethodDecl *Method = (*M);
     if (Method->isDeprecated())
       continue;
-    migrateProperty(Ctx, D, Method);
-    if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
-      migrateNsReturnsInnerPointer(Ctx, Method);
+    bool PropertyInferred = migrateProperty(Ctx, D, Method);
+    // If a property is inferred, do not attempt to attach NS_RETURNS_INNER_POINTER to
+    // the getter method as it ends up on the property itself which we don't want
+    // to do unless -objcmt-returns-innerpointer-property  option is on.
+    if (!PropertyInferred ||
+        (ASTMigrateActions & FrontendOptions::ObjCMT_ReturnsInnerPointerProperty))
+      if (ASTMigrateActions & FrontendOptions::ObjCMT_Annotation)
+        migrateNsReturnsInnerPointer(Ctx, Method);
   }
+  if (!(ASTMigrateActions & FrontendOptions::ObjCMT_ReturnsInnerPointerProperty))
+    return;
+  
   for (ObjCContainerDecl::prop_iterator P = D->prop_begin(),
        E = D->prop_end(); P != E; ++P) {
     ObjCPropertyDecl *Prop = *P;

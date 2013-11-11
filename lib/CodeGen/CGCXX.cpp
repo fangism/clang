@@ -82,18 +82,12 @@ bool CodeGenModule::TryEmitBaseDestructorAsAlias(const CXXDestructorDecl *D) {
   if (!UniqueBase)
     return true;
 
-  /// If we don't have a definition for the destructor yet, don't
-  /// emit.  We can't emit aliases to declarations; that's just not
-  /// how aliases work.
-  const CXXDestructorDecl *BaseD = UniqueBase->getDestructor();
-  if (!BaseD->isImplicit() && !BaseD->hasBody())
-    return true;
-
   // If the base is at a non-zero offset, give up.
   const ASTRecordLayout &ClassLayout = Context.getASTRecordLayout(Class);
   if (!ClassLayout.getBaseClassOffset(UniqueBase).isZero())
     return true;
 
+  const CXXDestructorDecl *BaseD = UniqueBase->getDestructor();
   return TryEmitDefinitionAsAlias(GlobalDecl(D, Dtor_Base),
                                   GlobalDecl(BaseD, Dtor_Base),
                                   false);
@@ -112,32 +106,19 @@ bool CodeGenModule::TryEmitDefinitionAsAlias(GlobalDecl AliasDecl,
   // support aliases with that linkage, fail.
   llvm::GlobalValue::LinkageTypes Linkage = getFunctionLinkage(AliasDecl);
 
-  llvm::GlobalValue::LinkageTypes TargetLinkage
-    = getFunctionLinkage(TargetDecl);
-
-  // Don't create an alias to a linker weak symbol unless we know we can do
-  // that in every TU. This avoids producing different COMDATs in different
-  // TUs.
-  if (llvm::GlobalValue::isWeakForLinker(TargetLinkage)) {
-    if (!InEveryTU)
-      return true;
-
-    // In addition to making sure we produce it in every TU, we have to make
-    // sure llvm keeps it.
-    // FIXME: Instead of outputting an alias we could just replace every use of
-    // AliasDecl with TargetDecl.
-    assert(Linkage == TargetLinkage);
-    Linkage = llvm::GlobalValue::WeakODRLinkage;
-  }
-
   // We can't use an alias if the linkage is not valid for one.
   if (!llvm::GlobalAlias::isValidLinkage(Linkage))
     return true;
+
+  llvm::GlobalValue::LinkageTypes TargetLinkage =
+      getFunctionLinkage(TargetDecl);
 
   // Check if we have it already.
   StringRef MangledName = getMangledName(AliasDecl);
   llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
   if (Entry && !Entry->isDeclaration())
+    return false;
+  if (Replacements.count(MangledName))
     return false;
 
   // Derive the type for the alias.
@@ -151,6 +132,27 @@ bool CodeGenModule::TryEmitDefinitionAsAlias(GlobalDecl AliasDecl,
   llvm::Constant *Aliasee = Ref;
   if (Ref->getType() != AliasType)
     Aliasee = llvm::ConstantExpr::getBitCast(Ref, AliasType);
+
+  // Instead of creating as alias to a linkonce_odr, replace all of the uses
+  // of the aliassee.
+  if (llvm::GlobalValue::isDiscardableIfUnused(Linkage)) {
+    Replacements[MangledName] = Aliasee;
+    return false;
+  }
+
+  if (!InEveryTU) {
+    /// If we don't have a definition for the destructor yet, don't
+    /// emit.  We can't emit aliases to declarations; that's just not
+    /// how aliases work.
+    if (Ref->isDeclaration())
+      return true;
+
+    // Don't create an alias to a linker weak symbol unless we know we can do
+    // that in every TU. This avoids producing different COMDATs in different
+    // TUs.
+    if (llvm::GlobalValue::isWeakForLinker(TargetLinkage))
+      return true;
+  }
 
   // Create the alias with no name.
   llvm::GlobalAlias *Alias = 
@@ -295,9 +297,9 @@ static llvm::Value *BuildAppleKextVirtualCall(CodeGenFunction &CGF,
   Ty = Ty->getPointerTo()->getPointerTo();
   VTable = CGF.Builder.CreateBitCast(VTable, Ty);
   assert(VTable && "BuildVirtualCall = kext vtbl pointer is null");
-  uint64_t VTableIndex = CGM.getVTableContext().getMethodVTableIndex(GD);
+  uint64_t VTableIndex = CGM.getItaniumVTableContext().getMethodVTableIndex(GD);
   uint64_t AddressPoint =
-    CGM.getVTableContext().getVTableLayout(RD)
+    CGM.getItaniumVTableContext().getVTableLayout(RD)
        .getAddressPoint(BaseSubobject(RD, CharUnits::Zero()));
   VTableIndex += AddressPoint;
   llvm::Value *VFuncPtr =

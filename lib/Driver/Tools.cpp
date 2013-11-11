@@ -21,6 +21,7 @@
 #include "clang/Driver/SanitizerArgs.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Util.h"
+#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -2726,7 +2727,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // preprocessed inputs and configure concludes that -fPIC is not supported.
   Args.ClaimAllArgs(options::OPT_D);
 
-  // Manually translate -O4 to -O3; let clang reject others.
+  // Manually translate -O4 to -O3; let clang fall back on -O3 for others
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (A->getOption().matches(options::OPT_O4)) {
       CmdArgs.push_back("-O3");
@@ -2790,13 +2791,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // behavior for now. FIXME: Directly diagnose uses of a string literal as
   // a non-const char* in C, rather than using this crude hack.
   if (!types::isCXX(InputType)) {
-    // FIXME: This should behave just like a warning flag, and thus should also
-    // respect -Weverything, -Wno-everything, -Werror=write-strings, and so on.
-    Arg *WriteStrings =
-        Args.getLastArg(options::OPT_Wwrite_strings,
-                        options::OPT_Wno_write_strings, options::OPT_w);
-    if (WriteStrings &&
-        WriteStrings->getOption().matches(options::OPT_Wwrite_strings))
+    DiagnosticsEngine::Level DiagLevel = D.getDiags().getDiagnosticLevel(
+        diag::warn_deprecated_string_literal_conversion_c, SourceLocation());
+    if (DiagLevel > DiagnosticsEngine::Ignored)
       CmdArgs.push_back("-fconst-strings");
   }
 
@@ -2832,6 +2829,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Arg *A = Args.getLastArg(options::OPT_ftemplate_depth_,
                                options::OPT_ftemplate_depth_EQ)) {
     CmdArgs.push_back("-ftemplate-depth");
+    CmdArgs.push_back(A->getValue());
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_foperator_arrow_depth_EQ)) {
+    CmdArgs.push_back("-foperator-arrow-depth");
     CmdArgs.push_back(A->getValue());
   }
 
@@ -5788,6 +5790,26 @@ void freebsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_t);
   Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_r);
+
+  // Tell the linker to load the plugin. This has to come before AddLinkerInputs
+  // as gold requires -plugin to come before any -plugin-opt that -Wl might
+  // forward.
+  if (D.IsUsingLTO(Args)) {
+    CmdArgs.push_back("-plugin");
+    std::string Plugin = ToolChain.getDriver().Dir + "/../lib/LLVMgold.so";
+    CmdArgs.push_back(Args.MakeArgString(Plugin));
+
+    // Try to pass driver level flags relevant to LTO code generation down to
+    // the plugin.
+
+    // Handle flags for selecting CPU variants.
+    std::string CPU = getCPUName(Args, ToolChain.getTriple());
+    if (!CPU.empty()) {
+      CmdArgs.push_back(
+                        Args.MakeArgString(Twine("-plugin-opt=mcpu=") +
+                                           CPU));
+    }
+  }
 
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs);
 
