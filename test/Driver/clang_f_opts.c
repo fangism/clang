@@ -44,6 +44,9 @@
 // CHECK-UNROLL-LOOPS: "-funroll-loops"
 // CHECK-NO-UNROLL-LOOPS: "-fno-unroll-loops"
 
+// RUN: %clang -### -S -fprofile-sample-use=%S/Inputs/file.prof %s 2>&1 | FileCheck -check-prefix=CHECK-SAMPLE-PROFILE %s
+// CHECK-SAMPLE-PROFILE: "-fprofile-sample-use={{.*}}/file.prof"
+
 // RUN: %clang -### -S -fvectorize %s 2>&1 | FileCheck -check-prefix=CHECK-VECTORIZE %s
 // RUN: %clang -### -S -fno-vectorize -fvectorize %s 2>&1 | FileCheck -check-prefix=CHECK-VECTORIZE %s
 // RUN: %clang -### -S -fno-vectorize %s 2>&1 | FileCheck -check-prefix=CHECK-NO-VECTORIZE %s
@@ -99,9 +102,6 @@
 // RUN: %clang -### -S -O4 %s 2>&1 | FileCheck -check-prefix=CHECK-MAX-O %s
 // CHECK-MAX-O: warning: -O4 is equivalent to -O3
 // CHECK-MAX-O: -O3
-
-// RUN: %clang -### -S -O20 %s 2>&1 | FileCheck -check-prefix=CHECK-INVALID-O %s
-// CHECK-INVALID-O: warning: optimization level '-O20' is unsupported; using '-O3' instead.
 
 // Test that we don't error on these.
 // RUN: %clang -### -S -Werror                                                \

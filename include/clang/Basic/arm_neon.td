@@ -87,6 +87,12 @@ def OP_SEL   : Op;
 def OP_REV64 : Op;
 def OP_REV32 : Op;
 def OP_REV16 : Op;
+def OP_XTN : Op;
+def OP_SQXTUN : Op;
+def OP_QXTN : Op;
+def OP_VCVT_NA_HI : Op;
+def OP_VCVT_EX_HI : Op;
+def OP_VCVTX_HI : Op;
 def OP_REINT : Op;
 def OP_ADDHNHi : Op;
 def OP_RADDHNHi : Op;
@@ -183,7 +189,8 @@ class NoTestOpInst<string n, string p, string t, Op o> : Inst<n, p, t, o> {}
 // y: scalar of float
 // o: scalar of double
 // k: default elt width, double num elts
-// #: array of default vectors
+// 2,3,4: array of default vectors
+// B,C,D: array of default elts, force 'Q' size modifier.
 // p: pointer type
 // c: const pointer type
 
@@ -512,23 +519,23 @@ let isA64 = 1 in {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Load/Store
-// With additional QUl, Ql, Qd type.
+// With additional QUl, Ql, Qd, Pl, QPl type.
 def LD1 : WInst<"vld1", "dc",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def LD2 : WInst<"vld2", "2c",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def LD3 : WInst<"vld3", "3c",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def LD4 : WInst<"vld4", "4c",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def ST1 : WInst<"vst1", "vpd",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def ST2 : WInst<"vst2", "vp2",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def ST3 : WInst<"vst3", "vp3",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 def ST4 : WInst<"vst4", "vp4",
-                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPs">;
+                "QUcQUsQUiQUlQcQsQiQlQhQfQdQPcQPsUcUsUiUlcsilhfdPcPsPlQPl">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Addition
@@ -563,13 +570,30 @@ def FMLS : SInst<"vfms", "dddd", "fQfQd">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Logical operations
-// With additional Qd type.
-def BSL : SInst<"vbsl", "dudd", "csilUcUsUiUlfPcPsQcQsQiQlQUcQUsQUiQUlQfQPcQPsQd">;
+// With additional Qd, Ql, QPl type.
+def BSL : SInst<"vbsl", "dudd",
+                "csilUcUsUiUlfPcPsQcQsQiQlQUcQUsQUiQUlQfQPcQPsQdPlQPl">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Absolute Difference
 // With additional Qd type.
 def ABD  : SInst<"vabd", "ddd",  "csiUcUsUifQcQsQiQUcQUsQUiQfQd">;
+
+////////////////////////////////////////////////////////////////////////////////
+// saturating absolute/negate
+// With additional Qd/Ql type.
+def ABS    : SInst<"vabs", "dd", "csifQcQsQiQfQlQd">;
+def QABS   : SInst<"vqabs", "dd", "csiQcQsQiQl">;
+def NEG    : SOpInst<"vneg", "dd", "csifQcQsQiQfQdQl", OP_NEG>;
+def QNEG   : SInst<"vqneg", "dd", "csiQcQsQiQl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Signed Saturating Accumulated of Unsigned Value
+def SUQADD : SInst<"vuqadd", "ddd", "csiQcQsQiQl">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Unsigned Saturating Accumulated of Signed Value
+def USQADD : SInst<"vsqadd", "ddd", "UcUsUiQUcQUsQUiQUl">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Reciprocal/Sqrt
@@ -578,20 +602,86 @@ def FRECPS  : IInst<"vrecps", "ddd", "fQfQd">;
 def FRSQRTS : IInst<"vrsqrts", "ddd", "fQfQd">;
 
 ////////////////////////////////////////////////////////////////////////////////
+// bitwise reverse
+def RBIT : IInst<"vrbit", "dd", "cUcPcQcQUcQPc">;
+
+////////////////////////////////////////////////////////////////////////////////
+// Integer extract and narrow to high
+def XTN2 : SOpInst<"vmovn_high", "qhk", "silUsUiUl", OP_XTN>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Signed integer saturating extract and unsigned narrow to high
+def SQXTUN2 : SOpInst<"vqmovun_high", "qhk", "sil", OP_SQXTUN>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Integer saturating extract and narrow to high
+def QXTN2 : SOpInst<"vqmovn_high", "qhk", "silUsUiUl", OP_QXTN>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Converting vectors
+def VCVT_HIGH_F16 : SOpInst<"vcvt_high_f16", "qhj", "f", OP_VCVT_NA_HI>;
+def VCVT_HIGH_F32_F16 : SOpInst<"vcvt_high_f32", "wk", "h", OP_VCVT_EX_HI>;
+def VCVT_F32_F64 : SInst<"vcvt_f32_f64", "fj", "d">;
+def VCVT_HIGH_F32_F64 : SOpInst<"vcvt_high_f32", "qfj", "d", OP_VCVT_NA_HI>;
+def VCVT_F64_F32 : SInst<"vcvt_f64", "wd", "f">;
+def VCVT_F64 : SInst<"vcvt_f64", "fd",  "QlQUl">;
+def VCVT_HIGH_F64_F32 : SOpInst<"vcvt_high_f64", "wj", "f", OP_VCVT_EX_HI>;
+def VCVTX_F32_F64 : SInst<"vcvtx_f32", "fj",  "d">;
+def VCVTX_HIGH_F32_F64 : SOpInst<"vcvtx_high_f32", "qfj", "d", OP_VCVTX_HI>;
+def FRINTN : SInst<"vrndn", "dd", "fQfQd">;
+def FRINTA : SInst<"vrnda", "dd", "fQfQd">;
+def FRINTP : SInst<"vrndp", "dd", "fQfQd">;
+def FRINTM : SInst<"vrndm", "dd", "fQfQd">;
+def FRINTX : SInst<"vrndx", "dd", "fQfQd">;
+def FRINTZ : SInst<"vrnd", "dd", "fQfQd">;
+def FRINTI : SInst<"vrndi", "dd", "fQfQd">;
+def VCVT_S64 : SInst<"vcvt_s64", "xd",  "Qd">;
+def VCVT_U64 : SInst<"vcvt_u64", "ud",  "Qd">;
+def FCVTNS_S32 : SInst<"vcvtn_s32", "xd", "fQf">;
+def FCVTNS_S64 : SInst<"vcvtn_s64", "xd", "Qd">;
+def FCVTNU_S32 : SInst<"vcvtn_u32", "ud", "fQf">;
+def FCVTNU_S64 : SInst<"vcvtn_u64", "ud", "Qd">;
+def FCVTPS_S32 : SInst<"vcvtp_s32", "xd", "fQf">;
+def FCVTPS_S64 : SInst<"vcvtp_s64", "xd", "Qd">;
+def FCVTPU_S32 : SInst<"vcvtp_u32", "ud", "fQf">;
+def FCVTPU_S64 : SInst<"vcvtp_u64", "ud", "Qd">;
+def FCVTMS_S32 : SInst<"vcvtm_s32", "xd", "fQf">;
+def FCVTMS_S64 : SInst<"vcvtm_s64", "xd", "Qd">;
+def FCVTMU_S32 : SInst<"vcvtm_u32", "ud", "fQf">;
+def FCVTMU_S64 : SInst<"vcvtm_u64", "ud", "Qd">;
+def FCVTAS_S32 : SInst<"vcvta_s32", "xd", "fQf">;
+def FCVTAS_S64 : SInst<"vcvta_s64", "xd", "Qd">;
+def FCVTAU_S32 : SInst<"vcvta_u32", "ud", "fQf">;
+def FCVTAU_S64 : SInst<"vcvta_u64", "ud", "Qd">;
+def FRECPE  : SInst<"vrecpe", "dd", "fUiQfQUiQd">;
+def FRSQRTE : SInst<"vrsqrte", "dd", "fUiQfQUiQd">;
+def FSQRT   : SInst<"vsqrt", "dd", "fQfQd">;
+
+////////////////////////////////////////////////////////////////////////////////
 // Comparison
-// With additional Qd type.
+// With additional Qd, Ql, QPl type.
+def VVCEQ  : IOpInst<"vceq", "udd", "csifUcUsUiPcQcQsQiQfQUcQUsQUiQPcPlQPl",
+                     OP_EQ>;
 def FCAGE : IInst<"vcage", "udd", "fQfQd">;
 def FCAGT : IInst<"vcagt", "udd", "fQfQd">;
 def FCALE : IInst<"vcale", "udd", "fQfQd">;
 def FCALT : IInst<"vcalt", "udd", "fQfQd">;
 // With additional Ql, QUl, Qd types.
-def CMTST  : WInst<"vtst", "udd", "csiUcUsUiPcPsQcQsQiQlQUcQUsQUiQUlQPcQPs">;
+def CMTST  : WInst<"vtst", "udd",
+                   "csiUcUsUiPcPsQcQsQiQUcQUsQUiQPcQPslUlQlQUlPlQPl">;
 def CFMEQ  : SOpInst<"vceq", "udd",
                   "csifUcUsUiPcQcQsQiQlQfQUcQUsQUiQUlQPcQd", OP_EQ>;
 def CFMGE  : SOpInst<"vcge", "udd", "csifUcUsUiQcQsQiQlQfQUcQUsQUiQUlQd", OP_GE>;
 def CFMLE  : SOpInst<"vcle", "udd", "csifUcUsUiQcQsQiQlQfQUcQUsQUiQUlQd", OP_LE>;
 def CFMGT  : SOpInst<"vcgt", "udd", "csifUcUsUiQcQsQiQlQfQUcQUsQUiQUlQd", OP_GT>;
 def CFMLT  : SOpInst<"vclt", "udd", "csifUcUsUiQcQsQiQlQfQUcQUsQUiQUlQd", OP_LT>;
+
+def CMEQ  : SInst<"vceqz", "ud",
+                  "csifUcUsUiPcPsQcQsQiQlQfQUcQUsQUiQUlQPcQPsQd">;
+def CMGE  : SInst<"vcgez", "ud", "csifdQcQsQiQlQfQd">;
+def CMLE  : SInst<"vclez", "ud", "csifdQcQsQiQlQfQd">;
+def CMGT  : SInst<"vcgtz", "ud", "csifdQcQsQiQlQfQd">;
+def CMLT  : SInst<"vcltz", "ud", "csifdQcQsQiQlQfQd">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Max/Min Integer
@@ -626,6 +716,13 @@ let isShift = 1 in {
 // Left shift long high
 def SHLL_HIGH_N    : SOpInst<"vshll_high_n", "ndi", "HcHsHiHUcHUsHUi",
                              OP_LONG_HI>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Shifts with insert, with additional Ql, QPl type.
+def SRI_N : WInst<"vsri_n", "dddi",
+                  "csilUcUsUiUlPcPsQcQsQiQlQUcQUsQUiQUlQPcQPsPlQPl">;
+def SLI_N : WInst<"vsli_n", "dddi",
+                  "csilUcUsUiUlPcPsQcQsQiQlQUcQUsQUiQUlQPcQPsPlQPl">;
 
 // Right shift narrow high
 def SHRN_HIGH_N    : IOpInst<"vshrn_high_n", "hmdi",
@@ -678,36 +775,40 @@ def VQDMLSL_HIGH : SOpInst<"vqdmlsl_high", "wwkk", "si", OP_QDMLSLHi>;
 ////////////////////////////////////////////////////////////////////////////////
 // Extract or insert element from vector
 def GET_LANE : IInst<"vget_lane", "sdi",
-                     "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPsfdQfQd">;
+                     "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPsfdQfQdPlQPl">;
 def SET_LANE : IInst<"vset_lane", "dsdi",
-                     "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPsfdQfQd">;
+                     "csilPcPsUcUsUiUlQcQsQiQlQUcQUsQUiQUlPcPsQPcQPsfdQfQdPlQPl">;
 def COPY_LANE : IOpInst<"vcopy_lane", "ddidi",
-                        "csiPcPsUcUsUiPcPsf", OP_COPY_LN>;
+                        "csiPcPsUcUsUiPcPsfPl", OP_COPY_LN>;
 def COPYQ_LANE : IOpInst<"vcopy_lane", "ddigi",
-                        "QcQsQiQlQUcQUsQUiQUlQPcQPsQfQd", OP_COPYQ_LN>;
+                        "QcQsQiQlQUcQUsQUiQUlQPcQPsQfQdQPl", OP_COPYQ_LN>;
 def COPY_LANEQ : IOpInst<"vcopy_laneq", "ddiki",
                      "csiPcPsUcUsUif", OP_COPY_LNQ>;
 def COPYQ_LANEQ : IOpInst<"vcopy_laneq", "ddidi",
-                     "QcQsQiQlQUcQUsQUiQUlQPcQPsQfd", OP_COPY_LN>;
-
+                     "QcQsQiQlQUcQUsQUiQUlQPcQPsQfdQPl", OP_COPY_LN>;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Set all lanes to same value
 def VDUP_LANE1: WOpInst<"vdup_lane", "dgi",
-                        "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQd",
+                  "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQdPlQPl",
                         OP_DUP_LN>;
 def VDUP_LANE2: WOpInst<"vdup_laneq", "dki",
-                        "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQd",
+                  "csilPcPsUcUsUiUlhfdQcQsQiQlQPcQPsQUcQUsQUiQUlQhQfQdPlQPl",
                         OP_DUP_LN>;
 def DUP_N   : WOpInst<"vdup_n", "ds",
-                       "UcUsUicsiPcPsfQUcQUsQUiQcQsQiQPcQPsQflUlQlQUldQd",
+                       "UcUsUicsiPcPsfQUcQUsQUiQcQsQiQPcQPsQflUlQlQUldQdPlQPl",
                        OP_DUP>;
 def MOV_N   : WOpInst<"vmov_n", "ds",
                        "UcUsUicsiPcPsfQUcQUsQUiQcQsQiQPcQPsQflUlQlQUldQd",
                        OP_DUP>;
+
 ////////////////////////////////////////////////////////////////////////////////
-//Initialize a vector from bit pattern
-def CREATE : NoTestOpInst<"vcreate", "dl", "csihfdUcUsUiUlPcPsl", OP_CAST>;
+// Combining vectors, with additional Pl
+def COMBINE : NoTestOpInst<"vcombine", "kdd", "csilhfUcUsUiUlPcPsPl", OP_CONC>;
+
+////////////////////////////////////////////////////////////////////////////////
+//Initialize a vector from bit pattern, with additional Pl
+def CREATE : NoTestOpInst<"vcreate", "dl", "csihfdUcUsUiUlPcPslPl", OP_CAST>;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -778,7 +879,7 @@ def FMINNMV : SInst<"vminnmv", "sd", "Qf">;
 ////////////////////////////////////////////////////////////////////////////////
 // Newly added Vector Extract for f64
 def VEXT_A64 : WInst<"vext", "dddi",
-                     "cUcPcsUsPsiUilUlfdQcQUcQPcQsQUsQPsQiQUiQlQUlQfQd">;
+                     "cUcPcsUsPsiUilUlfdQcQUcQPcQsQUsQPsQiQUiQlQUlQfQdPlQPl">;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Crypto
@@ -802,17 +903,32 @@ def SHA256SU1 : SInst<"vsha256su1", "dddd", "QUi">;
 ////////////////////////////////////////////////////////////////////////////////
 // Permutation
 def VTRN1 : SOpInst<"vtrn1", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_TRN1>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_TRN1>;
 def VZIP1 : SOpInst<"vzip1", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_ZIP1>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_ZIP1>;
 def VUZP1 : SOpInst<"vuzp1", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_UZP1>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_UZP1>;
 def VTRN2 : SOpInst<"vtrn2", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_TRN2>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_TRN2>;
 def VZIP2 : SOpInst<"vzip2", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_ZIP2>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_ZIP2>;
 def VUZP2 : SOpInst<"vuzp2", "ddd",
-                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPs", OP_UZP2>;
+                    "csiUcUsUifPcPsQcQsQiQlQUcQUsQUiQUlQfQdQPcQPsQPl", OP_UZP2>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Table lookup
+let InstName = "vtbl" in {
+def VQTBL1_A64 : WInst<"vqtbl1", "djt",  "UccPcQUcQcQPc">;
+def VQTBL2_A64 : WInst<"vqtbl2", "dBt",  "UccPcQUcQcQPc">;
+def VQTBL3_A64 : WInst<"vqtbl3", "dCt",  "UccPcQUcQcQPc">;
+def VQTBL4_A64 : WInst<"vqtbl4", "dDt",  "UccPcQUcQcQPc">;
+}
+let InstName = "vtbx" in {
+def VQTBX1_A64 : WInst<"vqtbx1", "ddjt", "UccPcQUcQcQPc">;
+def VQTBX2_A64 : WInst<"vqtbx2", "ddBt", "UccPcQUcQcQPc">;
+def VQTBX3_A64 : WInst<"vqtbx3", "ddCt", "UccPcQUcQcQPc">;
+def VQTBX4_A64 : WInst<"vqtbx4", "ddDt", "UccPcQUcQcQPc">;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Scalar Arithmetic

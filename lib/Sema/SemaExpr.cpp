@@ -1519,6 +1519,11 @@ Sema::ActOnStringLiteral(const Token *StringToks, unsigned NumStringToks,
                                  llvm::APInt(32, Literal.GetNumStringChars()+1),
                                  ArrayType::Normal, 0);
 
+  // OpenCL v1.1 s6.5.3: a string literal is in the constant address space.
+  if (getLangOpts().OpenCL) {
+    StrTy = Context.getAddrSpaceQualType(StrTy, LangAS::opencl_constant);
+  }
+
   // Pass &StringTokLocs[0], StringTokLocs.size() to factory!
   StringLiteral *Lit = StringLiteral::Create(Context, Literal.GetString(),
                                              Kind, Literal.Pascal, StrTy,
@@ -10616,8 +10621,17 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
 
   switch (ConvTy) {
   case Compatible:
-      DiagnoseAssignmentEnum(DstType, SrcType, SrcExpr);
-      return false;
+    // See if a proper null pointer constant is to be assigned.
+    if (DstType->isAnyPointerType() && !SrcType->isAnyPointerType() &&
+        SrcExpr->isNullPointerConstant(Context,
+                                       Expr::NPC_NeverValueDependent) ==
+            Expr::NPCK_ZeroExpression &&
+        !isUnevaluatedContext())
+      Diag(SrcExpr->getExprLoc(), diag::warn_non_literal_null_pointer)
+        << DstType << SrcExpr->getSourceRange();
+
+    DiagnoseAssignmentEnum(DstType, SrcType, SrcExpr);
+    return false;
 
   case PointerToInt:
     DiagKind = diag::ext_typecheck_convert_pointer_int;

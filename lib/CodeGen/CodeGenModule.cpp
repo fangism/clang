@@ -181,8 +181,22 @@ void CodeGenModule::applyReplacements() {
     llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
     if (!Entry)
       continue;
-    Entry->replaceAllUsesWith(Replacement);
-    Entry->eraseFromParent();
+    llvm::Function *OldF = cast<llvm::Function>(Entry);
+    llvm::Function *NewF = dyn_cast<llvm::Function>(Replacement);
+    if (!NewF) {
+      llvm::ConstantExpr *CE = cast<llvm::ConstantExpr>(Replacement);
+      assert(CE->getOpcode() == llvm::Instruction::BitCast ||
+             CE->getOpcode() == llvm::Instruction::GetElementPtr);
+      NewF = dyn_cast<llvm::Function>(CE->getOperand(0));
+    }
+
+    // Replace old with new, but keep the old order.
+    OldF->replaceAllUsesWith(Replacement);
+    if (NewF) {
+      NewF->removeFromParent();
+      OldF->getParent()->getFunctionList().insertAfter(OldF, NewF);
+    }
+    OldF->eraseFromParent();
   }
 }
 
@@ -2611,11 +2625,16 @@ static llvm::GlobalVariable *GenerateStringLiteral(StringRef str,
   llvm::Constant *C =
       llvm::ConstantDataArray::getString(CGM.getLLVMContext(), str, false);
 
+  // OpenCL v1.1 s6.5.3: a string literal is in the constant address space.
+  unsigned AddrSpace = 0;
+  if (CGM.getLangOpts().OpenCL)
+    AddrSpace = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
+
   // Create a global variable for this string
-  llvm::GlobalVariable *GV =
-    new llvm::GlobalVariable(CGM.getModule(), C->getType(), constant,
-                             llvm::GlobalValue::PrivateLinkage,
-                             C, GlobalName);
+  llvm::GlobalVariable *GV = new llvm::GlobalVariable(
+      CGM.getModule(), C->getType(), constant,
+      llvm::GlobalValue::PrivateLinkage, C, GlobalName, 0,
+      llvm::GlobalVariable::NotThreadLocal, AddrSpace);
   GV->setAlignment(Alignment);
   GV->setUnnamedAddr(true);
   return GV;

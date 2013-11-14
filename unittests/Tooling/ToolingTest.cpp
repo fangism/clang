@@ -300,7 +300,6 @@ TEST(ClangToolTest, BuildASTs) {
 
   llvm::DeleteContainerPointers(ASTs);
 }
-#endif
 
 struct TestDiagnosticConsumer : public DiagnosticConsumer {
   TestDiagnosticConsumer() : NumDiagnosticsSeen(0) {}
@@ -320,6 +319,19 @@ TEST(ClangToolTest, InjectDiagnosticConsumer) {
   Tool.run(newFrontendActionFactory<SyntaxOnlyAction>());
   EXPECT_EQ(1u, Consumer.NumDiagnosticsSeen);
 }
+
+TEST(ClangToolTest, InjectDiagnosticConsumerInBuildASTs) {
+  FixedCompilationDatabase Compilations("/", std::vector<std::string>());
+  ClangTool Tool(Compilations, std::vector<std::string>(1, "/a.cc"));
+  Tool.mapVirtualFile("/a.cc", "int x = undeclared;");
+  TestDiagnosticConsumer Consumer;
+  Tool.setDiagnosticConsumer(&Consumer);
+  std::vector<ASTUnit*> ASTs;
+  Tool.buildASTs(ASTs);
+  EXPECT_EQ(1u, ASTs.size());
+  EXPECT_EQ(1u, Consumer.NumDiagnosticsSeen);
+}
+#endif
 
 } // end namespace tooling
 } // end namespace clang
