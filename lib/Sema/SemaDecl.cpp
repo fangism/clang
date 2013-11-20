@@ -6737,12 +6737,16 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
         Diag(D.getDeclSpec().getVirtualSpecLoc(), diag::err_auto_fn_virtual);
     }
 
-    if (getLangOpts().CPlusPlus1y && NewFD->isDependentContext() &&
+    if (getLangOpts().CPlusPlus1y &&
+        (NewFD->isDependentContext() ||
+         (isFriend && CurContext->isDependentContext())) &&
         NewFD->getResultType()->isUndeducedType()) {
       // If the function template is referenced directly (for instance, as a
       // member of the current instantiation), pretend it has a dependent type.
       // This is not really justified by the standard, but is the only sane
       // thing to do.
+      // FIXME: For a friend function, we have not marked the function as being
+      // a friend yet, so 'isDependentContext' on the FD doesn't work.
       const FunctionProtoType *FPT =
           NewFD->getType()->castAs<FunctionProtoType>();
       QualType Result = SubstAutoType(FPT->getResultType(),
@@ -6868,15 +6872,6 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
       NewFD->setType(Context.getFunctionType(FPT->getResultType(),
                                              FPT->getArgTypes(), EPI));
     }
-
-    // C++11 [replacement.functions]p3:
-    //  The program's definitions shall not be specified as inline.
-    //
-    // N.B. We diagnose declarations instead of definitions per LWG issue 2340.
-    if (isInline && NewFD->isReplaceableGlobalAllocationFunction())
-      Diag(D.getDeclSpec().getInlineSpecLoc(),
-           diag::err_operator_new_delete_declared_inline)
-        << NewFD->getDeclName();
   }
 
   // Filter out previous declarations that don't match the scope.
@@ -7011,6 +7006,20 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
             Previous.getResultKind() != LookupResult::FoundOverloaded) &&
            "previous declaration set still overloaded");
   } else {
+    // C++11 [replacement.functions]p3:
+    //  The program's definitions shall not be specified as inline.
+    //
+    // N.B. We diagnose declarations instead of definitions per LWG issue 2340.
+    //
+    // Suppress the diagnostic if the function is __attribute__((used)), since
+    // that forces an external definition to be emitted.
+    if (D.getDeclSpec().isInlineSpecified() &&
+        NewFD->isReplaceableGlobalAllocationFunction() &&
+        !NewFD->hasAttr<UsedAttr>())
+      Diag(D.getDeclSpec().getInlineSpecLoc(),
+           diag::ext_operator_new_delete_declared_inline)
+        << NewFD->getDeclName();
+
     // If the declarator is a template-id, translate the parser's template 
     // argument list into our AST format.
     if (D.getName().getKind() == UnqualifiedId::IK_TemplateId) {
@@ -10085,7 +10094,7 @@ TypedefDecl *Sema::ParseTypedefDecl(Scope *S, Declarator &D, QualType T,
     NewTD->setInvalidDecl();
     return NewTD;
   }
-
+  
   if (D.getDeclSpec().isModulePrivateSpecified()) {
     if (CurContext->isFunctionOrMethod())
       Diag(NewTD->getLocation(), diag::err_module_private_local)
@@ -12907,6 +12916,12 @@ DeclResult Sema::ActOnModuleImport(SourceLocation AtLoc,
                                           Mod, IdentifierLocs);
   Context.getTranslationUnitDecl()->addDecl(Import);
   return Import;
+}
+
+void Sema::ActOnModuleInclude(SourceLocation DirectiveLoc, Module *Mod) {
+  // FIXME: Should we synthesize an ImportDecl here?
+  PP.getModuleLoader().makeModuleVisible(Mod, Module::AllVisible, DirectiveLoc,
+                                         /*Complain=*/true);
 }
 
 void Sema::createImplicitModuleImport(SourceLocation Loc, Module *Mod) {
