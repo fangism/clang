@@ -538,6 +538,7 @@ private:
       // Reset token type in case we have already looked at it and then
       // recovered from an error (e.g. failure to find the matching >).
       if (CurrentToken->Type != TT_LambdaLSquare &&
+          CurrentToken->Type != TT_FunctionLBrace &&
           CurrentToken->Type != TT_ImplicitStringLiteral)
         CurrentToken->Type = TT_Unknown;
       if (CurrentToken->Role)
@@ -1180,7 +1181,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   if (Right.Type == TT_ObjCSelectorName)
     return 0;
   if (Left.is(tok::colon) && Left.Type == TT_ObjCMethodExpr)
-    return 50;
+    return 500;
 
   if (Left.is(tok::l_paren) && InFunctionDecl)
     return 100;

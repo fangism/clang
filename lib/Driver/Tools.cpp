@@ -654,15 +654,22 @@ static void getARMFPUFeatures(const Driver &D, const Arg *A,
     Features.push_back("-vfp2");
     Features.push_back("-vfp3");
     Features.push_back("-neon");
+  } else if (FPU == "vfp") {
+    Features.push_back("+vfp2");
+    Features.push_back("-neon");
   } else if (FPU == "vfp3-d16" || FPU == "vfpv3-d16") {
     Features.push_back("+vfp3");
     Features.push_back("+d16");
     Features.push_back("-neon");
-  } else if (FPU == "vfp") {
-    Features.push_back("+vfp2");
-    Features.push_back("-neon");
   } else if (FPU == "vfp3" || FPU == "vfpv3") {
     Features.push_back("+vfp3");
+    Features.push_back("-neon");
+  } else if (FPU == "vfp4-d16" || FPU == "vfpv4-d16") {
+    Features.push_back("+vfp4");
+    Features.push_back("+d16");
+    Features.push_back("-neon");
+  } else if (FPU == "vfp4" || FPU == "vfpv4") {
+    Features.push_back("+vfp4");
     Features.push_back("-neon");
   } else if (FPU == "fp-armv8") {
     Features.push_back("+fp-armv8");
@@ -1015,8 +1022,7 @@ static void AddTargetFeature(const ArgList &Args,
 static void getMIPSTargetFeatures(const Driver &D, const ArgList &Args,
                                   std::vector<const char *> &Features) {
   StringRef FloatABI = getMipsFloatABI(D, Args);
-  bool IsMips16 = Args.getLastArg(options::OPT_mips16) != NULL;
-  if (FloatABI == "soft" || (FloatABI == "hard" && IsMips16)) {
+  if (FloatABI == "soft") {
     // FIXME: Note, this is a hack. We need to pass the selected float
     // mode to the MipsTargetInfoBase to define appropriate macros there.
     // Now it is the only method.
@@ -1057,18 +1063,11 @@ void Clang::AddMIPSTargetArgs(const ArgList &Args,
 
   StringRef FloatABI = getMipsFloatABI(D, Args);
 
-  bool IsMips16 = Args.getLastArg(options::OPT_mips16) != NULL;
-
-  if (FloatABI == "soft" || (FloatABI == "hard" && IsMips16)) {
+  if (FloatABI == "soft") {
     // Floating point operations and argument passing are soft.
     CmdArgs.push_back("-msoft-float");
     CmdArgs.push_back("-mfloat-abi");
     CmdArgs.push_back("soft");
-
-    if (FloatABI == "hard" && IsMips16) {
-      CmdArgs.push_back("-mllvm");
-      CmdArgs.push_back("-mips16-hard-float");
-    }
   }
   else {
     // Floating point operations and argument passing are hard.
@@ -2608,13 +2607,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                       D.CCLogDiagnosticsFilename : "-");
   }
 
-  // Use the last option from "-g" group. "-gline-tables-only"
-  // is preserved, all other debug options are substituted with "-g".
+  // Use the last option from "-g" group. "-gline-tables-only" and "-gdwarf-x"
+  // are preserved, all other debug options are substituted with "-g".
   Args.ClaimAllArgs(options::OPT_g_Group);
   if (Arg *A = Args.getLastArg(options::OPT_g_Group)) {
-    if (A->getOption().matches(options::OPT_gline_tables_only))
+    if (A->getOption().matches(options::OPT_gline_tables_only)) {
+      // FIXME: we should support specifying dwarf version with
+      // -gline-tables-only.
       CmdArgs.push_back("-gline-tables-only");
-    else if (A->getOption().matches(options::OPT_gdwarf_2))
+      // Default is dwarf-2 for darwin.
+      if (getToolChain().getTriple().isOSDarwin())
+        CmdArgs.push_back("-gdwarf-2");
+    } else if (A->getOption().matches(options::OPT_gdwarf_2))
       CmdArgs.push_back("-gdwarf-2");
     else if (A->getOption().matches(options::OPT_gdwarf_3))
       CmdArgs.push_back("-gdwarf-3");
@@ -6192,6 +6196,13 @@ void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
       if (StringRef(A->getValue()) == "2008")
         CmdArgs.push_back(Args.MakeArgString("-mnan=2008"));
+    }
+
+    if (Arg *A = Args.getLastArg(options::OPT_mfp32, options::OPT_mfp64)) {
+      if (A->getOption().matches(options::OPT_mfp32))
+        CmdArgs.push_back(Args.MakeArgString("-mfp32"));
+      else
+        CmdArgs.push_back(Args.MakeArgString("-mfp64"));
     }
 
     Args.AddLastArg(CmdArgs, options::OPT_mips16, options::OPT_mno_mips16);

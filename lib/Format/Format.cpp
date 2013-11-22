@@ -117,6 +117,8 @@ template <> struct MappingTraits<clang::format::FormatStyle> {
                    Style.AllowShortIfStatementsOnASingleLine);
     IO.mapOptional("AllowShortLoopsOnASingleLine",
                    Style.AllowShortLoopsOnASingleLine);
+    IO.mapOptional("AllowShortFunctionsOnASingleLine",
+                   Style.AllowShortFunctionsOnASingleLine);
     IO.mapOptional("AlwaysBreakTemplateDeclarations",
                    Style.AlwaysBreakTemplateDeclarations);
     IO.mapOptional("AlwaysBreakBeforeMultilineStrings",
@@ -190,6 +192,7 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.AlignEscapedNewlinesLeft = false;
   LLVMStyle.AlignTrailingComments = true;
   LLVMStyle.AllowAllParametersOfDeclarationOnNextLine = true;
+  LLVMStyle.AllowShortFunctionsOnASingleLine = true;
   LLVMStyle.AllowShortIfStatementsOnASingleLine = false;
   LLVMStyle.AllowShortLoopsOnASingleLine = false;
   LLVMStyle.AlwaysBreakBeforeMultilineStrings = false;
@@ -237,6 +240,7 @@ FormatStyle getGoogleStyle() {
   GoogleStyle.AlignEscapedNewlinesLeft = true;
   GoogleStyle.AlignTrailingComments = true;
   GoogleStyle.AllowAllParametersOfDeclarationOnNextLine = true;
+  GoogleStyle.AllowShortFunctionsOnASingleLine = true;
   GoogleStyle.AllowShortIfStatementsOnASingleLine = true;
   GoogleStyle.AllowShortLoopsOnASingleLine = true;
   GoogleStyle.AlwaysBreakBeforeMultilineStrings = true;
@@ -381,7 +385,7 @@ public:
   /// \brief Calculates how many lines can be merged into 1 starting at \p I.
   unsigned
   tryFitMultipleLinesInOne(unsigned Indent,
-                           SmallVectorImpl<AnnotatedLine *>::const_iterator &I,
+                           SmallVectorImpl<AnnotatedLine *>::const_iterator I,
                            SmallVectorImpl<AnnotatedLine *>::const_iterator E) {
     // We can never merge stuff if there are trailing line comments.
     AnnotatedLine *TheLine = *I;
@@ -399,19 +403,46 @@ public:
                 ? 0
                 : Limit - TheLine->Last->TotalLength;
 
-    if (I + 1 == E || (*(I + 1))->Type == LT_Invalid)
+    if (I + 1 == E || I[1]->Type == LT_Invalid)
       return 0;
 
+    if (TheLine->Last->Type == TT_FunctionLBrace) {
+      return Style.AllowShortFunctionsOnASingleLine
+                 ? tryMergeSimpleBlock(I, E, Limit)
+                 : 0;
+    }
     if (TheLine->Last->is(tok::l_brace)) {
-      return tryMergeSimpleBlock(I, E, Limit);
-    } else if (Style.AllowShortIfStatementsOnASingleLine &&
-               TheLine->First->is(tok::kw_if)) {
-      return tryMergeSimpleControlStatement(I, E, Limit);
-    } else if (Style.AllowShortLoopsOnASingleLine &&
-               TheLine->First->isOneOf(tok::kw_for, tok::kw_while)) {
-      return tryMergeSimpleControlStatement(I, E, Limit);
-    } else if (TheLine->InPPDirective && (TheLine->First->HasUnescapedNewline ||
-                                          TheLine->First->IsFirst)) {
+      return Style.BreakBeforeBraces == clang::format::FormatStyle::BS_Attach
+                 ? tryMergeSimpleBlock(I, E, Limit)
+                 : 0;
+    }
+    if (I[1]->First->Type == TT_FunctionLBrace &&
+        Style.BreakBeforeBraces != FormatStyle::BS_Attach) {
+      // Reduce the column limit by the number of spaces we need to insert
+      // around braces.
+      Limit = Limit > 3 ? Limit - 3 : 0;
+      unsigned MergedLines = 0;
+      if (Style.AllowShortFunctionsOnASingleLine) {
+        MergedLines = tryMergeSimpleBlock(I + 1, E, Limit);
+        // If we managed to merge the block, count the function header, which is
+        // on a separate line.
+        if (MergedLines > 0)
+          ++MergedLines;
+      }
+      return MergedLines;
+    }
+    if (TheLine->First->is(tok::kw_if)) {
+      return Style.AllowShortIfStatementsOnASingleLine
+                 ? tryMergeSimpleControlStatement(I, E, Limit)
+                 : 0;
+    }
+    if (TheLine->First->isOneOf(tok::kw_for, tok::kw_while)) {
+      return Style.AllowShortLoopsOnASingleLine
+                 ? tryMergeSimpleControlStatement(I, E, Limit)
+                 : 0;
+    }
+    if (TheLine->InPPDirective &&
+        (TheLine->First->HasUnescapedNewline || TheLine->First->IsFirst)) {
       return tryMergeSimplePPDirective(I, E, Limit);
     }
     return 0;
@@ -419,56 +450,51 @@ public:
 
 private:
   unsigned
-  tryMergeSimplePPDirective(SmallVectorImpl<AnnotatedLine *>::const_iterator &I,
+  tryMergeSimplePPDirective(SmallVectorImpl<AnnotatedLine *>::const_iterator I,
                             SmallVectorImpl<AnnotatedLine *>::const_iterator E,
                             unsigned Limit) {
     if (Limit == 0)
       return 0;
-    if (!(*(I + 1))->InPPDirective || (*(I + 1))->First->HasUnescapedNewline)
+    if (!I[1]->InPPDirective || I[1]->First->HasUnescapedNewline)
       return 0;
-    if (I + 2 != E && (*(I + 2))->InPPDirective &&
-        !(*(I + 2))->First->HasUnescapedNewline)
+    if (I + 2 != E && I[2]->InPPDirective && !I[2]->First->HasUnescapedNewline)
       return 0;
-    if (1 + (*(I + 1))->Last->TotalLength > Limit)
+    if (1 + I[1]->Last->TotalLength > Limit)
       return 0;
     return 1;
   }
 
   unsigned tryMergeSimpleControlStatement(
-      SmallVectorImpl<AnnotatedLine *>::const_iterator &I,
+      SmallVectorImpl<AnnotatedLine *>::const_iterator I,
       SmallVectorImpl<AnnotatedLine *>::const_iterator E, unsigned Limit) {
     if (Limit == 0)
       return 0;
     if (Style.BreakBeforeBraces == FormatStyle::BS_Allman &&
-        (*(I + 1))->First->is(tok::l_brace))
+        I[1]->First->is(tok::l_brace))
       return 0;
-    if ((*(I + 1))->InPPDirective != (*I)->InPPDirective ||
-        ((*(I + 1))->InPPDirective && (*(I + 1))->First->HasUnescapedNewline))
+    if (I[1]->InPPDirective != (*I)->InPPDirective ||
+        (I[1]->InPPDirective && I[1]->First->HasUnescapedNewline))
       return 0;
     AnnotatedLine &Line = **I;
     if (Line.Last->isNot(tok::r_paren))
       return 0;
-    if (1 + (*(I + 1))->Last->TotalLength > Limit)
+    if (1 + I[1]->Last->TotalLength > Limit)
       return 0;
-    if ((*(I + 1))->First->isOneOf(tok::semi, tok::kw_if, tok::kw_for,
-                                   tok::kw_while) ||
-        (*(I + 1))->First->Type == TT_LineComment)
+    if (I[1]->First->isOneOf(tok::semi, tok::kw_if, tok::kw_for,
+                             tok::kw_while) ||
+        I[1]->First->Type == TT_LineComment)
       return 0;
     // Only inline simple if's (no nested if or else).
     if (I + 2 != E && Line.First->is(tok::kw_if) &&
-        (*(I + 2))->First->is(tok::kw_else))
+        I[2]->First->is(tok::kw_else))
       return 0;
     return 1;
   }
 
   unsigned
-  tryMergeSimpleBlock(SmallVectorImpl<AnnotatedLine *>::const_iterator &I,
+  tryMergeSimpleBlock(SmallVectorImpl<AnnotatedLine *>::const_iterator I,
                       SmallVectorImpl<AnnotatedLine *>::const_iterator E,
                       unsigned Limit) {
-    // No merging if the brace already is on the next line.
-    if (Style.BreakBeforeBraces != FormatStyle::BS_Attach)
-      return 0;
-
     // First, check that the current line allows merging. This is the case if
     // we're not in a control flow statement and the last token is an opening
     // brace.
@@ -480,7 +506,7 @@ private:
                             tok::at, tok::minus, tok::plus))
       return 0;
 
-    FormatToken *Tok = (*(I + 1))->First;
+    FormatToken *Tok = I[1]->First;
     if (Tok->is(tok::r_brace) && !Tok->MustBreakBefore &&
         (Tok->getNextNonComment() == NULL ||
          Tok->getNextNonComment()->is(tok::semi))) {
@@ -490,7 +516,7 @@ private:
       return 1;
     } else if (Limit != 0 && Line.First->isNot(tok::kw_namespace)) {
       // Check that we still have three lines and they fit into the limit.
-      if (I + 2 == E || (*(I + 2))->Type == LT_Invalid)
+      if (I + 2 == E || I[2]->Type == LT_Invalid)
         return 0;
 
       if (!nextTwoLinesFitInto(I, Limit))
@@ -498,7 +524,7 @@ private:
 
       // Second, check that the next line does not contain any braces - if it
       // does, readability declines when putting it into a single line.
-      if ((*(I + 1))->Last->Type == TT_LineComment || Tok->MustBreakBefore)
+      if (I[1]->Last->Type == TT_LineComment || Tok->MustBreakBefore)
         return 0;
       do {
         if (Tok->isOneOf(tok::l_brace, tok::r_brace))
@@ -507,7 +533,7 @@ private:
       } while (Tok != NULL);
 
       // Last, check that the third line contains a single closing brace.
-      Tok = (*(I + 2))->First;
+      Tok = I[2]->First;
       if (Tok->getNextNonComment() != NULL || Tok->isNot(tok::r_brace) ||
           Tok->MustBreakBefore)
         return 0;
@@ -519,9 +545,7 @@ private:
 
   bool nextTwoLinesFitInto(SmallVectorImpl<AnnotatedLine *>::const_iterator I,
                            unsigned Limit) {
-    return 1 + (*(I + 1))->Last->TotalLength + 1 +
-               (*(I + 2))->Last->TotalLength <=
-           Limit;
+    return 1 + I[1]->Last->TotalLength + 1 + I[2]->Last->TotalLength <= Limit;
   }
 
   const FormatStyle &Style;
@@ -571,7 +595,7 @@ public:
       unsigned MergedLines = Joiner.tryFitMultipleLinesInOne(Indent, I, E);
       if (!DryRun) {
         for (unsigned i = 0; i < MergedLines; ++i) {
-          join(**(I + i), **(I + i + 1));
+          join(*I[i], *I[i + 1]);
         }
       }
       I += MergedLines;
@@ -586,8 +610,7 @@ public:
         }
       } else if (TheLine.Type != LT_Invalid &&
                  (WasMoved || FormatPPDirective || touchesLine(TheLine))) {
-        unsigned LevelIndent =
-            getIndent(IndentForLevel, TheLine.Level);
+        unsigned LevelIndent = getIndent(IndentForLevel, TheLine.Level);
         if (FirstTok->WhitespaceRange.isValid()) {
           if (!DryRun)
             formatFirstToken(*TheLine.First, PreviousLine, TheLine.Level,
@@ -599,7 +622,7 @@ public:
         // If everything fits on a single line, just put it there.
         unsigned ColumnLimit = Style.ColumnLimit;
         if (I + 1 != E) {
-          AnnotatedLine *NextLine = *(I + 1);
+          AnnotatedLine *NextLine = I[1];
           if (NextLine->InPPDirective && !NextLine->First->HasUnescapedNewline)
             ColumnLimit = getColumnLimit(TheLine.InPPDirective);
         }
@@ -735,9 +758,9 @@ private:
     if (PreviousLine && PreviousLine->First->isAccessSpecifier())
       Newlines = std::min(1u, Newlines);
 
-    Whitespaces->replaceWhitespace(
-        RootToken, Newlines, IndentLevel, Indent, Indent,
-        InPPDirective && !RootToken.HasUnescapedNewline);
+    Whitespaces->replaceWhitespace(RootToken, Newlines, IndentLevel, Indent,
+                                   Indent, InPPDirective &&
+                                               !RootToken.HasUnescapedNewline);
   }
 
   /// \brief Get the indent of \p Level from \p IndentForLevel.
@@ -964,7 +987,7 @@ private:
 
     // Cannot merge multiple statements into a single line.
     if (Previous.Children.size() > 1)
-      return false; 
+      return false;
 
     // We can't put the closing "}" on a line with a trailing comment.
     if (Previous.Children[0]->Last->isTrailingComment())
@@ -1006,7 +1029,7 @@ public:
     assert(Tokens.empty());
     do {
       Tokens.push_back(getNextToken());
-      maybeJoinPreviousTokens();
+      tryMergePreviousTokens();
     } while (Tokens.back()->Tok.isNot(tok::eof));
     return Tokens;
   }
@@ -1014,23 +1037,45 @@ public:
   IdentifierTable &getIdentTable() { return IdentTable; }
 
 private:
-  void maybeJoinPreviousTokens() {
+  void tryMergePreviousTokens() {
+    tryMerge_TMacro() || tryMergeJavaScriptIdentityOperators();
+  }
+
+  bool tryMergeJavaScriptIdentityOperators() {
+    if (Tokens.size() < 2)
+      return false;
+    FormatToken &First = *Tokens[Tokens.size() - 2];
+    if (!First.isOneOf(tok::exclaimequal, tok::equalequal))
+      return false;
+    FormatToken &Second = *Tokens.back();
+    if (!Second.is(tok::equal))
+      return false;
+    if (Second.WhitespaceRange.getBegin() != Second.WhitespaceRange.getEnd())
+      return false;
+    First.TokenText =
+        StringRef(First.TokenText.data(), First.TokenText.size() + 1);
+    First.ColumnWidth += 1;
+    Tokens.pop_back();
+    return true;
+  }
+
+  bool tryMerge_TMacro() {
     if (Tokens.size() < 4)
-      return;
+      return false;
     FormatToken *Last = Tokens.back();
     if (!Last->is(tok::r_paren))
-      return;
+      return false;
 
     FormatToken *String = Tokens[Tokens.size() - 2];
     if (!String->is(tok::string_literal) || String->IsMultiline)
-      return;
+      return false;
 
     if (!Tokens[Tokens.size() - 3]->is(tok::l_paren))
-      return;
+      return false;
 
     FormatToken *Macro = Tokens[Tokens.size() - 4];
     if (Macro->TokenText != "_T")
-      return;
+      return false;
 
     const char *Start = Macro->TokenText.data();
     const char *End = Last->TokenText.data() + Last->TokenText.size();
@@ -1046,6 +1091,7 @@ private:
     Tokens.pop_back();
     Tokens.pop_back();
     Tokens.back() = String;
+    return true;
   }
 
   FormatToken *getNextToken() {
