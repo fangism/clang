@@ -1354,8 +1354,8 @@ static std::string getCPUName(const ArgList &Args, const llvm::Triple &T) {
     std::string TargetCPUName = getPPCTargetCPU(Args);
     // LLVM may default to generating code for the native CPU,
     // but, like gcc, we default to a more generic option for
-    // each architecture. (except on Darwin)
-    if (TargetCPUName.empty() && !T.isOSDarwin()) {
+    // each architecture.
+    if (TargetCPUName.empty()) {
       if (T.getArch() == llvm::Triple::ppc64)
         TargetCPUName = "ppc64";
       else if (T.getArch() == llvm::Triple::ppc64le)
@@ -4610,8 +4610,80 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
 
   // If -no_integrated_as is used add -Q to the darwin assember driver to make
   // sure it runs its system assembler not clang's integrated assembler.
-  if (Args.hasArg(options::OPT_no_integrated_as))
+  // This is available for x86 and arm for OSX >= 10.7.
+  if (Args.hasArg(options::OPT_no_integrated_as) &&
+      getToolChain().getArch() != llvm::Triple::ppc &&
+      getToolChain().getArch() != llvm::Triple::ppc64 &&
+      (getDarwinToolChain().isTargetIPhoneOS()
+       || !getDarwinToolChain().isMacosxVersionLT(10, 7)))
     CmdArgs.push_back("-Q");
+
+  // Forward -g, assuming we are dealing with an actual assembly file.
+  if (SourceAction->getType() == types::TY_Asm ||
+      SourceAction->getType() == types::TY_PP_Asm) {
+    if (Args.hasArg(options::OPT_gstabs))
+      CmdArgs.push_back("--gstabs");
+    else if (Args.hasArg(options::OPT_g_Group))
+      CmdArgs.push_back("-g");
+  }
+
+  // Derived from asm spec.
+  AddDarwinArch(Args, CmdArgs);
+
+  // Use -force_cpusubtype_ALL on x86 by default.
+  if (getToolChain().getArch() == llvm::Triple::x86 ||
+      getToolChain().getArch() == llvm::Triple::x86_64 ||
+      Args.hasArg(options::OPT_force__cpusubtype__ALL))
+    CmdArgs.push_back("-force_cpusubtype_ALL");
+
+  if (getToolChain().getArch() != llvm::Triple::x86_64 &&
+      (((Args.hasArg(options::OPT_mkernel) ||
+         Args.hasArg(options::OPT_fapple_kext)) &&
+        (!getDarwinToolChain().isTargetIPhoneOS() ||
+         getDarwinToolChain().isIPhoneOSVersionLT(6, 0))) ||
+       Args.hasArg(options::OPT_static)))
+    CmdArgs.push_back("-static");
+
+  Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA,
+                       options::OPT_Xassembler);
+
+  assert(Output.isFilename() && "Unexpected lipo output.");
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+
+  assert(Input.isFilename() && "Invalid input.");
+  CmdArgs.push_back(Input.getFilename());
+
+  // asm_final spec is empty.
+
+  const char *Exec =
+    Args.MakeArgString(getToolChain().GetProgramPath("as"));
+  C.addCommand(new Command(JA, *this, Exec, CmdArgs));
+}
+
+// Placeholder for cases where we need to modify which command lines are
+// accepted or generated (perhaps this should not be needed).
+void darwin::AssembleWithAs::ConstructJob(Compilation &C, const JobAction &JA,
+                                    const InputInfo &Output,
+                                    const InputInfoList &Inputs,
+                                    const ArgList &Args,
+                                    const char *LinkingOutput) const {
+  ArgStringList CmdArgs;
+
+  assert(Inputs.size() == 1 && "Unexpected number of inputs.");
+  const InputInfo &Input = Inputs[0];
+
+  // Determine the original source input.
+  const Action *SourceAction = &JA;
+  while (SourceAction->getKind() != Action::InputClass) {
+    assert(!SourceAction->getInputs().empty() && "unexpected root action!");
+    SourceAction = SourceAction->getInputs()[0];
+  }
+
+  // If -no_integrated_as is used add -Q to the darwin assember driver to make
+  // sure it runs its system assembler not clang's integrated assembler.
+  //if (Args.hasArg(options::OPT_no_integrated_as))
+  //  CmdArgs.push_back("-Q");
 
   // Forward -g, assuming we are dealing with an actual assembly file.
   if (SourceAction->getType() == types::TY_Asm ||

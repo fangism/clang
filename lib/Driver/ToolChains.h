@@ -420,6 +420,18 @@ public:
   virtual bool isPICDefault() const { return false; }
 };
 
+/// Darwin_Legacy - Toolchain using the older 'as' and 'ld' installation.
+class LLVM_LIBRARY_VISIBILITY DarwinLegacy : public DarwinClang {
+public:
+  DarwinLegacy(const Driver &D, const llvm::Triple &Triple,
+                     const llvm::opt::ArgList &Args)
+      : DarwinClang(D, Triple, Args) {}
+
+protected:
+  virtual Tool *buildAssembler() const;
+
+};
+
 class LLVM_LIBRARY_VISIBILITY Generic_ELF : public Generic_GCC {
   virtual void anchor();
 public:

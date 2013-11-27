@@ -139,6 +139,12 @@ StringRef Darwin::getDarwinArchName(const ArgList &Args) const {
   default:
     return getArchName();
 
+  case llvm::Triple::ppc:
+    return "ppc";
+
+  case llvm::Triple::ppc64:
+    return "ppc64";
+
   case llvm::Triple::thumb:
   case llvm::Triple::arm: {
     if (const Arg *A = Args.getLastArg(options::OPT_march_EQ))
@@ -925,6 +931,10 @@ std::string
 Darwin_Generic_GCC::ComputeEffectiveClangTriple(const ArgList &Args,
                                                 types::ID InputType) const {
   return ComputeLLVMTriple(Args, InputType);
+}
+
+Tool *DarwinLegacy::buildAssembler() const {
+  return new tools::darwin::AssembleWithAs(*this);
 }
 
 /// Generic_GCC - A tool chain using the 'gcc' command to perform
