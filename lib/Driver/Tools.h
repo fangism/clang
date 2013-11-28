@@ -139,18 +139,6 @@ namespace gcc {
                                      llvm::opt::ArgStringList &CmdArgs) const;
   };
 
-  class LLVM_LIBRARY_VISIBILITY Precompile : public Common  {
-  public:
-    Precompile(const ToolChain &TC) : Common("gcc::Precompile",
-                                             "gcc precompile", TC) {}
-
-    virtual bool hasGoodDiagnostics() const { return true; }
-    virtual bool hasIntegratedCPP() const { return true; }
-
-    virtual void RenderExtraToolArgs(const JobAction &JA,
-                                     llvm::opt::ArgStringList &CmdArgs) const;
-  };
-
   class LLVM_LIBRARY_VISIBILITY Compile : public Common  {
   public:
     Compile(const ToolChain &TC) : Common("gcc::Compile",
@@ -158,17 +146,6 @@ namespace gcc {
 
     virtual bool hasGoodDiagnostics() const { return true; }
     virtual bool hasIntegratedCPP() const { return true; }
-
-    virtual void RenderExtraToolArgs(const JobAction &JA,
-                                     llvm::opt::ArgStringList &CmdArgs) const;
-  };
-
-  class LLVM_LIBRARY_VISIBILITY Assemble : public Common  {
-  public:
-    Assemble(const ToolChain &TC) : Common("gcc::Assemble",
-                                           "assembler (via gcc)", TC) {}
-
-    virtual bool hasIntegratedCPP() const { return false; }
 
     virtual void RenderExtraToolArgs(const JobAction &JA,
                                      llvm::opt::ArgStringList &CmdArgs) const;

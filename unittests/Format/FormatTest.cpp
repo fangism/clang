@@ -187,10 +187,10 @@ TEST_F(FormatTest, FormatsCorrectRegionForLeadingWhitespace) {
                    26, 0, getLLVMStyleWithColumns(12)));
   EXPECT_EQ("#define A  \\\n"
             "  int a;   \\\n"
-            "    int b;",
+            "  int b;",
             format("#define A  \\\n"
                    "  int a;   \\\n"
-                   "    int b;",
+                   "  int b;",
                    25, 0, getLLVMStyleWithColumns(12)));
 }
 
@@ -842,6 +842,7 @@ TEST_F(FormatTest, RemovesTrailingWhitespaceOfComments) {
 
 TEST_F(FormatTest, UnderstandsBlockComments) {
   verifyFormat("f(/*noSpaceAfterParameterNamingComment=*/true);");
+  verifyFormat("void f() { g(/*aaa=*/x, /*bbb=*/!y); }");
   EXPECT_EQ(
       "f(aaaaaaaaaaaaaaaaaaaaaaaaa, /* Trailing comment for aa... */\n"
       "  bbbbbbbbbbbbbbbbbbbbbbbbb);",
@@ -1536,6 +1537,10 @@ TEST_F(FormatTest, UnderstandsAccessSpecifiers) {
                      " private:\n"
                      "  void f() {}\n"
                      "};");
+  verifyFormat("class A {\n"
+               "public slots:\n"
+               "  void f() {}\n"
+               "};");
 }
 
 TEST_F(FormatTest, SeparatesLogicalBlocks) {
@@ -2506,6 +2511,36 @@ TEST_F(FormatTest, LayoutNestedBlocks) {
                "                 return;\n"
                "             },\n"
                "      a);", Style);
+}
+
+TEST_F(FormatTest, IndividualStatementsOfNestedBlocks) {
+  EXPECT_EQ("DEBUG({\n"
+            "  int i;\n"
+            "  int        j;\n"
+            "});",
+            format("DEBUG(   {\n"
+                   "  int        i;\n"
+                   "  int        j;\n"
+                   "}   )  ;",
+                   20, 1, getLLVMStyle()));
+  EXPECT_EQ("DEBUG(   {\n"
+            "  int        i;\n"
+            "  int j;\n"
+            "}   )  ;",
+            format("DEBUG(   {\n"
+                   "  int        i;\n"
+                   "  int        j;\n"
+                   "}   )  ;",
+                   41, 1, getLLVMStyle()));
+  EXPECT_EQ("DEBUG({\n"
+            "  int i;\n"
+            "  int j;\n"
+            "});",
+            format("DEBUG(   {\n"
+                   "    int        i;\n"
+                   "    int        j;\n"
+                   "}   )  ;",
+                   20, 1, getLLVMStyle()));
 
   EXPECT_EQ("Debug({\n"
             "        if (aaaaaaaaaaaaaaaaaaaaaaaa)\n"
@@ -2518,18 +2553,26 @@ TEST_F(FormatTest, LayoutNestedBlocks) {
                    "      },\n"
                    "      a);",
                    50, 1, getLLVMStyle()));
-}
-
-TEST_F(FormatTest, IndividualStatementsOfNestedBlocks) {
   EXPECT_EQ("DEBUG({\n"
-            "  int        i;\n"
-            "  int j;\n"
+            "  DEBUG({\n"
+            "    int a;\n"
+            "    int b;\n"
+            "  }) ;\n"
             "});",
-            format("DEBUG(   {\n"
-                   "  int        i;\n"
-                   "  int        j;\n"
-                   "}   )  ;",
-                   40, 1, getLLVMStyle()));
+            format("DEBUG({\n"
+                   "  DEBUG({\n"
+                   "    int a;\n"
+                   "    int    b;\n" // Format this line only.
+                   "  }) ;\n"        // Don't touch this line.
+                   "});",
+                   35, 0, getLLVMStyle()));
+  EXPECT_EQ("DEBUG({\n"
+            "  int a; //\n"
+            "});",
+            format("DEBUG({\n"
+                   "    int a; //\n"
+                   "});",
+                   0, 0, getLLVMStyle()));
 }
 
 TEST_F(FormatTest, PutEmptyBlocksIntoOneLine) {
@@ -2720,6 +2763,10 @@ TEST_F(FormatTest, ExpressionIndentationBreakingBeforeOperators) {
       "    + sizeof(int32_t) // Offset of CU in the .debug_info section\n"
       "    + sizeof(int8_t)  // Pointer Size (in bytes)\n"
       "    + sizeof(int8_t); // Segment Size (in bytes)");
+
+  verifyFormat("return boost::fusion::at_c<0>(iiii).second\n"
+               "       == boost::fusion::at_c<1>(iiii).second;",
+               Style);
 }
 
 TEST_F(FormatTest, ConstructorInitializers) {
@@ -4698,6 +4745,14 @@ TEST_F(FormatTest, LayoutCxx11ConstructorBraceInitializers) {
     verifyFormat(
         "std::this_thread::sleep_for(\n"
         "    std::chrono::nanoseconds{ std::chrono::seconds{ 1 } } / 5);");
+    verifyFormat("std::vector<MyValues> aaaaaaaaaaaaaaaaaaa{\n"
+                 "  aaaaaaa,      aaaaaaaaaa,\n"
+                 "  aaaaa,        aaaaaaaaaaaaaaa,\n"
+                 "  aaa,          aaaaaaaaaa,\n"
+                 "  a,            aaaaaaaaaaaaaaaaaaaaa,\n"
+                 "  aaaaaaaaaaaa, aaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaa,\n"
+                 "  aaaaaaa,      a\n"
+                 "};");
 
     FormatStyle NoSpaces = getLLVMStyle();
     NoSpaces.Cpp11BracedListStyle = true;
@@ -5743,6 +5798,14 @@ TEST_F(FormatTest, ObjCArrayLiterals) {
                "  @\"aaaaaaaaaaaaaaaaa\",\n"
                "  @\"aaaaaaaaaaaaaaaaa\",\n"
                "];");
+  verifyFormat(
+      "- (NSAttributedString *)attributedStringForSegment:(NSUInteger)segment\n"
+      "                                             index:(NSUInteger)index\n"
+      "                                nonDigitAttributes:\n"
+      "                                    (NSDictionary *)noDigitAttributes;");
+  verifyFormat(
+      "[someFunction someLooooooooooooongParameter:\n"
+      "                  @[ NSBundle.mainBundle.infoDictionary[@\"a\"] ]];");
 }
 
 TEST_F(FormatTest, ReformatRegionAdjustsIndent) {
@@ -6966,6 +7029,16 @@ TEST_F(FormatTest, CountsUTF8CharactersProperly) {
 }
 
 TEST_F(FormatTest, SplitsUTF8Strings) {
+  // Non-printable characters' width is currently considered to be the length in
+  // bytes in UTF8. The characters can be displayed in very different manner
+  // (zero-width, single width with a substitution glyph, expanded to their code
+  // (e.g. "<8d>"), so there's no single correct way to handle them.
+  EXPECT_EQ("\"aaaaÄ\"\n"
+            "\"\xc2\x8d\";",
+            format("\"aaaaÄ\xc2\x8d\";", getLLVMStyleWithColumns(10)));
+  EXPECT_EQ("\"aaaaaaaÄ\"\n"
+            "\"\xc2\x8d\";",
+            format("\"aaaaaaaÄ\xc2\x8d\";", getLLVMStyleWithColumns(10)));
   EXPECT_EQ(
       "\"Однажды, в \"\n"
       "\"студёную \"\n"
@@ -6999,6 +7072,8 @@ TEST_F(FormatTest, HandlesDoubleWidthCharsInMultiLineStrings) {
 }
 
 TEST_F(FormatTest, SplitsUTF8LineComments) {
+  EXPECT_EQ("// aaaaÄ\xc2\x8d",
+            format("// aaaaÄ\xc2\x8d", getLLVMStyleWithColumns(10)));
   EXPECT_EQ("// Я из лесу\n"
             "// вышел; был\n"
             "// сильный\n"

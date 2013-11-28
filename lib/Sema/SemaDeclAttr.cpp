@@ -32,34 +32,13 @@
 using namespace clang;
 using namespace sema;
 
-/// These constants match the enumerated choices of
-/// warn_attribute_wrong_decl_type and err_attribute_wrong_decl_type.
-enum AttributeDeclKind {
-  ExpectedFunction,
-  ExpectedUnion,
-  ExpectedVariableOrFunction,
-  ExpectedFunctionOrMethod,
-  ExpectedParameter,
-  ExpectedFunctionMethodOrBlock,
-  ExpectedFunctionMethodOrClass,
-  ExpectedFunctionMethodOrParameter,
-  ExpectedClass,
-  ExpectedVariable,
-  ExpectedMethod,
-  ExpectedVariableFunctionOrLabel,
-  ExpectedFieldOrGlobalVar,
-  ExpectedStruct,
-  ExpectedVariableFunctionOrTag,
-  ExpectedTLSVar,
-  ExpectedVariableOrField,
-  ExpectedVariableFieldOrTag,
-  ExpectedTypeOrNamespace,
-  ExpectedObjectiveCInterface,
-  ExpectedMethodOrProperty,
-  ExpectedStructOrUnion,
-  ExpectedStructOrUnionOrClass,
-  ExpectedType
-};
+namespace AttributeLangSupport {
+  enum LANG {
+    C,
+    Cpp,
+    ObjC
+  };
+}
 
 //===----------------------------------------------------------------------===//
 //  Helper functions
@@ -349,17 +328,24 @@ bool Sema::checkStringLiteralArgumentAttr(const AttributeList &Attr,
   return true;
 }
 
+/// \brief Applies the given attribute to the Decl without performing any
+/// additional semantic checking.
+template <typename AttrType>
+static void handleSimpleAttribute(Sema &S, Decl *D,
+                                  const AttributeList &Attr) {
+  D->addAttr(::new (S.Context) AttrType(Attr.getRange(), S.Context,
+                                        Attr.getAttributeSpellingListIndex()));
+}
+
 ///
 /// \brief Check if passed in Decl is a field or potentially shared global var
 /// \return true if the Decl is a field or potentially shared global variable
 ///
 static bool mayBeSharedVariable(const Decl *D) {
-  if (isa<FieldDecl>(D))
-    return true;
   if (const VarDecl *vd = dyn_cast<VarDecl>(D))
     return vd->hasGlobalStorage() && !vd->getTLSKind();
 
-  return false;
+  return true;
 }
 
 /// \brief Check if the passed-in expression is of type int or bool.
@@ -634,84 +620,6 @@ static void handlePtGuardedByAttr(Sema &S, Decl *D,
                                                S.Context, Arg));
 }
 
-static bool checkLockableAttrCommon(Sema &S, Decl *D,
-                                    const AttributeList &Attr) {
-  // FIXME: Lockable structs for C code.
-  if (!isa<RecordDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedStructOrUnionOrClass;
-    return false;
-  }
-
-  return true;
-}
-
-static void handleLockableAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!checkLockableAttrCommon(S, D, Attr))
-    return;
-
-  D->addAttr(::new (S.Context) LockableAttr(Attr.getRange(), S.Context));
-}
-
-static void handleScopedLockableAttr(Sema &S, Decl *D,
-                             const AttributeList &Attr) {
-  if (!checkLockableAttrCommon(S, D, Attr))
-    return;
-
-  D->addAttr(::new (S.Context)
-             ScopedLockableAttr(Attr.getRange(), S.Context,
-                                Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleNoThreadSafetyAnalysis(Sema &S, Decl *D,
-                                         const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context) NoThreadSafetyAnalysisAttr(Attr.getRange(),
-                                                          S.Context));
-}
-
-static void handleNoSanitizeAddressAttr(Sema &S, Decl *D,
-                                      const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             NoSanitizeAddressAttr(Attr.getRange(), S.Context,
-                                   Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleNoSanitizeMemory(Sema &S, Decl *D,
-                                   const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context) NoSanitizeMemoryAttr(Attr.getRange(),
-                                                         S.Context));
-}
-
-static void handleNoSanitizeThread(Sema &S, Decl *D,
-                                   const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context) NoSanitizeThreadAttr(Attr.getRange(),
-                                                    S.Context));
-}
-
 static bool checkAcquireOrderAttrCommon(Sema &S, Decl *D,
                                         const AttributeList &Attr,
                                         SmallVectorImpl<Expr *> &Args) {
@@ -775,14 +683,6 @@ static bool checkLockFunAttrCommon(Sema &S, Decl *D,
                                    const AttributeList &Attr,
                                    SmallVectorImpl<Expr *> &Args) {
   // zero or more arguments ok
-
-  // check that the attribute is applied to a function
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return false;
-  }
-
   // check that all arguments are lockable objects
   checkAttrArgsAreLockableObjs(S, D, Attr, Args, 0, /*ParamIdxOk=*/true);
 
@@ -850,12 +750,6 @@ static bool checkTryLockFunAttrCommon(Sema &S, Decl *D,
   if (!checkAttributeAtLeastNumArgs(S, Attr, 1))
     return false;
 
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return false;
-  }
-
   if (!isIntOrBool(Attr.getArgAsExpr(0))) {
     S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
       << Attr.getName() << 1 << AANT_ArgumentIntOrBool;
@@ -900,12 +794,6 @@ static bool checkLocksRequiredCommon(Sema &S, Decl *D,
   if (!checkAttributeAtLeastNumArgs(S, Attr, 1))
     return false;
 
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return false;
-  }
-
   // check that all arguments are lockable objects
   checkAttrArgsAreLockableObjs(S, D, Attr, Args);
   if (Args.empty())
@@ -943,13 +831,6 @@ static void handleSharedLocksRequiredAttr(Sema &S, Decl *D,
 static void handleUnlockFunAttr(Sema &S, Decl *D,
                                 const AttributeList &Attr) {
   // zero or more arguments ok
-
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
   // check that all arguments are lockable objects
   SmallVector<Expr*, 1> Args;
   checkAttrArgsAreLockableObjs(S, D, Attr, Args, 0, /*ParamIdxOk=*/true);
@@ -963,12 +844,6 @@ static void handleUnlockFunAttr(Sema &S, Decl *D,
 
 static void handleLockReturnedAttr(Sema &S, Decl *D,
                                    const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
   // check that the argument is lockable object
   SmallVector<Expr*, 1> Args;
   checkAttrArgsAreLockableObjs(S, D, Attr, Args);
@@ -985,12 +860,6 @@ static void handleLocksExcludedAttr(Sema &S, Decl *D,
                                     const AttributeList &Attr) {
   if (!checkAttributeAtLeastNumArgs(S, Attr, 1))
     return;
-
-  if (!isa<FunctionDecl>(D) && !isa<FunctionTemplateDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
 
   // check that all arguments are lockable objects
   SmallVector<Expr*, 1> Args;
@@ -1021,12 +890,6 @@ static void handleConsumableAttr(Sema &S, Decl *D, const AttributeList &Attr) {
         << Attr.getName() << AANT_ArgumentIdentifier;
     return;
   }
-
-  if (!isa<CXXRecordDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedClass;
-    return;
-  }
   
   D->addAttr(::new (S.Context)
              ConsumableAttr(Attr.getRange(), S.Context, DefaultState,
@@ -1055,12 +918,6 @@ static void handleCallableWhenAttr(Sema &S, Decl *D,
                                    const AttributeList &Attr) {
   if (!checkAttributeAtLeastNumArgs(S, Attr, 1))
     return;
-
-  if (!isa<CXXMethodDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedMethod;
-    return;
-  }
   
   if (!checkForConsumableClass(S, cast<CXXMethodDecl>(D), Attr))
     return;
@@ -1093,13 +950,7 @@ static void handleCallableWhenAttr(Sema &S, Decl *D,
 static void handleParamTypestateAttr(Sema &S, Decl *D,
                                     const AttributeList &Attr) {
   if (!checkAttributeNumArgs(S, Attr, 1)) return;
-  
-  if (!isa<ParmVarDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedParameter;
-    return;
-  }
-  
+    
   ParamTypestateAttr::ConsumedState ParamState;
   
   if (Attr.isArgIdent(0)) {
@@ -1140,12 +991,6 @@ static void handleReturnTypestateAttr(Sema &S, Decl *D,
                                       const AttributeList &Attr) {
   if (!checkAttributeNumArgs(S, Attr, 1)) return;
   
-  if (!(isa<FunctionDecl>(D) || isa<ParmVarDecl>(D))) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedFunctionMethodOrParameter;
-    return;
-  }
-
   ReturnTypestateAttr::ConsumedState ReturnState;
   
   if (Attr.isArgIdent(0)) {
@@ -1196,12 +1041,6 @@ static void handleReturnTypestateAttr(Sema &S, Decl *D,
 static void handleSetTypestateAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (!checkAttributeNumArgs(S, Attr, 1))
     return;
-
-  if (!isa<CXXMethodDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedMethod;
-    return;
-  }
   
   if (!checkForConsumableClass(S, cast<CXXMethodDecl>(D), Attr))
     return;
@@ -1231,12 +1070,6 @@ static void handleTestTypestateAttr(Sema &S, Decl *D,
   if (!checkAttributeNumArgs(S, Attr, 1))
     return;
   
-  if (!isa<CXXMethodDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedMethod;
-    return;
-  }
-  
   if (!checkForConsumableClass(S, cast<CXXMethodDecl>(D), Attr))
     return;
   
@@ -1262,17 +1095,8 @@ static void handleTestTypestateAttr(Sema &S, Decl *D,
 
 static void handleExtVectorTypeAttr(Sema &S, Scope *scope, Decl *D,
                                     const AttributeList &Attr) {
-  TypedefNameDecl *TD = dyn_cast<TypedefNameDecl>(D);
-  if (TD == 0) {
-    // __attribute__((ext_vector_type(N))) can only be applied to typedefs
-    // and type-ids.
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type) <<
-      Attr.getName() << ExpectedType;
-    return;
-  }
-
   // Remember this typedef decl, we will need it later for diagnostics.
-  S.ExtVectorDecls.push_back(TD);
+  S.ExtVectorDecls.push_back(cast<TypedefNameDecl>(D));
 }
 
 static void handlePackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -1292,16 +1116,6 @@ static void handlePackedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                              Attr.getAttributeSpellingListIndex()));
   } else
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
-}
-
-static void handleMsStructAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (RecordDecl *RD = dyn_cast<RecordDecl>(D))
-    RD->addAttr(::new (S.Context)
-                MsStructAttr(Attr.getRange(), S.Context,
-                             Attr.getAttributeSpellingListIndex()));
-  else
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedStructOrUnionOrClass;
 }
 
 static void handleIBAction(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -1538,34 +1352,26 @@ static void handleOwnershipAttr(Sema &S, Decl *D, const AttributeList &AL) {
     return;
   }
 
-  // Figure out our Kind, and check arguments while we're at it.
-  OwnershipAttr::OwnershipKind K;
-  switch (AL.getKind()) {
-  case AttributeList::AT_ownership_takes:
-    K = OwnershipAttr::Takes;
-    if (AL.getNumArgs() < 2) {
-      S.Diag(AL.getLoc(), diag::err_attribute_too_few_arguments) << 2;
-      return;
-    }
-    break;
-  case AttributeList::AT_ownership_holds:
-    K = OwnershipAttr::Holds;
-    if (AL.getNumArgs() < 2) {
-      S.Diag(AL.getLoc(), diag::err_attribute_too_few_arguments) << 2;
-      return;
-    }
-    break;
-  case AttributeList::AT_ownership_returns:
-    K = OwnershipAttr::Returns;
+  // Figure out our Kind.
+  OwnershipAttr::OwnershipKind K =
+      OwnershipAttr(AL.getLoc(), S.Context, 0, 0, 0,
+                    AL.getAttributeSpellingListIndex()).getOwnKind();
 
+  // Check arguments.
+  switch (K) {
+  case OwnershipAttr::Takes:
+  case OwnershipAttr::Holds:
+    if (AL.getNumArgs() < 2) {
+      S.Diag(AL.getLoc(), diag::err_attribute_too_few_arguments) << 2;
+      return;
+    }
+    break;
+  case OwnershipAttr::Returns:
     if (AL.getNumArgs() > 2) {
       S.Diag(AL.getLoc(), diag::err_attribute_too_many_arguments) << 1;
       return;
     }
     break;
-  default:
-    // This should never happen given how we are called.
-    llvm_unreachable("Unknown ownership attribute");
   }
 
   if (!isFunction(D) || !hasFunctionProto(D)) {
@@ -1574,11 +1380,15 @@ static void handleOwnershipAttr(Sema &S, Decl *D, const AttributeList &AL) {
     return;
   }
 
-  StringRef Module = AL.getArgAsIdent(0)->Ident->getName();
+  IdentifierInfo *Module = AL.getArgAsIdent(0)->Ident;
 
   // Normalize the argument, __foo__ becomes foo.
-  if (Module.startswith("__") && Module.endswith("__"))
-    Module = Module.substr(2, Module.size() - 4);
+  StringRef ModuleName = Module->getName();
+  if (ModuleName.startswith("__") && ModuleName.endswith("__") &&
+      ModuleName.size() > 4) {
+    ModuleName = ModuleName.drop_front(2).drop_back(2);
+    Module = &S.PP.getIdentifierTable().get(ModuleName);
+  }
 
   SmallVector<unsigned, 8> OwnershipArgs;
   for (unsigned i = 1; i < AL.getNumArgs(); ++i) {
@@ -1612,6 +1422,8 @@ static void handleOwnershipAttr(Sema &S, Decl *D, const AttributeList &AL) {
     for (specific_attr_iterator<OwnershipAttr>
          i = D->specific_attr_begin<OwnershipAttr>(),
          e = D->specific_attr_end<OwnershipAttr>(); i != e; ++i) {
+      // FIXME: A returns attribute should conflict with any returns attribute
+      // with a different index too.
       if ((*i)->getOwnKind() != K && (*i)->args_end() !=
           std::find((*i)->args_begin(), (*i)->args_end(), Idx)) {
         S.Diag(AL.getLoc(), diag::err_attributes_are_not_compatible)
@@ -1627,7 +1439,7 @@ static void handleOwnershipAttr(Sema &S, Decl *D, const AttributeList &AL) {
   llvm::array_pod_sort(start, start + size);
 
   D->addAttr(::new (S.Context)
-             OwnershipAttr(AL.getLoc(), S.Context, K, Module, start, size,
+             OwnershipAttr(AL.getLoc(), S.Context, Module, start, size,
                            AL.getAttributeSpellingListIndex()));
 }
 
@@ -1636,12 +1448,6 @@ static void handleWeakRefAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (Attr.getNumArgs() > 1) {
     S.Diag(Attr.getLoc(), diag::err_attribute_wrong_number_arguments)
       << Attr.getName() << 1;
-    return;
-  }
-
-  if (!isa<VarDecl>(D) && !isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedVariableOrFunction;
     return;
   }
 
@@ -1717,25 +1523,7 @@ static void handleAliasAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                                          Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleMinSizeAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D) && !isa<ObjCMethodDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             MinSizeAttr(Attr.getRange(), S.Context,
-                         Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleColdAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
   if (D->hasAttr<HotAttr>()) {
     S.Diag(Attr.getLoc(), diag::err_attributes_are_not_compatible)
       << Attr.getName() << "hot";
@@ -1747,12 +1535,6 @@ static void handleColdAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 }
 
 static void handleHotAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
   if (D->hasAttr<ColdAttr>()) {
     S.Diag(Attr.getLoc(), diag::err_attributes_are_not_compatible)
       << Attr.getName() << "cold";
@@ -1763,31 +1545,6 @@ static void handleHotAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                                        Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleNakedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             NakedAttr(Attr.getRange(), S.Context,
-                       Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleAlwaysInlineAttr(Sema &S, Decl *D,
-                                   const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             AlwaysInlineAttr(Attr.getRange(), S.Context,
-                              Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleTLSModelAttr(Sema &S, Decl *D,
                                const AttributeList &Attr) {
   StringRef Model;
@@ -1796,7 +1553,7 @@ static void handleTLSModelAttr(Sema &S, Decl *D,
   if (!S.checkStringLiteralArgumentAttr(Attr, 0, Model, &LiteralLoc))
     return;
 
-  if (!isa<VarDecl>(D) || !cast<VarDecl>(D)->getTLSKind()) {
+  if (!cast<VarDecl>(D)->getTLSKind()) {
     S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
       << Attr.getName() << ExpectedTLSVar;
     return;
@@ -1828,35 +1585,15 @@ static void handleMallocAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   S.Diag(Attr.getLoc(), diag::warn_attribute_malloc_pointer_only);
 }
 
-static void handleMayAliasAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  D->addAttr(::new (S.Context)
-             MayAliasAttr(Attr.getRange(), S.Context,
-                          Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleNoCommonAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (isa<VarDecl>(D))
-    D->addAttr(::new (S.Context)
-               NoCommonAttr(Attr.getRange(), S.Context,
-                            Attr.getAttributeSpellingListIndex()));
-  else
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedVariable;
-}
-
 static void handleCommonAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.LangOpts.CPlusPlus) {
-    S.Diag(Attr.getLoc(), diag::err_common_not_supported_cplusplus);
+    S.Diag(Attr.getLoc(), diag::err_attribute_not_supported_in_lang)
+      << Attr.getName() << AttributeLangSupport::Cpp;
     return;
   }
 
-  if (isa<VarDecl>(D))
-    D->addAttr(::new (S.Context)
-               CommonAttr(Attr.getRange(), S.Context,
-                          Attr.getAttributeSpellingListIndex()));
-  else
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedVariable;
+  D->addAttr(::new (S.Context) CommonAttr(Attr.getRange(), S.Context,
+                                        Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleNoReturnAttr(Sema &S, Decl *D, const AttributeList &attr) {
@@ -1906,23 +1643,6 @@ static void handleAnalyzerNoReturnAttr(Sema &S, Decl *D,
                                   Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleCXX11NoReturnAttr(Sema &S, Decl *D,
-                                    const AttributeList &Attr) {
-  // C++11 [dcl.attr.noreturn]p1:
-  //   The attribute may be applied to the declarator-id in a function
-  //   declaration.
-  FunctionDecl *FD = dyn_cast<FunctionDecl>(D);
-  if (!FD) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionOrMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             CXX11NoReturnAttr(Attr.getRange(), S.Context,
-                               Attr.getAttributeSpellingListIndex()));
-}
-
 // PS3 PPU-specific.
 static void handleVecReturnAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 /*
@@ -1948,12 +1668,6 @@ static void handleVecReturnAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     return result; // This will be returned in a register
   }
 */
-  if (!isa<RecordDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedClass;
-    return;
-  }
-
   if (D->getAttr<VecReturnAttr>()) {
     S.Diag(Attr.getLoc(), diag::err_repeat_attribute) << "vecreturn";
     return;
@@ -1996,10 +1710,6 @@ static void handleDependencyAttr(Sema &S, Scope *Scope, Decl *D,
              diag::err_carries_dependency_param_not_function_decl);
       return;
     }
-  } else if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunctionMethodOrParameter;
-    return;
   }
 
   D->addAttr(::new (S.Context) CarriesDependencyAttr(
@@ -2018,19 +1728,6 @@ static void handleUnusedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   D->addAttr(::new (S.Context)
              UnusedAttr(Attr.getRange(), S.Context,
                         Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleReturnsTwiceAttr(Sema &S, Decl *D,
-                                   const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             ReturnsTwiceAttr(Attr.getRange(), S.Context,
-                              Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleUsedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -2062,12 +1759,6 @@ static void handleConstructorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
       !checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), priority))
     return;
 
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
   D->addAttr(::new (S.Context)
              ConstructorAttr(Attr.getRange(), S.Context, priority,
                              Attr.getAttributeSpellingListIndex()));
@@ -2084,12 +1775,6 @@ static void handleDestructorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (Attr.getNumArgs() > 0 &&
       !checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), priority))
     return;
-
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
 
   D->addAttr(::new (S.Context)
              DestructorAttr(Attr.getRange(), S.Context, priority,
@@ -2114,36 +1799,18 @@ static void handleAttrWithMessage(Sema &S, Decl *D,
                                       Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleArcWeakrefUnavailableAttr(Sema &S, Decl *D, 
-                                            const AttributeList &Attr) {
-  D->addAttr(::new (S.Context)
-             ArcWeakrefUnavailableAttr(Attr.getRange(), S.Context,
-                                       Attr.getAttributeSpellingListIndex()));
-}
+static void handleObjCSuppresProtocolAttr(Sema &S, Decl *D,
+                                          const AttributeList &Attr) {
+  IdentifierLoc *Parm = Attr.isArgIdent(0) ? Attr.getArgAsIdent(0) : 0;
 
-static void handleObjCRootClassAttr(Sema &S, Decl *D, 
-                                    const AttributeList &Attr) {
-  if (!isa<ObjCInterfaceDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedObjectiveCInterface;
+  if (!Parm) {
+    S.Diag(D->getLocStart(), diag::err_objc_attr_not_id) << Attr.getName() << 1;
     return;
   }
-  
-  D->addAttr(::new (S.Context)
-             ObjCRootClassAttr(Attr.getRange(), S.Context,
-                               Attr.getAttributeSpellingListIndex()));
-}
 
-static void handleObjCRequiresPropertyDefsAttr(Sema &S, Decl *D,
-                                               const AttributeList &Attr) {
-  if (!isa<ObjCInterfaceDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_suppress_autosynthesis);
-    return;
-  }
-  
   D->addAttr(::new (S.Context)
-             ObjCRequiresPropertyDefsAttr(Attr.getRange(), S.Context,
-                                          Attr.getAttributeSpellingListIndex()));
+             ObjCSuppressProtocolAttr(Attr.getRange(), S.Context, Parm->Ident,
+                                      Attr.getAttributeSpellingListIndex()));
 }
 
 static bool checkAvailabilityAttr(Sema &S, SourceRange Range,
@@ -2451,13 +2118,7 @@ static void handleVisibilityAttr(Sema &S, Decl *D, const AttributeList &Attr,
 
 static void handleObjCMethodFamilyAttr(Sema &S, Decl *decl,
                                        const AttributeList &Attr) {
-  ObjCMethodDecl *method = dyn_cast<ObjCMethodDecl>(decl);
-  if (!method) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << ExpectedMethod;
-    return;
-  }
-
+  ObjCMethodDecl *method = cast<ObjCMethodDecl>(decl);
   if (!Attr.isArgIdent(0)) {
     S.Diag(Attr.getLoc(), diag::err_attribute_argument_n_type)
       << Attr.getName() << 1 << AANT_ArgumentIdentifier;
@@ -2482,20 +2143,6 @@ static void handleObjCMethodFamilyAttr(Sema &S, Decl *decl,
 
   method->addAttr(new (S.Context) ObjCMethodFamilyAttr(Attr.getRange(),
                                                        S.Context, F));
-}
-
-static void handleObjCExceptionAttr(Sema &S, Decl *D,
-                                    const AttributeList &Attr) {
-  ObjCInterfaceDecl *OCI = dyn_cast<ObjCInterfaceDecl>(D);
-  if (OCI == 0) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedObjectiveCInterface;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             ObjCExceptionAttr(Attr.getRange(), S.Context,
-                               Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleObjCNSObject(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -2524,18 +2171,6 @@ static void handleObjCNSObject(Sema &S, Decl *D, const AttributeList &Attr) {
   }
   D->addAttr(::new (S.Context)
              ObjCNSObjectAttr(Attr.getRange(), S.Context,
-                              Attr.getAttributeSpellingListIndex()));
-}
-
-static void
-handleOverloadableAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_overloadable_not_function);
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             OverloadableAttr(Attr.getRange(), S.Context,
                               Attr.getAttributeSpellingListIndex()));
 }
 
@@ -2653,13 +2288,6 @@ static void handleSentinelAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   D->addAttr(::new (S.Context)
              SentinelAttr(Attr.getRange(), S.Context, sentinel, nullPos,
                           Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleWarnUnusedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (RecordDecl *RD = dyn_cast<RecordDecl>(D))
-    RD->addAttr(::new (S.Context) WarnUnusedAttr(Attr.getRange(), S.Context));
-  else
-    S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
 }
 
 static void handleWarnUnusedResult(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -2868,15 +2496,9 @@ static void handleConstAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   }
 }
 
-static void handlePureAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  D->addAttr(::new (S.Context)
-             PureAttr(Attr.getRange(), S.Context,
-                      Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleCleanupAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  VarDecl *VD = dyn_cast<VarDecl>(D);
-  if (!VD || !VD->hasLocalStorage()) {
+  VarDecl *VD = cast<VarDecl>(D);
+  if (!VD->hasLocalStorage()) {
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
     return;
   }
@@ -3025,12 +2647,12 @@ static void handleInitPriorityAttr(Sema &S, Decl *D,
     return;
   }
   
-  if (!isa<VarDecl>(D) || S.getCurFunctionOrMethodDecl()) {
+  if (S.getCurFunctionOrMethodDecl()) {
     S.Diag(Attr.getLoc(), diag::err_init_priority_object_attr);
     Attr.setInvalid();
     return;
   }
-  QualType T = dyn_cast<VarDecl>(D)->getType();
+  QualType T = cast<VarDecl>(D)->getType();
   if (S.Context.getAsArrayType(T))
     T = S.Context.getBaseElementType(T);
   if (!T->getAs<RecordType>()) {
@@ -3600,39 +3222,8 @@ static void handleNoDebugAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                          Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleNoInlineAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             NoInlineAttr(Attr.getRange(), S.Context,
-             Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleNoInstrumentFunctionAttr(Sema &S, Decl *D,
-                                           const AttributeList &Attr) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             NoInstrumentFunctionAttr(Attr.getRange(), S.Context,
-                                      Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleConstantAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.LangOpts.CUDA) {
-    if (!isa<VarDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-        << Attr.getName() << ExpectedVariable;
-      return;
-    }
-
     D->addAttr(::new (S.Context)
                CUDAConstantAttr(Attr.getRange(), S.Context,
                                 Attr.getAttributeSpellingListIndex()));
@@ -3650,12 +3241,6 @@ static void handleDeviceAttr(Sema &S, Decl *D, const AttributeList &Attr) {
       return;
     }
 
-    if (!isa<FunctionDecl>(D) && !isa<VarDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-        << Attr.getName() << ExpectedVariableOrFunction;
-      return;
-    }
-
     D->addAttr(::new (S.Context)
                CUDADeviceAttr(Attr.getRange(), S.Context,
                               Attr.getAttributeSpellingListIndex()));
@@ -3666,12 +3251,6 @@ static void handleDeviceAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 
 static void handleGlobalAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.LangOpts.CUDA) {
-    if (!isa<FunctionDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-        << Attr.getName() << ExpectedFunction;
-      return;
-    }
-
     FunctionDecl *FD = cast<FunctionDecl>(D);
     if (!FD->getResultType()->isVoidType()) {
       TypeLoc TL = FD->getTypeSourceInfo()->getTypeLoc().IgnoreParens();
@@ -3697,12 +3276,6 @@ static void handleGlobalAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 
 static void handleHostAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.LangOpts.CUDA) {
-    if (!isa<FunctionDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-        << Attr.getName() << ExpectedFunction;
-      return;
-    }
-
     D->addAttr(::new (S.Context)
                CUDAHostAttr(Attr.getRange(), S.Context,
                             Attr.getAttributeSpellingListIndex()));
@@ -3713,12 +3286,6 @@ static void handleHostAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 
 static void handleSharedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.LangOpts.CUDA) {
-    if (!isa<VarDecl>(D)) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-        << Attr.getName() << ExpectedVariable;
-      return;
-    }
-
     D->addAttr(::new (S.Context)
                CUDASharedAttr(Attr.getRange(), S.Context,
                               Attr.getAttributeSpellingListIndex()));
@@ -3728,13 +3295,7 @@ static void handleSharedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 }
 
 static void handleGNUInlineAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  FunctionDecl *Fn = dyn_cast<FunctionDecl>(D);
-  if (Fn == 0) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedFunction;
-    return;
-  }
-
+  FunctionDecl *Fn = cast<FunctionDecl>(D);
   if (!Fn->isInlineSpecified()) {
     S.Diag(Attr.getLoc(), diag::warn_gnu_inline_attribute_requires_inline);
     return;
@@ -3829,11 +3390,6 @@ static void handleCallConvAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   default:
     llvm_unreachable("unexpected attribute kind");
   }
-}
-
-static void handleOpenCLKernelAttr(Sema &S, Decl *D,
-                                   const AttributeList &Attr) {
-  D->addAttr(::new (S.Context) OpenCLKernelAttr(Attr.getRange(), S.Context));
 }
 
 static void handleOpenCLImageAccessAttr(Sema &S, Decl *D,
@@ -4053,6 +3609,12 @@ static void handleTypeTagForDatatypeAttr(Sema &S, Decl *D,
   if (!checkAttributeNumArgs(S, Attr, 1))
     return;
 
+  if (!isa<VarDecl>(D)) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
+      << Attr.getName() << ExpectedVariable;
+    return;
+  }
+
   IdentifierInfo *PointerKind = Attr.getArgAsIdent(0)->Ident;
   TypeSourceInfo *MatchingCTypeLoc = 0;
   S.GetTypeFromParser(Attr.getMatchingCType(), &MatchingCTypeLoc);
@@ -4082,14 +3644,9 @@ static bool isValidSubjectOfCFAttribute(Sema &S, QualType type) {
 }
 
 static void handleNSConsumedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  ParmVarDecl *param = dyn_cast<ParmVarDecl>(D);
-  if (!param) {
-    S.Diag(D->getLocStart(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getRange() << Attr.getName() << ExpectedParameter;
-    return;
-  }
-
+  ParmVarDecl *param = cast<ParmVarDecl>(D);
   bool typeOK, cf;
+
   if (Attr.getKind() == AttributeList::AT_NSConsumed) {
     typeOK = isValidSubjectOfNSAttribute(S, param->getType());
     cf = false;
@@ -4112,19 +3669,6 @@ static void handleNSConsumedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     param->addAttr(::new (S.Context)
                    NSConsumedAttr(Attr.getRange(), S.Context,
                                   Attr.getAttributeSpellingListIndex()));
-}
-
-static void handleNSConsumesSelfAttr(Sema &S, Decl *D,
-                                     const AttributeList &Attr) {
-  if (!isa<ObjCMethodDecl>(D)) {
-    S.Diag(D->getLocStart(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getRange() << Attr.getName() << ExpectedMethod;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             NSConsumesSelfAttr(Attr.getRange(), S.Context,
-                                Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleNSReturnsRetainedAttr(Sema &S, Decl *D,
@@ -4210,27 +3754,17 @@ static void handleObjCReturnsInnerPointerAttr(Sema &S, Decl *D,
   
   SourceLocation loc = attr.getLoc();
   QualType resultType;
-  
-  ObjCMethodDecl *method = dyn_cast<ObjCMethodDecl>(D);
-
-  if (!method) {
-    ObjCPropertyDecl *property = dyn_cast<ObjCPropertyDecl>(D);
-    if (!property) {
-      S.Diag(D->getLocStart(), diag::err_attribute_wrong_decl_type)
-        << SourceRange(loc, loc) << attr.getName() << ExpectedMethodOrProperty;
-      return;
-    }
-    resultType = property->getType();
-  }
+  if (isa<ObjCMethodDecl>(D))
+    resultType = cast<ObjCMethodDecl>(D)->getResultType();
   else
-    // Check that the method returns a normal pointer.
-    resultType = method->getResultType();
+    resultType = cast<ObjCPropertyDecl>(D)->getType();
 
   if (!resultType->isReferenceType() &&
       (!resultType->isPointerType() || resultType->isObjCRetainableType())) {
     S.Diag(D->getLocStart(), diag::warn_ns_attribute_wrong_return_type)
       << SourceRange(loc)
-    << attr.getName() << (method ? EP_ObjCMethod : EP_ObjCProperty)
+    << attr.getName()
+    << (isa<ObjCMethodDecl>(D) ? EP_ObjCMethod : EP_ObjCProperty)
     << /*non-retainable pointer*/ 2;
 
     // Drop the attribute.
@@ -4244,14 +3778,8 @@ static void handleObjCReturnsInnerPointerAttr(Sema &S, Decl *D,
 
 static void handleObjCRequiresSuperAttr(Sema &S, Decl *D,
                                         const AttributeList &attr) {
-  SourceLocation loc = attr.getLoc();
-  ObjCMethodDecl *method = dyn_cast<ObjCMethodDecl>(D);
+  ObjCMethodDecl *method = cast<ObjCMethodDecl>(D);
   
-  if (!method) {
-   S.Diag(D->getLocStart(), diag::err_attribute_wrong_decl_type)
-   << SourceRange(loc, loc) << attr.getName() << ExpectedMethod;
-    return;
-  }
   DeclContext *DC = method->getDeclContext();
   if (const ObjCProtocolDecl *PDecl = dyn_cast_or_null<ObjCProtocolDecl>(DC)) {
     S.Diag(D->getLocStart(), diag::warn_objc_requires_super_protocol)
@@ -4272,12 +3800,6 @@ static void handleObjCRequiresSuperAttr(Sema &S, Decl *D,
 
 /// Handle cf_audited_transfer and cf_unknown_transfer.
 static void handleCFTransferAttr(Sema &S, Decl *D, const AttributeList &A) {
-  if (!isa<FunctionDecl>(D)) {
-    S.Diag(D->getLocStart(), diag::err_attribute_wrong_decl_type)
-      << A.getRange() << A.getName() << ExpectedFunction;
-    return;
-  }
-
   bool IsAudited = (A.getKind() == AttributeList::AT_CFAuditedTransfer);
 
   // Check whether there's a conflicting attribute already present.
@@ -4340,14 +3862,6 @@ static void handleNSBridgedAttr(Sema &S, Scope *Sc, Decl *D,
 
 static void handleObjCBridgeAttr(Sema &S, Scope *Sc, Decl *D,
                                 const AttributeList &Attr) {
-  if (!isa<RecordDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-    << Attr.getName()
-    << (S.getLangOpts().CPlusPlus ? ExpectedStructOrUnionOrClass
-                                  : ExpectedStructOrUnion);
-    return;
-  }
-
   IdentifierLoc * Parm = Attr.isArgIdent(0) ? Attr.getArgAsIdent(0) : 0;
 
   if (!Parm) {
@@ -4362,14 +3876,6 @@ static void handleObjCBridgeAttr(Sema &S, Scope *Sc, Decl *D,
 
 static void handleObjCBridgeMutableAttr(Sema &S, Scope *Sc, Decl *D,
                                         const AttributeList &Attr) {
-  if (!isa<RecordDecl>(D)) {
-    S.Diag(Attr.getLoc(), diag::err_attribute_wrong_decl_type)
-    << Attr.getName()
-    << (S.getLangOpts().CPlusPlus ? ExpectedStructOrUnionOrClass
-        : ExpectedStructOrUnion);
-    return;
-  }
-  
   IdentifierLoc * Parm = Attr.isArgIdent(0) ? Attr.getArgAsIdent(0) : 0;
   
   if (!Parm) {
@@ -4392,12 +3898,6 @@ static void handleObjCOwnershipAttr(Sema &S, Decl *D,
 
 static void handleObjCPreciseLifetimeAttr(Sema &S, Decl *D,
                                           const AttributeList &Attr) {
-  if (!isa<VarDecl>(D) && !isa<FieldDecl>(D)) {
-    S.Diag(D->getLocStart(), diag::err_attribute_wrong_decl_type)
-      << Attr.getRange() << Attr.getName() << ExpectedVariable;
-    return;
-  }
-
   ValueDecl *vd = cast<ValueDecl>(D);
   QualType type = vd->getType();
 
@@ -4452,8 +3952,20 @@ static bool checkMicrosoftExt(Sema &S, const AttributeList &Attr,
 }
 
 static void handleUuidAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (!S.LangOpts.CPlusPlus) {
+    S.Diag(Attr.getLoc(), diag::err_attribute_not_supported_in_lang)
+      << Attr.getName() << AttributeLangSupport::C;
+    return;
+  }
+
   if (!checkMicrosoftExt(S, Attr, S.LangOpts.Borland))
     return;
+
+  if (!isa<CXXRecordDecl>(D)) {
+    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
+      << Attr.getName() << ExpectedClass;
+    return;
+  }
 
   StringRef StrRef;
   SourceLocation LiteralLoc;
@@ -4558,6 +4070,11 @@ static bool handleCommonAttributeFeatures(Sema &S, Scope *scope, Decl *D,
   if (Attr.getMinArgs() == Attr.getMaxArgs() &&
       !checkAttributeNumArgs(S, Attr, Attr.getMinArgs()))
     return true;
+
+  // Check whether the attribute appertains to the given subject.
+  if (!Attr.diagnoseAppertainsTo(S, D))
+    return true;
+
   return false;
 }
 
@@ -4603,7 +4120,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_Aligned:     handleAlignedAttr     (S, D, Attr); break;
   case AttributeList::AT_AllocSize:   handleAllocSizeAttr   (S, D, Attr); break;
   case AttributeList::AT_AlwaysInline:
-    handleAlwaysInlineAttr  (S, D, Attr); break;
+    handleSimpleAttribute<AlwaysInlineAttr>(S, D, Attr); break;
   case AttributeList::AT_AnalyzerNoReturn:
     handleAnalyzerNoReturnAttr  (S, D, Attr); break;
   case AttributeList::AT_TLSModel:    handleTLSModelAttr    (S, D, Attr); break;
@@ -4616,8 +4133,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_CUDAConstant:handleConstantAttr    (S, D, Attr); break;
   case AttributeList::AT_Constructor: handleConstructorAttr (S, D, Attr); break;
   case AttributeList::AT_CXX11NoReturn:
-    handleCXX11NoReturnAttr(S, D, Attr);
-    break;
+  handleSimpleAttribute<CXX11NoReturnAttr>(S, D, Attr); break;
   case AttributeList::AT_Deprecated:
     handleAttrWithMessage<DeprecatedAttr>(S, D, Attr);
     break;
@@ -4626,7 +4142,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleExtVectorTypeAttr(S, scope, D, Attr);
     break;
   case AttributeList::AT_MinSize:
-    handleMinSizeAttr(S, D, Attr);
+    handleSimpleAttribute<MinSizeAttr>(S, D, Attr);
     break;
   case AttributeList::AT_Format:      handleFormatAttr      (S, D, Attr); break;
   case AttributeList::AT_FormatArg:   handleFormatArgAttr   (S, D, Attr); break;
@@ -4638,18 +4154,19 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleLaunchBoundsAttr(S, D, Attr);
     break;
   case AttributeList::AT_Malloc:      handleMallocAttr      (S, D, Attr); break;
-  case AttributeList::AT_MayAlias:    handleMayAliasAttr    (S, D, Attr); break;
+  case AttributeList::AT_MayAlias:
+    handleSimpleAttribute<MayAliasAttr>(S, D, Attr); break;
   case AttributeList::AT_Mode:        handleModeAttr        (S, D, Attr); break;
-  case AttributeList::AT_NoCommon:    handleNoCommonAttr    (S, D, Attr); break;
+  case AttributeList::AT_NoCommon:
+    handleSimpleAttribute<NoCommonAttr>(S, D, Attr); break;
   case AttributeList::AT_NonNull:     handleNonNullAttr     (S, D, Attr); break;
-  case AttributeList::AT_Overloadable:handleOverloadableAttr(S, D, Attr); break;
-  case AttributeList::AT_ownership_returns:
-  case AttributeList::AT_ownership_takes:
-  case AttributeList::AT_ownership_holds:
-      handleOwnershipAttr     (S, D, Attr); break;
+  case AttributeList::AT_Overloadable:
+    handleSimpleAttribute<OverloadableAttr>(S, D, Attr); break;
+  case AttributeList::AT_Ownership:   handleOwnershipAttr   (S, D, Attr); break;
   case AttributeList::AT_Cold:        handleColdAttr        (S, D, Attr); break;
   case AttributeList::AT_Hot:         handleHotAttr         (S, D, Attr); break;
-  case AttributeList::AT_Naked:       handleNakedAttr       (S, D, Attr); break;
+  case AttributeList::AT_Naked:
+    handleSimpleAttribute<NakedAttr>(S, D, Attr); break;
   case AttributeList::AT_NoReturn:    handleNoReturnAttr    (S, D, Attr); break;
   case AttributeList::AT_NoThrow:     handleNothrowAttr     (S, D, Attr); break;
   case AttributeList::AT_CUDAShared:  handleSharedAttr      (S, D, Attr); break;
@@ -4683,7 +4200,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_CFConsumed:
   case AttributeList::AT_NSConsumed:  handleNSConsumedAttr  (S, D, Attr); break;
   case AttributeList::AT_NSConsumesSelf:
-    handleNSConsumesSelfAttr(S, D, Attr); break;
+    handleSimpleAttribute<NSConsumesSelfAttr>(S, D, Attr); break;
 
   case AttributeList::AT_NSReturnsAutoreleased:
   case AttributeList::AT_NSReturnsNotRetained:
@@ -4708,18 +4225,17 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleAttrWithMessage<UnavailableAttr>(S, D, Attr);
     break;
   case AttributeList::AT_ArcWeakrefUnavailable: 
-    handleArcWeakrefUnavailableAttr (S, D, Attr); 
-    break;
+    handleSimpleAttribute<ArcWeakrefUnavailableAttr>(S, D, Attr); break;
   case AttributeList::AT_ObjCRootClass:
-    handleObjCRootClassAttr(S, D, Attr);
+    handleSimpleAttribute<ObjCRootClassAttr>(S, D, Attr); break;
+  case AttributeList::AT_ObjCSuppressProtocol:
+    handleObjCSuppresProtocolAttr(S, D, Attr);
     break;
-  case AttributeList::AT_ObjCRequiresPropertyDefs: 
-    handleObjCRequiresPropertyDefsAttr (S, D, Attr); 
-    break;
+  case AttributeList::AT_ObjCRequiresPropertyDefs:
+    handleSimpleAttribute<ObjCRequiresPropertyDefsAttr>(S, D, Attr); break;
   case AttributeList::AT_Unused:      handleUnusedAttr      (S, D, Attr); break;
   case AttributeList::AT_ReturnsTwice:
-    handleReturnsTwiceAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<ReturnsTwiceAttr>(S, D, Attr); break;
   case AttributeList::AT_Used:        handleUsedAttr        (S, D, Attr); break;
   case AttributeList::AT_Visibility:
     handleVisibilityAttr(S, D, Attr, false);
@@ -4728,8 +4244,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleVisibilityAttr(S, D, Attr, true);
     break;
   case AttributeList::AT_WarnUnused:
-    handleWarnUnusedAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<WarnUnusedAttr>(S, D, Attr); break;
   case AttributeList::AT_WarnUnusedResult: handleWarnUnusedResult(S, D, Attr);
     break;
   case AttributeList::AT_Weak:        handleWeakAttr        (S, D, Attr); break;
@@ -4739,8 +4254,7 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleTransparentUnionAttr(S, D, Attr);
     break;
   case AttributeList::AT_ObjCException:
-    handleObjCExceptionAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<ObjCExceptionAttr>(S, D, Attr); break;
   case AttributeList::AT_ObjCMethodFamily:
     handleObjCMethodFamilyAttr(S, D, Attr);
     break;
@@ -4748,17 +4262,18 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_Blocks:      handleBlocksAttr      (S, D, Attr); break;
   case AttributeList::AT_Sentinel:    handleSentinelAttr    (S, D, Attr); break;
   case AttributeList::AT_Const:       handleConstAttr       (S, D, Attr); break;
-  case AttributeList::AT_Pure:        handlePureAttr        (S, D, Attr); break;
+  case AttributeList::AT_Pure:
+    handleSimpleAttribute<PureAttr>(S, D, Attr); break;
   case AttributeList::AT_Cleanup:     handleCleanupAttr     (S, D, Attr); break;
   case AttributeList::AT_NoDebug:     handleNoDebugAttr     (S, D, Attr); break;
-  case AttributeList::AT_NoInline:    handleNoInlineAttr    (S, D, Attr); break;
+  case AttributeList::AT_NoInline:
+    handleSimpleAttribute<NoInlineAttr>(S, D, Attr); break;
   case AttributeList::AT_Regparm:     handleRegparmAttr     (S, D, Attr); break;
   case AttributeList::IgnoredAttribute:
     // Just ignore
     break;
   case AttributeList::AT_NoInstrumentFunction:  // Interacts with -pg.
-    handleNoInstrumentFunctionAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<NoInstrumentFunctionAttr>(S, D, Attr); break;
   case AttributeList::AT_StdCall:
   case AttributeList::AT_CDecl:
   case AttributeList::AT_FastCall:
@@ -4772,15 +4287,14 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleCallConvAttr(S, D, Attr);
     break;
   case AttributeList::AT_OpenCLKernel:
-    handleOpenCLKernelAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<OpenCLKernelAttr>(S, D, Attr); break;
   case AttributeList::AT_OpenCLImageAccess:
     handleOpenCLImageAccessAttr(S, D, Attr);
     break;
 
   // Microsoft attributes:
   case AttributeList::AT_MsStruct:
-    handleMsStructAttr(S, D, Attr);
+    handleSimpleAttribute<MsStructAttr>(S, D, Attr);
     break;
   case AttributeList::AT_Uuid:
     handleUuidAttr(S, D, Attr);
@@ -4814,23 +4328,21 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handlePtGuardedVarAttr(S, D, Attr);
     break;
   case AttributeList::AT_ScopedLockable:
-    handleScopedLockableAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<ScopedLockableAttr>(S, D, Attr); break;
   case AttributeList::AT_NoSanitizeAddress:
-    handleNoSanitizeAddressAttr(S, D, Attr);
+    handleSimpleAttribute<NoSanitizeAddressAttr>(S, D, Attr);
     break;
   case AttributeList::AT_NoThreadSafetyAnalysis:
-    handleNoThreadSafetyAnalysis(S, D, Attr);
+    handleSimpleAttribute<NoThreadSafetyAnalysisAttr>(S, D, Attr);
     break;
   case AttributeList::AT_NoSanitizeThread:
-    handleNoSanitizeThread(S, D, Attr);
+    handleSimpleAttribute<NoSanitizeThreadAttr>(S, D, Attr);
     break;
   case AttributeList::AT_NoSanitizeMemory:
-    handleNoSanitizeMemory(S, D, Attr);
+    handleSimpleAttribute<NoSanitizeMemoryAttr>(S, D, Attr);
     break;
   case AttributeList::AT_Lockable:
-    handleLockableAttr(S, D, Attr);
-    break;
+    handleSimpleAttribute<LockableAttr>(S, D, Attr); break;
   case AttributeList::AT_GuardedBy:
     handleGuardedByAttr(S, D, Attr);
     break;

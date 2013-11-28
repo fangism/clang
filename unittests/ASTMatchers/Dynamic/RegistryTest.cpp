@@ -59,12 +59,24 @@ public:
   }
 #endif
 
+  llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName,
+                                                Diagnostics *Error = 0) {
+    Diagnostics DummyError;
+    if (!Error) Error = &DummyError;
+    llvm::Optional<MatcherCtor> Ctor =
+        Registry::lookupMatcherCtor(MatcherName, SourceRange(), Error);
+    EXPECT_EQ("", DummyError.toStringFull());
+    return Ctor;
+  }
+
   VariantMatcher constructMatcher(StringRef MatcherName,
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    const VariantMatcher Out =
-        Registry::constructMatcher(MatcherName, SourceRange(), Args(), Error);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
+    VariantMatcher Out;
+    if (Ctor)
+      Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(), Error);
     EXPECT_EQ("", DummyError.toStringFull());
     return Out;
   }
@@ -74,8 +86,10 @@ public:
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    const VariantMatcher Out = Registry::constructMatcher(
-        MatcherName, SourceRange(), Args(Arg1), Error);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
+    VariantMatcher Out;
+    if (Ctor)
+      Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(Arg1), Error);
     EXPECT_EQ("", DummyError.toStringFull());
     return Out;
   }
@@ -86,8 +100,11 @@ public:
                                   Diagnostics *Error = NULL) {
     Diagnostics DummyError;
     if (!Error) Error = &DummyError;
-    const VariantMatcher Out = Registry::constructMatcher(
-        MatcherName, SourceRange(), Args(Arg1, Arg2), Error);
+    llvm::Optional<MatcherCtor> Ctor = lookupMatcherCtor(MatcherName, Error);
+    VariantMatcher Out;
+    if (Ctor)
+      Out = Registry::constructMatcher(*Ctor, SourceRange(), Args(Arg1, Arg2),
+                                       Error);
     EXPECT_EQ("", DummyError.toStringFull());
     return Out;
   }
@@ -319,16 +336,16 @@ TEST_F(RegistryTest, VariadicOp) {
   EXPECT_TRUE(matches("class Bar{};", D));
   EXPECT_FALSE(matches("class OtherBar{};", D));
 
-  D = constructMatcher(
-      "recordDecl",
+  D = recordDecl(
+      has(fieldDecl(hasName("Foo"))),
       constructMatcher(
           "unless",
           constructMatcher("namedDecl",
-                           constructMatcher("hasName", std::string("Bar")))))
-          .getTypedMatcher<Decl>();
+                           constructMatcher("hasName", std::string("Bar"))))
+          .getTypedMatcher<Decl>());
 
-  EXPECT_FALSE(matches("class Bar{};", D));
-  EXPECT_TRUE(matches("class OtherBar{};", D));
+  EXPECT_FALSE(matches("class Bar{ int Foo; };", D));
+  EXPECT_TRUE(matches("class OtherBar{ int Foo; };", D));
 }
 
 TEST_F(RegistryTest, Errors) {
