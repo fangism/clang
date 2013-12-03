@@ -4606,7 +4606,7 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
 
   const toolchains::Darwin& DarwinTC(getDarwinToolChain());
   const VersionTuple TargetVersion(DarwinTC.getTargetVersion());
-  const unsigned vmin = *TargetVersion.getMinor();
+  const Optional<unsigned> vmin(TargetVersion.getMinor());
 
   // Determine the original source input.
   const Action *SourceAction = &JA;
@@ -4620,7 +4620,7 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // Applicable to darwin11+ and Xcode 4+.  darwin<10 lacked integrated-as.
   // FIXME: grosbach: it would be better if option support were detected in 
   // the chosen assembler.
-  if (Args.hasArg(options::OPT_no_integrated_as) && (vmin > 6))
+  if (Args.hasArg(options::OPT_no_integrated_as) && (!vmin || (*vmin > 6)))
     CmdArgs.push_back("-Q");
 
   // Forward -g, assuming we are dealing with an actual assembly file.
