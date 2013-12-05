@@ -1926,26 +1926,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     case llvm::Triple::Darwin:
     case llvm::Triple::MacOSX:
     case llvm::Triple::IOS:
-#if 0
-      if (Target.getArch() == llvm::Triple::x86 ||
-          Target.getArch() == llvm::Triple::x86_64 ||
-#if 1
-	// uncomment this to use DarwinClang driver for ppc family
-          Target.getArch() == llvm::Triple::ppc ||
-          Target.getArch() == llvm::Triple::ppc64 ||
-	// see bugs:
-	// http://llvm.org/bugs/show_bug.cgi?id=14387
-	// http://llvm.org/bugs/show_bug.cgi?id=14275
-#endif
-          Target.getArch() == llvm::Triple::arm ||
-          Target.getArch() == llvm::Triple::thumb)
-        TC = new toolchains::DarwinClang(*this, Target, Args);
-      else
-        TC = new toolchains::Darwin_Generic_GCC(*this, Target, Args);
-#else
       // also use this driver for PPC
       TC = new toolchains::DarwinClang(*this, Target, Args);
-#endif
       break;
     case llvm::Triple::DragonFly:
       TC = new toolchains::DragonFly(*this, Target, Args);
