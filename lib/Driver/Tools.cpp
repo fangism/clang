@@ -4604,10 +4604,6 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   assert(Inputs.size() == 1 && "Unexpected number of inputs.");
   const InputInfo &Input = Inputs[0];
 
-  const toolchains::Darwin& DarwinTC(getDarwinToolChain());
-  const VersionTuple TargetVersion(DarwinTC.getTargetVersion());
-  const Optional<unsigned> vmin(TargetVersion.getMinor());
-
   // Determine the original source input.
   const Action *SourceAction = &JA;
   while (SourceAction->getKind() != Action::InputClass) {
@@ -4620,7 +4616,8 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // Applicable to darwin11+ and Xcode 4+.  darwin<10 lacked integrated-as.
   // FIXME: grosbach: it would be better if option support were detected in 
   // the chosen assembler.
-  if (Args.hasArg(options::OPT_no_integrated_as) && (!vmin || (*vmin > 6)))
+  if (Args.hasArg(options::OPT_no_integrated_as) &&
+      !getToolChain().getTriple().isMacOSXVersionLT(10, 7))
     CmdArgs.push_back("-Q");
 
   // Forward -g, assuming we are dealing with an actual assembly file.
