@@ -391,6 +391,17 @@ void Sema::ActOnStartOfObjCMethodDef(Scope *FnBodyScope, Decl *D) {
                                           MDecl->getLocation(), 0);
     }
 
+    if (MDecl->getMethodFamily() == OMF_init) {
+      if (MDecl->isDesignatedInitializerForTheInterface()) {
+        getCurFunction()->ObjCIsDesignatedInit = true;
+        getCurFunction()->ObjCWarnForNoDesignatedInitChain =
+            IC->getSuperClass() != 0;
+      } else if (IC->hasDesignatedInitializers()) {
+        getCurFunction()->ObjCIsSecondaryInit = true;
+        getCurFunction()->ObjCWarnForNoInitDelegation = true;
+      }
+    }
+
     // If this is "dealloc" or "finalize", set some bit here.
     // Then in ActOnSuperMessage() (SemaExprObjC), set it back to false.
     // Finally, in ActOnFinishFunctionBody() (SemaDecl), warn if flag is set.
@@ -1209,9 +1220,9 @@ void Sema::CheckImplementationIvars(ObjCImplementationDecl *ImpDecl,
   }
 
   if (numIvars > 0)
-    Diag(ivars[j]->getLocation(), diag::err_inconsistant_ivar_count);
+    Diag(ivars[j]->getLocation(), diag::err_inconsistent_ivar_count);
   else if (IVI != IVE)
-    Diag(IVI->getLocation(), diag::err_inconsistant_ivar_count);
+    Diag(IVI->getLocation(), diag::err_inconsistent_ivar_count);
 }
 
 void Sema::WarnUndefinedMethod(SourceLocation ImpLoc, ObjCMethodDecl *method,
@@ -2664,7 +2675,9 @@ Decl *Sema::ActOnAtEnd(Scope *S, SourceRange AtEnd, ArrayRef<Decl *> allMethods,
       ImplMethodsVsClassMethods(S, IC, IDecl);
       AtomicPropertySetterGetterRules(IC, IDecl);
       DiagnoseOwningPropertyGetterSynthesis(IC);
-  
+      if (IDecl->hasDesignatedInitializers())
+        DiagnoseMissingDesignatedInitOverrides(IC, IDecl);
+
       bool HasRootClassAttr = IDecl->hasAttr<ObjCRootClassAttr>();
       if (IDecl->getSuperClass() == NULL) {
         // This class has no superclass, so check that it has been marked with
