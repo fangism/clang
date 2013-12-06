@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <set>
 
 using namespace llvm;
 
@@ -1693,7 +1694,7 @@ static void emitArgInfo(const Record &R, std::stringstream &OS) {
 }
 
 static void GenerateDefaultAppertainsTo(raw_ostream &OS) {
-  OS << "static bool DefaultAppertainsTo(Sema &, const AttributeList &,";
+  OS << "static bool defaultAppertainsTo(Sema &, const AttributeList &,";
   OS << "const Decl *) {\n";
   OS << "  return true;\n";
   OS << "}\n\n";
@@ -1729,7 +1730,19 @@ static std::string CalculateDiagnostic(const Record &S) {
   std::vector<Record *> Subjects = S.getValueAsListOfDefs("Subjects");
   for (std::vector<Record *>::const_iterator I = Subjects.begin(),
        E = Subjects.end(); I != E; ++I) {
-    uint32_t V = StringSwitch<uint32_t>((*I)->getName())
+    const Record &R = (**I);
+    std::string Name;
+
+    if (R.isSubClassOf("SubsetSubject")) {
+      PrintError(R.getLoc(), "SubsetSubjects should use a custom diagnostic");
+      // As a fallback, look through the SubsetSubject to see what its base
+      // type is, and use that. This needs to be updated if SubsetSubjects
+      // are allowed within other SubsetSubjects.
+      Name = R.getValueAsDef("Base")->getName();
+    } else
+      Name = R.getName();
+
+    uint32_t V = StringSwitch<uint32_t>(Name)
                    .Case("Function", Func)
                    .Case("Var", Var)
                    .Case("ObjCMethod", ObjCMethod)
@@ -1784,6 +1797,12 @@ static std::string CalculateDiagnostic(const Record &S) {
     case Func | FuncTemplate:
     case Func | ObjCMethod: return "ExpectedFunctionOrMethod";
     case Func | Var: return "ExpectedVariableOrFunction";
+
+    // If not compiling for C++, the class portion does not apply.
+    case Func | Var | Class:
+      return "(S.getLangOpts().CPlusPlus ? ExpectedFunctionVariableOrClass : "
+                                           "ExpectedVariableOrFunction)";
+
     case ObjCMethod | ObjCProp: return "ExpectedMethodOrProperty";
     case Field | Var: return "ExpectedFieldOrGlobalVar";
   }
@@ -1794,11 +1813,42 @@ static std::string CalculateDiagnostic(const Record &S) {
   return "";
 }
 
+static std::string GenerateCustomAppertainsTo(const Record &Subject,
+                                              raw_ostream &OS) {
+  std::string FnName = "is" + Subject.getName();
+
+  // If this code has already been generated, simply return the previous
+  // instance of it.
+  static std::set<std::string> CustomSubjectSet;
+  std::set<std::string>::iterator I = CustomSubjectSet.find(FnName);
+  if (I != CustomSubjectSet.end())
+    return *I;
+
+  Record *Base = Subject.getValueAsDef("Base");
+
+  // Not currently support custom subjects within custom subjects.
+  if (Base->isSubClassOf("SubsetSubject")) {
+    PrintFatalError(Subject.getLoc(),
+                    "SubsetSubjects within SubsetSubjects is not supported");
+    return "";
+  }
+
+  OS << "static bool " << FnName << "(const Decl *D) {\n";
+  OS << "  const " << Base->getName() << "Decl *S = dyn_cast<";
+  OS << Base->getName();
+  OS << "Decl>(D);\n";
+  OS << "  return S && " << Subject.getValueAsString("CheckCode") << ";\n";
+  OS << "}\n\n";
+
+  CustomSubjectSet.insert(FnName);
+  return FnName;
+}
+
 static std::string GenerateAppertainsTo(const Record &Attr, raw_ostream &OS) {
   // If the attribute does not contain a Subjects definition, then use the
   // default appertainsTo logic.
   if (Attr.isValueUnset("Subjects"))
-    return "DefaultAppertainsTo";
+    return "defaultAppertainsTo";
 
   const Record *SubjectObj = Attr.getValueAsDef("Subjects");
   std::vector<Record*> Subjects = SubjectObj->getValueAsListOfDefs("Subjects");
@@ -1806,27 +1856,31 @@ static std::string GenerateAppertainsTo(const Record &Attr, raw_ostream &OS) {
   // If the list of subjects is empty, it is assumed that the attribute
   // appertains to everything.
   if (Subjects.empty())
-    return "DefaultAppertainsTo";
+    return "defaultAppertainsTo";
 
-  // If any of the subjects are a SubsetSubject derivative, bail out for now
-  // as though it was using custom parsing.
-  bool HasSubsetSubject = false;
   bool Warn = SubjectObj->getValueAsDef("Diag")->getValueAsBit("Warn");
 
   // Otherwise, generate an appertainsTo check specific to this attribute which
   // checks all of the given subjects against the Decl passed in. Return the
   // name of that check to the caller.
-  std::string FnName = Attr.getName() + "AppertainsTo";
+  std::string FnName = "check" + Attr.getName() + "AppertainsTo";
   std::stringstream SS;
   SS << "static bool " << FnName << "(Sema &S, const AttributeList &Attr, ";
   SS << "const Decl *D) {\n";
   SS << "  if (";
   for (std::vector<Record *>::const_iterator I = Subjects.begin(),
        E = Subjects.end(); I != E; ++I) {
-    if ((*I)->isSubClassOf("SubsetSubject"))
-      HasSubsetSubject = true;
+    // If the subject has custom code associated with it, generate a function
+    // for it. The function cannot be inlined into this check (yet) because it
+    // requires the subject to be of a specific type, and were that information
+    // inlined here, it would not support an attribute with multiple custom
+    // subjects.
+    if ((*I)->isSubClassOf("SubsetSubject")) {
+      SS << "!" << GenerateCustomAppertainsTo(**I, OS) << "(D)";
+    } else {
+      SS << "!isa<" << (*I)->getName() << "Decl>(D)";
+    }
 
-    SS << "!isa<" << (*I)->getName() << "Decl>(D)";
     if (I + 1 != E)
       SS << " && ";
   }
@@ -1842,10 +1896,56 @@ static std::string GenerateAppertainsTo(const Record &Attr, raw_ostream &OS) {
   SS << "  return true;\n";
   SS << "}\n\n";
 
-  if (HasSubsetSubject)
-    return "DefaultAppertainsTo";
-
   OS << SS.str();
+  return FnName;
+}
+
+static void GenerateDefaultLangOptRequirements(raw_ostream &OS) {
+  OS << "static bool defaultDiagnoseLangOpts(Sema &, ";
+  OS << "const AttributeList &) {\n";
+  OS << "  return true;\n";
+  OS << "}\n\n";
+}
+
+static std::string GenerateLangOptRequirements(const Record &R,
+                                               raw_ostream &OS) {
+  // If the attribute has an empty or unset list of language requirements,
+  // return the default handler.
+  std::vector<Record *> LangOpts = R.getValueAsListOfDefs("LangOpts");
+  if (LangOpts.empty())
+    return "defaultDiagnoseLangOpts";
+
+  // Generate the test condition, as well as a unique function name for the
+  // diagnostic test. The list of options should usually be short (one or two
+  // options), and the uniqueness isn't strictly necessary (it is just for
+  // codegen efficiency).
+  std::string FnName = "check", Test;
+  for (std::vector<Record *>::const_iterator I = LangOpts.begin(),
+       E = LangOpts.end(); I != E; ++I) {
+    std::string Part = (*I)->getValueAsString("Name");
+    Test += "S.LangOpts." + Part;
+    if (I + 1 != E)
+      Test += " || ";
+    FnName += Part;
+  }
+  FnName += "LangOpts";
+
+  // If this code has already been generated, simply return the previous
+  // instance of it.
+  static std::set<std::string> CustomLangOptsSet;
+  std::set<std::string>::iterator I = CustomLangOptsSet.find(FnName);
+  if (I != CustomLangOptsSet.end())
+    return *I;
+
+  OS << "static bool " << FnName << "(Sema &S, const AttributeList &Attr) {\n";
+  OS << "  if (" << Test << ")\n";
+  OS << "    return true;\n\n";
+  OS << "  S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) ";
+  OS << "<< Attr.getName();\n";
+  OS << "  return false;\n";
+  OS << "}\n\n";
+
+  CustomLangOptsSet.insert(FnName);
   return FnName;
 }
 
@@ -1855,8 +1955,9 @@ void EmitClangAttrParsedAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
 
   ParsedAttrMap Attrs = getParsedAttrList(Records);
 
-  // Generate the default appertainsTo diagnostic method.
+  // Generate the default appertainsTo and language option diagnostic methods.
   GenerateDefaultAppertainsTo(OS);
+  GenerateDefaultLangOptRequirements(OS);
 
   // Generate the appertainsTo diagnostic methods and write their names into
   // another mapping. At the same time, generate the AttrInfoMap object
@@ -1871,6 +1972,7 @@ void EmitClangAttrParsedAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
     emitArgInfo(*I->second, SS);
     SS << ", " << I->second->getValueAsBit("HasCustomParsing");
     SS << ", " << GenerateAppertainsTo(*I->second, OS);
+    SS << ", " << GenerateLangOptRequirements(*I->second, OS);
     SS << " }";
 
     if (I + 1 != E)

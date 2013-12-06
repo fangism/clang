@@ -870,7 +870,16 @@ DeclContext *Sema::getContainingDC(DeclContext *DC) {
   // Functions defined inline within classes aren't parsed until we've
   // finished parsing the top-level class, so the top-level class is
   // the context we'll need to return to.
-  if (isa<FunctionDecl>(DC)) {
+  // A Lambda call operator whose parent is a class must not be treated 
+  // as an inline member function.  A Lambda can be used legally
+  // either as an in-class member initializer or a default argument.  These
+  // are parsed once the class has been marked complete and so the containing
+  // context would be the nested class (when the lambda is defined in one);
+  // If the class is not complete, then the lambda is being used in an 
+  // ill-formed fashion (such as to specify the width of a bit-field, or
+  // in an array-bound) - in which case we still want to return the 
+  // lexically containing DC (which could be a nested class). 
+  if (isa<FunctionDecl>(DC) && !isLambdaCallOperator(DC)) {
     DC = DC->getLexicalParent();
 
     // A function not defined within a class will always return to its
@@ -1077,9 +1086,8 @@ void Sema::pushExternalDeclIntoScope(NamedDecl *D, DeclarationName Name) {
 }
 
 bool Sema::isDeclInScope(NamedDecl *D, DeclContext *Ctx, Scope *S,
-                         bool ExplicitInstantiationOrSpecialization) {
-  return IdResolver.isDeclInScope(D, Ctx, S,
-                                  ExplicitInstantiationOrSpecialization);
+                         bool AllowInlineNamespace) {
+  return IdResolver.isDeclInScope(D, Ctx, S, AllowInlineNamespace);
 }
 
 Scope *Sema::getScopeForDeclContext(Scope *S, DeclContext *DC) {
@@ -1099,21 +1107,19 @@ static bool isOutOfScopePreviousDeclaration(NamedDecl *,
 
 /// Filters out lookup results that don't fall within the given scope
 /// as determined by isDeclInScope.
-void Sema::FilterLookupForScope(LookupResult &R,
-                                DeclContext *Ctx, Scope *S,
+void Sema::FilterLookupForScope(LookupResult &R, DeclContext *Ctx, Scope *S,
                                 bool ConsiderLinkage,
-                                bool ExplicitInstantiationOrSpecialization) {
+                                bool AllowInlineNamespace) {
   LookupResult::Filter F = R.makeFilter();
   while (F.hasNext()) {
     NamedDecl *D = F.next();
 
-    if (isDeclInScope(D, Ctx, S, ExplicitInstantiationOrSpecialization))
+    if (isDeclInScope(D, Ctx, S, AllowInlineNamespace))
       continue;
 
-    if (ConsiderLinkage &&
-        isOutOfScopePreviousDeclaration(D, Ctx, Context))
+    if (ConsiderLinkage && isOutOfScopePreviousDeclaration(D, Ctx, Context))
       continue;
-    
+
     F.erase();
   }
 
@@ -1165,7 +1171,7 @@ static bool IsDisallowedCopyOrAssign(const CXXMethodDecl *D) {
 // When we see foo we don't know if after the typedef we will get 'A' or '*A'
 // for example. If 'A', foo will have external linkage. If we have '*A',
 // foo will have no linkage. Since we can't know untill we get to the end
-// of the typedef, this function finds out if D might have non external linkage.
+// of the typedef, this function finds out if D might have non-external linkage.
 // Callers should verify at the end of the TU if it D has external linkage or
 // not.
 bool Sema::mightHaveNonExternalLinkage(const DeclaratorDecl *D) {
@@ -4662,8 +4668,8 @@ Sema::ActOnTypedefNameDecl(Scope *S, DeclContext *DC, TypedefNameDecl *NewTD,
                            LookupResult &Previous, bool &Redeclaration) {
   // Merge the decl with the existing one if appropriate. If the decl is
   // in an outer scope, it isn't the same thing.
-  FilterLookupForScope(Previous, DC, S, /*ConsiderLinkage*/ false,
-                       /*ExplicitInstantiationOrSpecialization=*/false);
+  FilterLookupForScope(Previous, DC, S, /*ConsiderLinkage*/false,
+                       /*AllowInlineNamespace*/false);
   filterNonConflictingPreviousDecls(Context, NewTD, Previous);
   if (!Previous.empty()) {
     Redeclaration = true;
@@ -5391,15 +5397,16 @@ Sema::ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   }
 
   // Diagnose shadowed variables before filtering for scope.
-  if (!D.getCXXScopeSpec().isSet())
+  if (D.getCXXScopeSpec().isEmpty())
     CheckShadow(S, NewVD, Previous);
 
   // Don't consider existing declarations that are in a different
   // scope and are out-of-semantic-context declarations (if the new
   // declaration has linkage).
-  FilterLookupForScope(
-      Previous, OriginalDC, S, shouldConsiderLinkage(NewVD),
-      IsExplicitSpecialization || IsVariableTemplateSpecialization);
+  FilterLookupForScope(Previous, OriginalDC, S, shouldConsiderLinkage(NewVD),
+                       D.getCXXScopeSpec().isNotEmpty() ||
+                       IsExplicitSpecialization ||
+                       IsVariableTemplateSpecialization);
 
   // Check whether the previous declaration is in the same block scope. This
   // affects whether we merge types with it, per C++11 [dcl.array]p3.
@@ -6877,6 +6884,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
 
   // Filter out previous declarations that don't match the scope.
   FilterLookupForScope(Previous, OriginalDC, S, shouldConsiderLinkage(NewFD),
+                       D.getCXXScopeSpec().isNotEmpty() ||
                        isExplicitSpecialization ||
                        isFunctionTemplateSpecialization);
 
@@ -9775,7 +9783,7 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body,
       WP.disableCheckFallThrough();
 
     // MSVC permits the use of pure specifier (=0) on function definition,
-    // defined at class scope, warn about this non standard construct.
+    // defined at class scope, warn about this non-standard construct.
     if (getLangOpts().MicrosoftExt && FD->isPure() && FD->isCanonicalDecl())
       Diag(FD->getLocation(), diag::warn_pure_function_definition);
 
@@ -9813,6 +9821,22 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body,
       Diag(MD->getLocEnd(), diag::warn_objc_missing_super_call)
         << MD->getSelector().getAsString();
       getCurFunction()->ObjCShouldCallSuper = false;
+    }
+    if (getCurFunction()->ObjCWarnForNoDesignatedInitChain) {
+      const ObjCMethodDecl *InitMethod = 0;
+      bool isDesignated =
+          MD->isDesignatedInitializerForTheInterface(&InitMethod);
+      assert(isDesignated && InitMethod);
+      (void)isDesignated;
+      Diag(MD->getLocation(),
+           diag::warn_objc_designated_init_missing_super_call);
+      Diag(InitMethod->getLocation(),
+           diag::note_objc_designated_init_marked_here);
+      getCurFunction()->ObjCWarnForNoDesignatedInitChain = false;
+    }
+    if (getCurFunction()->ObjCWarnForNoInitDelegation) {
+      Diag(MD->getLocation(), diag::warn_objc_secondary_init_missing_init_call);
+      getCurFunction()->ObjCWarnForNoInitDelegation = false;
     }
   } else {
     return 0;
@@ -10658,7 +10682,8 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
       // in the same scope (so that the definition/declaration completes or
       // rementions the tag), reuse the decl.
       if (TUK == TUK_Reference || TUK == TUK_Friend ||
-          isDeclInScope(PrevDecl, SearchDC, S, isExplicitSpecialization)) {
+          isDeclInScope(PrevDecl, SearchDC, S,
+                        SS.isNotEmpty() || isExplicitSpecialization)) {
         // Make sure that this wasn't declared as an enum and now used as a
         // struct or something similar.
         if (!isAcceptableTagRedeclaration(PrevTagDecl, Kind,
@@ -10819,8 +10844,8 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
         Invalid = true;
 
       // Otherwise, only diagnose if the declaration is in scope.
-      } else if (!isDeclInScope(PrevDecl, SearchDC, S, 
-                                isExplicitSpecialization)) {
+      } else if (!isDeclInScope(PrevDecl, SearchDC, S,
+                                SS.isNotEmpty() || isExplicitSpecialization)) {
         // do nothing
 
       // Diagnose implicit declarations introduced by elaborated types.

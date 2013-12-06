@@ -183,3 +183,23 @@ namespace test4 {
   };
   extern template void foo::bar(const void *);
 }
+
+namespace test5 {
+  template <class T>
+  class valarray {
+    void bar();
+  };
+  extern template void valarray<int>::bar();
+}
+
+namespace test6 {
+  struct foo {
+    int bar();
+  };
+  typedef int bar_t();
+  void zed(bar_t foo::*) {
+  }
+  void baz() {
+    zed(&foo::bar);
+  }
+}
