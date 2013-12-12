@@ -342,8 +342,9 @@ public:
   }
   
   virtual bool IsObjCNonFragileABIDefault() const {
-    // Non-fragile ABI is default for everything but i386.
-    return getTriple().getArch() != llvm::Triple::x86;
+    // Non-fragile ABI is default for everything but i386 and ppc.
+    return (getTriple().getArch() != llvm::Triple::x86
+	    && getTriple().getArch() != llvm::Triple::ppc);
   }
 
   virtual bool UseObjCMixedDispatch() const {
@@ -405,6 +406,18 @@ public:
   virtual void AddLinkARCArgs(const llvm::opt::ArgList &Args,
                               llvm::opt::ArgStringList &CmdArgs) const;
   /// }
+};
+
+/// Darwin_Legacy - Toolchain using the older 'as' and 'ld' installation.
+class LLVM_LIBRARY_VISIBILITY DarwinLegacy : public DarwinClang {
+public:
+  DarwinLegacy(const Driver &D, const llvm::Triple &Triple,
+                     const llvm::opt::ArgList &Args)
+      : DarwinClang(D, Triple, Args) {}
+
+protected:
+  virtual Tool *buildAssembler() const;
+
 };
 
 class LLVM_LIBRARY_VISIBILITY Generic_ELF : public Generic_GCC {

@@ -1,4 +1,4 @@
-// RUN: %clang -target i386-apple-darwin10 -### -x assembler -c %s \
+// RUN: %clang -target i386-apple-darwin11 -### -x assembler -c %s \
 // RUN:   -no-integrated-as -static -dynamic 2>%t
 // RUN: FileCheck -check-prefix=CHECK-STATIC_AND_DYNAMIC-32-DARWIN10 --input-file %t %s
 //

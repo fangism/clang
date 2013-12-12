@@ -1927,8 +1927,14 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     case llvm::Triple::Darwin:
     case llvm::Triple::MacOSX:
     case llvm::Triple::IOS:
-      // also use this driver for PPC
-      TC = new toolchains::DarwinClang(*this, Target, Args);
+      if (Target.getArch() == llvm::Triple::x86 ||
+          Target.getArch() == llvm::Triple::x86_64 ||
+          Target.getArch() == llvm::Triple::arm ||
+          Target.getArch() == llvm::Triple::thumb ||
+          Target.getArch() == llvm::Triple::ppc)
+        TC = new toolchains::DarwinClang(*this, Target, Args);
+      else
+        TC = new toolchains::DarwinLegacy(*this, Target, Args);
       break;
     case llvm::Triple::DragonFly:
       TC = new toolchains::DragonFly(*this, Target, Args);

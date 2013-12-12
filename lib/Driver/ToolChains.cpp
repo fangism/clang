@@ -139,6 +139,12 @@ StringRef Darwin::getDarwinArchName(const ArgList &Args) const {
   default:
     return getArchName();
 
+  case llvm::Triple::ppc:
+    return "ppc";
+
+  case llvm::Triple::ppc64:
+    return "ppc64";
+
   case llvm::Triple::thumb:
   case llvm::Triple::arm: {
     if (const Arg *A = Args.getLastArg(options::OPT_march_EQ))
@@ -919,6 +925,10 @@ void Darwin::CheckObjCARC() const {
   if (isTargetIPhoneOS() || !isMacosxVersionLT(10, 6))
     return;
   getDriver().Diag(diag::err_arc_unsupported_on_toolchain);
+}
+
+Tool *DarwinLegacy::buildAssembler() const {
+  return new tools::darwin::AssembleWithAs(*this);
 }
 
 /// Generic_GCC - A tool chain using the 'gcc' command to perform
