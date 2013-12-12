@@ -424,7 +424,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation IfTokenLoc,
             const SourceLocation CondEnd = CurPPLexer->getSourceLocation();
             Callbacks->Elif(Tok.getLocation(),
                             SourceRange(CondBegin, CondEnd),
-                            CondValue, CondInfo.IfLoc);
+                            (CondValue ? PPCallbacks::CVK_True : PPCallbacks::CVK_False), CondInfo.IfLoc);
           }
           // If this condition is true, enter it!
           if (CondValue) {
@@ -588,9 +588,13 @@ void Preprocessor::verifyModuleInclude(SourceLocation FilenameLoc,
   Module *RequestingModule = getModuleForLocation(FilenameLoc);
   if (RequestingModule)
     HeaderInfo.getModuleMap().resolveUses(RequestingModule, /*Complain=*/false);
+  bool FoundInModule = false;
   ModuleMap::KnownHeader RequestedModule =
-      HeaderInfo.getModuleMap().findModuleForHeader(IncFileEnt,
-                                                    RequestingModule);
+      HeaderInfo.getModuleMap().findModuleForHeader(
+          IncFileEnt, RequestingModule, &FoundInModule);
+
+  if (!FoundInModule)
+    return; // The header is not part of a module.
 
   if (RequestingModule == RequestedModule.getModule())
     return; // No faults wihin a module, or between files both not in modules.
@@ -610,7 +614,7 @@ void Preprocessor::verifyModuleInclude(SourceLocation FilenameLoc,
   if (RequestingModule && getLangOpts().ModulesDeclUse &&
       violatesUseDeclarations(RequestingModule, RequestedModule.getModule()))
     Diag(FilenameLoc, diag::error_undeclared_use_of_module)
-        << Filename;
+        << RequestingModule->getFullModuleName() << Filename;
 }
 
 const FileEntry *Preprocessor::LookupFile(
@@ -2280,7 +2284,7 @@ void Preprocessor::HandleIfDirective(Token &IfToken,
   if (Callbacks)
     Callbacks->If(IfToken.getLocation(),
                   SourceRange(ConditionalBegin, ConditionalEnd),
-                  ConditionalTrue);
+                  (ConditionalTrue ? PPCallbacks::CVK_True : PPCallbacks::CVK_False));
 
   // Should we include the stuff contained by this directive?
   if (ConditionalTrue) {
@@ -2377,7 +2381,7 @@ void Preprocessor::HandleElifDirective(Token &ElifToken) {
   if (Callbacks)
     Callbacks->Elif(ElifToken.getLocation(),
                     SourceRange(ConditionalBegin, ConditionalEnd),
-                    true, CI.IfLoc);
+                    PPCallbacks::CVK_NotEvaluated, CI.IfLoc);
 
   // Finally, skip the rest of the contents of this block.
   SkipExcludedConditionalBlock(CI.IfLoc, /*Foundnonskip*/true,

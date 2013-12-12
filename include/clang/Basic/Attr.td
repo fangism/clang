@@ -40,6 +40,10 @@ def NonBitField : SubsetSubject<Field,
 def ObjCInstanceMethod : SubsetSubject<ObjCMethod,
                                        [{S->isInstanceMethod()}]>;
 
+def ObjCInterfaceDeclInitMethod : SubsetSubject<ObjCMethod,
+                               [{S->getMethodFamily() == OMF_init &&
+                                 isa<ObjCInterfaceDecl>(S->getDeclContext())}]>;
+
 def Struct : SubsetSubject<Record,
                            [{!S->isUnion()}]>;
 
@@ -48,6 +52,9 @@ def TLSVar : SubsetSubject<Var,
 
 def SharedVar : SubsetSubject<Var,
                               [{S->hasGlobalStorage() && !S->getTLSKind()}]>;
+
+def GlobalVar : SubsetSubject<Var,
+                             [{S->hasGlobalStorage()}]>;
 
 // A single argument to an attribute
 class Argument<string name, bit optional> {
@@ -691,15 +698,15 @@ def ObjCRootClass : InheritableAttr {
   let Subjects = SubjectList<[ObjCInterface], ErrorDiag>;
 }
 
-def ObjCSuppressProtocol : InheritableAttr {
-  let Spellings = [GNU<"objc_suppress_protocol_methods">];
-  let Subjects = SubjectList<[ObjCInterface], ErrorDiag>;
-  let Args = [IdentifierArgument<"Protocol">];
+def ObjCExplicitProtocolImpl : InheritableAttr {
+  let Spellings = [GNU<"objc_protocol_requires_explicit_implementation">];
+  let Subjects = SubjectList<[ObjCProtocol], ErrorDiag>;
 }
 
 def ObjCDesignatedInitializer : Attr {
   let Spellings = [GNU<"objc_designated_initializer">];
-  let Subjects = SubjectList<[ObjCMethod], ErrorDiag>;
+  let Subjects = SubjectList<[ObjCInterfaceDeclInitMethod], ErrorDiag,
+                             "ExpectedObjCInterfaceDeclInitMethod">;
 }
 
 def Overloadable : Attr {
@@ -783,6 +790,8 @@ def InitPriority : InheritableAttr {
 def Section : InheritableAttr {
   let Spellings = [GNU<"section">, CXX11<"gnu", "section">];
   let Args = [StringArgument<"Name">];
+  let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag,
+                             "ExpectedFunctionOrGlobalVar">;
 }
 
 def Sentinel : InheritableAttr {
@@ -920,10 +929,7 @@ def WeakRef : InheritableAttr {
 }
 
 def X86ForceAlignArgPointer : InheritableAttr, TargetSpecificAttr {
-  let Spellings = [GNU<"force_align_arg_pointer">];
-  // Technically, this appertains to a FunctionDecl, but the target-specific
-  // code silently allows anything function-like (such as typedefs or function
-  // pointers), but does not apply the attribute to them.
+  let Spellings = [];
 }
 
 // Attribute to disable AddressSanitizer (or equivalent) checks.
@@ -1208,7 +1214,7 @@ def SelectAny : InheritableAttr {
   let LangOpts = [MicrosoftExt];
 }
 
-def Win64 : InheritableAttr {
+def Win64 : IgnoredAttr {
   let Spellings = [Keyword<"__w64">];
   let LangOpts = [MicrosoftExt];
 }

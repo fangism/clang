@@ -678,6 +678,18 @@ class ObjCInterfaceDecl : public ObjCContainerDecl
     /// marked with the 'objc_designated_initializer' attribute.
     bool HasDesignatedInitializers : 1;
 
+    enum InheritedDesignatedInitializersState {
+      /// We didn't calculate whether the designated initializers should be
+      /// inherited or not.
+      IDI_Unknown = 0,
+      /// Designated initializers are inherited for the super class.
+      IDI_Inherited = 1,
+      /// The class does not inherit designated initializers.
+      IDI_NotInherited = 2
+    };
+    /// One of the \c InheritedDesignatedInitializersState enumeratos.
+    mutable unsigned InheritedDesignatedInitializers : 2;
+
     /// \brief The location of the superclass, if any.
     SourceLocation SuperClassLoc;
     
@@ -689,7 +701,8 @@ class ObjCInterfaceDecl : public ObjCContainerDecl
     DefinitionData() : Definition(), SuperClass(), CategoryList(), IvarList(), 
                        ExternallyCompleted(),
                        IvarListMissingImplementation(true),
-                       HasDesignatedInitializers() { }
+                       HasDesignatedInitializers(),
+                       InheritedDesignatedInitializers(IDI_Unknown) { }
   };
 
   ObjCInterfaceDecl(DeclContext *DC, SourceLocation atLoc, IdentifierInfo *Id,
@@ -971,10 +984,6 @@ public:
                                               : superCls; 
   }
 
-  /// \brief Returns true if this class is marked to suppress being
-  /// used to determine if a subclass conforms to a protocol.
-  bool shouldSuppressProtocol(const ObjCProtocolDecl *P) const;
-
   /// \brief Iterator that walks over the list of categories, filtering out
   /// those that do not meet specific criteria.
   ///
@@ -1193,8 +1202,7 @@ public:
   ObjCMethodDecl *lookupMethod(Selector Sel, bool isInstance,
                                bool shallowCategoryLookup = false,
                                bool followSuper = true,
-                               const ObjCCategoryDecl *C = 0,
-                               const ObjCProtocolDecl *P = 0) const;
+                               const ObjCCategoryDecl *C = 0) const;
 
   /// Lookup an instance method for a given selector.
   ObjCMethodDecl *lookupInstanceMethod(Selector Sel) const {
@@ -1273,6 +1281,10 @@ public:
   friend class ASTReader;
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
+
+private:
+  const ObjCInterfaceDecl *findInterfaceWithDesignatedInitializers() const;
+  bool inheritsDesignatedInitializers() const;
 };
 
 /// ObjCIvarDecl - Represents an ObjC instance variable. In general, ObjC
