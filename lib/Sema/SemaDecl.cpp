@@ -1170,7 +1170,7 @@ static bool IsDisallowedCopyOrAssign(const CXXMethodDecl *D) {
 //
 // When we see foo we don't know if after the typedef we will get 'A' or '*A'
 // for example. If 'A', foo will have external linkage. If we have '*A',
-// foo will have no linkage. Since we can't know untill we get to the end
+// foo will have no linkage. Since we can't know until we get to the end
 // of the typedef, this function finds out if D might have non-external linkage.
 // Callers should verify at the end of the TU if it D has external linkage or
 // not.
@@ -3547,6 +3547,39 @@ StorageClassSpecToVarDeclStorageClass(const DeclSpec &DS) {
   llvm_unreachable("unknown storage class specifier");
 }
 
+static SourceLocation findDefaultInitializer(const CXXRecordDecl *Record) {
+  assert(Record->hasInClassInitializer());
+
+  for (DeclContext::decl_iterator I = Record->decls_begin(),
+                                  E = Record->decls_end();
+       I != E; ++I) {
+    FieldDecl *FD = dyn_cast<FieldDecl>(*I);
+    if (IndirectFieldDecl *IFD = dyn_cast<IndirectFieldDecl>(*I))
+      FD = IFD->getAnonField();
+    if (FD && FD->hasInClassInitializer())
+      return FD->getLocation();
+  }
+
+  llvm_unreachable("couldn't find in-class initializer");
+}
+
+static void checkDuplicateDefaultInit(Sema &S, CXXRecordDecl *Parent,
+                                      SourceLocation DefaultInitLoc) {
+  if (!Parent->isUnion() || !Parent->hasInClassInitializer())
+    return;
+
+  S.Diag(DefaultInitLoc, diag::err_multiple_mem_union_initialization);
+  S.Diag(findDefaultInitializer(Parent), diag::note_previous_initializer) << 0;
+}
+
+static void checkDuplicateDefaultInit(Sema &S, CXXRecordDecl *Parent,
+                                      CXXRecordDecl *AnonUnion) {
+  if (!Parent->isUnion() || !Parent->hasInClassInitializer())
+    return;
+
+  checkDuplicateDefaultInit(S, Parent, findDefaultInitializer(AnonUnion));
+}
+
 /// BuildAnonymousStructOrUnion - Handle the declaration of an
 /// anonymous structure or union. Anonymous unions are a C++ feature
 /// (C++ [class.union]) and a C11 feature; anonymous structures
@@ -3704,6 +3737,14 @@ Decl *Sema::BuildAnonymousStructOrUnion(Scope *S, DeclSpec &DS,
         }
       }
     }
+
+    // C++11 [class.union]p8 (DR1460):
+    //   At most one variant member of a union may have a
+    //   brace-or-equal-initializer.
+    if (cast<CXXRecordDecl>(Record)->hasInClassInitializer() &&
+        Owner->isRecord())
+      checkDuplicateDefaultInit(*this, cast<CXXRecordDecl>(Owner),
+                                cast<CXXRecordDecl>(Record));
   }
 
   if (!Record->isUnion() && !Owner->isRecord()) {
@@ -3756,11 +3797,14 @@ Decl *Sema::BuildAnonymousStructOrUnion(Scope *S, DeclSpec &DS,
   }
   Anon->setImplicit();
 
+  // Mark this as an anonymous struct/union type.
+  Record->setAnonymousStructOrUnion(true);
+
   // Add the anonymous struct/union object to the current
   // context. We'll be referencing this object when we refer to one of
   // its members.
   Owner->addDecl(Anon);
-  
+
   // Inject the members of the anonymous struct/union into the owning
   // context and into the identifier resolver chain for name lookup
   // purposes.
@@ -3770,14 +3814,6 @@ Decl *Sema::BuildAnonymousStructOrUnion(Scope *S, DeclSpec &DS,
   if (InjectAnonymousStructOrUnionMembers(*this, S, Owner, Record, AS,
                                           Chain, false))
     Invalid = true;
-
-  // Mark this as an anonymous struct/union type. Note that we do not
-  // do this until after we have already checked and injected the
-  // members of this anonymous struct/union type, because otherwise
-  // the members could be injected twice: once by DeclContext when it
-  // builds its lookup table, and once by
-  // InjectAnonymousStructOrUnionMembers.
-  Record->setAnonymousStructOrUnion(true);
 
   if (Invalid)
     Anon->setInvalidDecl();
@@ -4115,33 +4151,31 @@ bool Sema::DiagnoseClassNameShadow(DeclContext *DC,
 /// \returns true if we cannot safely recover from this error, false otherwise.
 bool Sema::diagnoseQualifiedDeclaration(CXXScopeSpec &SS, DeclContext *DC,
                                         DeclarationName Name,
-                                      SourceLocation Loc) {
+                                        SourceLocation Loc) {
   DeclContext *Cur = CurContext;
   while (isa<LinkageSpecDecl>(Cur) || isa<CapturedDecl>(Cur))
     Cur = Cur->getParent();
-  
-  // C++ [dcl.meaning]p1:
-  //   A declarator-id shall not be qualified except for the definition
-  //   of a member function (9.3) or static data member (9.4) outside of
-  //   its class, the definition or explicit instantiation of a function 
-  //   or variable member of a namespace outside of its namespace, or the
-  //   definition of an explicit specialization outside of its namespace,
-  //   or the declaration of a friend function that is a member of 
-  //   another class or namespace (11.3). [...]
-    
-  // The user provided a superfluous scope specifier that refers back to the
-  // class or namespaces in which the entity is already declared.
+
+  // If the user provided a superfluous scope specifier that refers back to the
+  // class in which the entity is already declared, diagnose and ignore it.
   //
   // class X {
   //   void X::f();
   // };
+  //
+  // Note, it was once ill-formed to give redundant qualification in all
+  // contexts, but that rule was removed by DR482.
   if (Cur->Equals(DC)) {
-    Diag(Loc, LangOpts.MicrosoftExt? diag::warn_member_extra_qualification
-                                   : diag::err_member_extra_qualification)
-      << Name << FixItHint::CreateRemoval(SS.getRange());
-    SS.clear();
+    if (Cur->isRecord()) {
+      Diag(Loc, LangOpts.MicrosoftExt ? diag::warn_member_extra_qualification
+                                      : diag::err_member_extra_qualification)
+        << Name << FixItHint::CreateRemoval(SS.getRange());
+      SS.clear();
+    } else {
+      Diag(Loc, diag::warn_namespace_member_extra_qualification) << Name;
+    }
     return false;
-  } 
+  }
 
   // Check whether the qualifying scope encloses the scope of the original
   // declaration.
@@ -7248,11 +7282,12 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
         }
       }
 
-    } else if (!D.isFunctionDefinition() && D.getCXXScopeSpec().isSet() &&
+    } else if (!D.isFunctionDefinition() &&
+               isa<CXXMethodDecl>(NewFD) && NewFD->isOutOfLine() &&
                !isFriend && !isFunctionTemplateSpecialization &&
                !isExplicitSpecialization) {
       // An out-of-line member function declaration must also be a
-      // definition (C++ [dcl.meaning]p1).
+      // definition (C++ [class.mfct]p2).
       // Note that this is not the case for explicit specializations of
       // function templates or member functions of class templates, per
       // C++ [temp.expl.spec]p2. We also allow these declarations as an 
@@ -10324,7 +10359,7 @@ bool Sema::isAcceptableTagRedeclaration(const TagDecl *Previous,
       << getRedeclDiagFromTagKind(OldTag);
     Diag(Redecl->getLocation(), diag::note_previous_use);
 
-    // If there is a previous defintion, suggest a fix-it.
+    // If there is a previous definition, suggest a fix-it.
     if (Previous->getDefinition()) {
         Diag(NewTagLoc, diag::note_struct_class_suggestion)
           << getRedeclDiagFromTagKind(Redecl->getTagKind())
@@ -11516,6 +11551,12 @@ FieldDecl *Sema::CheckFieldDecl(DeclarationName Name, QualType T,
       InvalidDecl = true;
     }
   }
+
+  // C++11 [class.union]p8 (DR1460):
+  //   At most one variant member of a union may have a
+  //   brace-or-equal-initializer.
+  if (InitStyle != ICIS_NoInit)
+    checkDuplicateDefaultInit(*this, cast<CXXRecordDecl>(Record), Loc);
 
   FieldDecl *NewFD = FieldDecl::Create(Context, Record, TSSL, Loc, II, T, TInfo,
                                        BitWidth, Mutable, InitStyle);

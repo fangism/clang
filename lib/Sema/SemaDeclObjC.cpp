@@ -1667,6 +1667,8 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
   // the method was implemented by a base class or an inherited
   // protocol. This lookup is slow, but occurs rarely in correct code
   // and otherwise would terminate in a warning.
+  if (PDecl->hasAttr<ObjCExplicitProtocolImplAttr>())
+    Super = NULL;
 
   // check unimplemented instance methods.
   if (!NSIDecl)
@@ -1680,8 +1682,7 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
                                           true /* instance */,
                                           false /* shallowCategory */,
                                           true /* followsSuper */,
-                                          NULL /* category */,
-                                          PDecl /* protocol */))) {
+                                          NULL /* category */))) {
             // If a method is not implemented in the category implementation but
             // has been declared in its primary class, superclass,
             // or in one of their protocols, no need to issue the warning. 
@@ -1718,8 +1719,7 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
                                         false /* class method */,
                                         false /* shallowCategoryLookup */,
                                         true  /* followSuper */,
-                                        NULL /* category */,
-                                        PDecl /* protocol */))) {
+                                        NULL /* category */))) {
       // See above comment for instance method lookups.
       if (C && IDecl->lookupMethod(method->getSelector(),
                                    false /* class */,
@@ -1868,20 +1868,6 @@ void Sema::MatchAllMethodDeclarations(const SelectorSet &InsMap,
 /// warns each time an exact match is found. 
 void Sema::CheckCategoryVsClassMethodMatches(
                                   ObjCCategoryImplDecl *CatIMPDecl) {
-  SelectorSet InsMap, ClsMap;
-  
-  for (ObjCImplementationDecl::instmeth_iterator
-       I = CatIMPDecl->instmeth_begin(), 
-       E = CatIMPDecl->instmeth_end(); I!=E; ++I)
-    InsMap.insert((*I)->getSelector());
-  
-  for (ObjCImplementationDecl::classmeth_iterator
-       I = CatIMPDecl->classmeth_begin(),
-       E = CatIMPDecl->classmeth_end(); I != E; ++I)
-    ClsMap.insert((*I)->getSelector());
-  if (InsMap.empty() && ClsMap.empty())
-    return;
-  
   // Get category's primary class.
   ObjCCategoryDecl *CatDecl = CatIMPDecl->getCategoryDecl();
   if (!CatDecl)
@@ -1889,6 +1875,32 @@ void Sema::CheckCategoryVsClassMethodMatches(
   ObjCInterfaceDecl *IDecl = CatDecl->getClassInterface();
   if (!IDecl)
     return;
+  ObjCInterfaceDecl *SuperIDecl = IDecl->getSuperClass();
+  SelectorSet InsMap, ClsMap;
+  
+  for (ObjCImplementationDecl::instmeth_iterator
+       I = CatIMPDecl->instmeth_begin(), 
+       E = CatIMPDecl->instmeth_end(); I!=E; ++I) {
+    Selector Sel = (*I)->getSelector();
+    // When checking for methods implemented in the category, skip over
+    // those declared in category class's super class. This is because
+    // the super class must implement the method.
+    if (SuperIDecl && SuperIDecl->lookupMethod(Sel, true))
+      continue;
+    InsMap.insert(Sel);
+  }
+  
+  for (ObjCImplementationDecl::classmeth_iterator
+       I = CatIMPDecl->classmeth_begin(),
+       E = CatIMPDecl->classmeth_end(); I != E; ++I) {
+    Selector Sel = (*I)->getSelector();
+    if (SuperIDecl && SuperIDecl->lookupMethod(Sel, false))
+      continue;
+    ClsMap.insert(Sel);
+  }
+  if (InsMap.empty() && ClsMap.empty())
+    return;
+  
   SelectorSet InsMapSeen, ClsMapSeen;
   bool IncompleteImpl = false;
   MatchAllMethodDeclarations(InsMap, ClsMap, InsMapSeen, ClsMapSeen,
@@ -3487,7 +3499,7 @@ Sema::GetIvarBackingPropertyAccessor(const ObjCMethodDecl *Method,
 }
 
 void Sema::DiagnoseUnusedBackingIvarInAccessor(Scope *S) {
-  if (S->hasUnrecoverableErrorOccurred() || !S->isInObjcMethodScope())
+  if (S->hasUnrecoverableErrorOccurred() || !S->isInObjcMethodOuterScope())
     return;
   
   const ObjCMethodDecl *CurMethod = getCurMethodDecl();

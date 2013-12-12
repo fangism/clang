@@ -256,18 +256,6 @@ ObjCContainerDecl::FindPropertyDeclaration(IdentifierInfo *PropertyId) const {
 
 void ObjCInterfaceDecl::anchor() { }
 
-bool ObjCInterfaceDecl::shouldSuppressProtocol(const ObjCProtocolDecl *P) const{
-  if (!hasAttrs())
-    return false;
-  const IdentifierInfo *PI = P->getIdentifier();
-  for (specific_attr_iterator<ObjCSuppressProtocolAttr>
-        I = specific_attr_begin<ObjCSuppressProtocolAttr>(),
-        E = specific_attr_end<ObjCSuppressProtocolAttr>(); I != E; ++I)
-      if ((*I)->getProtocol() == PI)
-        return true;
-  return false;
-}
-
 /// FindPropertyVisibleInPrimaryClass - Finds declaration of the property
 /// with name 'PropertyId' in the primary class; including those in protocols
 /// (direct or indirect) used by the primary class.
@@ -380,21 +368,61 @@ void ObjCInterfaceDecl::mergeClassExtensionProtocolList(
   data().AllReferencedProtocols.set(ProtocolRefs.data(), ProtocolRefs.size(),C);
 }
 
+const ObjCInterfaceDecl *
+ObjCInterfaceDecl::findInterfaceWithDesignatedInitializers() const {
+  const ObjCInterfaceDecl *IFace = this;
+  while (IFace) {
+    if (IFace->hasDesignatedInitializers())
+      return IFace;
+    if (!IFace->inheritsDesignatedInitializers())
+      break;
+    IFace = IFace->getSuperClass();
+  }
+  return 0;
+}
+
+bool ObjCInterfaceDecl::inheritsDesignatedInitializers() const {
+  switch (data().InheritedDesignatedInitializers) {
+  case DefinitionData::IDI_Inherited:
+    return true;
+  case DefinitionData::IDI_NotInherited:
+    return false;
+  case DefinitionData::IDI_Unknown: {
+    bool isIntroducingInitializers = false;
+    for (instmeth_iterator I = instmeth_begin(),
+                           E = instmeth_end(); I != E; ++I) {
+      const ObjCMethodDecl *MD = *I;
+      if (MD->getMethodFamily() == OMF_init && !MD->isOverriding()) {
+        isIntroducingInitializers = true;
+        break;
+      }
+    }
+    // If the class introduced initializers we conservatively assume that we
+    // don't know if any of them is a designated initializer to avoid possible
+    // misleading warnings.
+    if (isIntroducingInitializers) {
+      data().InheritedDesignatedInitializers = DefinitionData::IDI_NotInherited;
+      return false;
+    } else {
+      data().InheritedDesignatedInitializers = DefinitionData::IDI_Inherited;
+      return true;
+    }
+  }
+  }
+
+  llvm_unreachable("unexpected InheritedDesignatedInitializers value");
+}
+
 void ObjCInterfaceDecl::getDesignatedInitializers(
     llvm::SmallVectorImpl<const ObjCMethodDecl *> &Methods) const {
   assert(hasDefinition());
   if (data().ExternallyCompleted)
     LoadExternalDefinition();
 
-  const ObjCInterfaceDecl *IFace = this;
-  while (IFace) {
-    if (IFace->data().HasDesignatedInitializers)
-      break;
-    IFace = IFace->getSuperClass();
-  }
-
+  const ObjCInterfaceDecl *IFace= findInterfaceWithDesignatedInitializers();
   if (!IFace)
     return;
+
   for (instmeth_iterator I = IFace->instmeth_begin(),
                          E = IFace->instmeth_end(); I != E; ++I) {
     const ObjCMethodDecl *MD = *I;
@@ -409,19 +437,11 @@ bool ObjCInterfaceDecl::isDesignatedInitializer(Selector Sel,
   if (data().ExternallyCompleted)
     LoadExternalDefinition();
 
-  const ObjCInterfaceDecl *IFace = this;
-  while (IFace) {
-    if (IFace->data().HasDesignatedInitializers)
-      break;
-    IFace = IFace->getSuperClass();
-  }
-
+  const ObjCInterfaceDecl *IFace= findInterfaceWithDesignatedInitializers();
   if (!IFace)
     return false;
 
-  if (const ObjCMethodDecl *MD = IFace->lookupMethod(Sel, /*isInstance=*/true,
-                                                 /*shallowCategoryLookup=*/true,
-                                                 /*followSuper=*/false)) {
+  if (const ObjCMethodDecl *MD = IFace->getMethod(Sel, /*isInstance=*/true)) {
     if (MD->isThisDeclarationADesignatedInitializer()) {
       if (InitMethod)
         *InitMethod = MD;
@@ -523,8 +543,7 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
                                                 bool isInstance,
                                                 bool shallowCategoryLookup,
                                                 bool followSuper,
-                                                const ObjCCategoryDecl *C,
-                                                const ObjCProtocolDecl *P) const
+                                                const ObjCCategoryDecl *C) const
 {
   // FIXME: Should make sure no callers ever do this.
   if (!hasDefinition())
@@ -537,12 +556,6 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
     LoadExternalDefinition();
 
   while (ClassDecl) {
-    // If we are looking for a method that is part of protocol conformance,
-    // check if the superclass has been marked to suppress conformance
-    // of that protocol.
-    if (P && ClassDecl->shouldSuppressProtocol(P))
-      return 0;
-
     if ((MethodDecl = ClassDecl->getMethod(Sel, isInstance)))
       return MethodDecl;
 

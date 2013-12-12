@@ -88,7 +88,7 @@ class TokenRole;
 class AnnotatedLine;
 
 /// \brief A wrapper around a \c Token storing information about the
-/// whitespace characters preceeding it.
+/// whitespace characters preceding it.
 struct FormatToken {
   FormatToken()
       : NewlinesBefore(0), HasUnescapedNewline(false), LastNewlineOffset(0),
@@ -97,8 +97,8 @@ struct FormatToken {
         BlockKind(BK_Unknown), Type(TT_Unknown), SpacesRequiredBefore(0),
         CanBreakBefore(false), ClosesTemplateDeclaration(false),
         ParameterCount(0), PackingKind(PPK_Inconclusive), TotalLength(0),
-        UnbreakableTailLength(0), BindingStrength(0), SplitPenalty(0),
-        LongestObjCSelectorName(0), FakeRParens(0),
+        UnbreakableTailLength(0), BindingStrength(0), NestingLevel(0),
+        SplitPenalty(0), LongestObjCSelectorName(0), FakeRParens(0),
         StartsBinaryExpression(false), EndsBinaryExpression(false),
         LastInChainOfCalls(false), PartOfMultiVariableDeclStmt(false),
         MatchingParen(NULL), Previous(NULL), Next(NULL),
@@ -117,7 +117,7 @@ struct FormatToken {
   /// Token.
   bool HasUnescapedNewline;
 
-  /// \brief The range of the whitespace immediately preceeding the \c Token.
+  /// \brief The range of the whitespace immediately preceding the \c Token.
   SourceRange WhitespaceRange;
 
   /// \brief The offset just past the last '\n' in this token's leading
@@ -206,6 +206,10 @@ struct FormatToken {
   /// \brief The binding strength of a token. This is a combined value of
   /// operator precedence, parenthesis nesting, etc.
   unsigned BindingStrength;
+
+  /// \brief The nesting level of this token, i.e. the number of surrounding (),
+  /// [], {} or <>.
+  unsigned NestingLevel;
 
   /// \brief Penalty for inserting a line break before this token.
   unsigned SplitPenalty;

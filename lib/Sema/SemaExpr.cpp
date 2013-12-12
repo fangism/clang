@@ -1646,7 +1646,7 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
         NameInfo.getLoc(), Ty, VK, FoundD, TemplateArgs);
   } else {
     assert(!TemplateArgs && "No template arguments for non-variable"
-                            " template specialization referrences");
+                            " template specialization references");
     E = DeclRefExpr::Create(
         Context,
         SS ? SS->getWithLocInContext(Context) : NestedNameSpecifierLoc(),
@@ -3463,7 +3463,7 @@ static bool CheckAlignOfExpr(Sema &S, Expr *E) {
   // delayed parsing --- except for trailing return types in C++11.
   // And if an id-expression referring to a field occurs in a
   // context that lacks a 'this' value, it's ill-formed --- except,
-  // agian, in C++11, where such references are allowed in an
+  // again, in C++11, where such references are allowed in an
   // unevaluated context.  So C++11 introduces some new complexity.
   //
   // For the record, since __alignof__ on expressions is a GCC
@@ -4879,8 +4879,13 @@ CastKind Sema::PrepareScalarCast(ExprResult &Src, QualType DestTy) {
   case Type::STK_BlockPointer:
   case Type::STK_ObjCObjectPointer:
     switch (DestTy->getScalarTypeKind()) {
-    case Type::STK_CPointer:
+    case Type::STK_CPointer: {
+      unsigned SrcAS = SrcTy->getPointeeType().getAddressSpace();
+      unsigned DestAS = DestTy->getPointeeType().getAddressSpace();
+      if (SrcAS != DestAS)
+        return CK_AddressSpaceConversion;
       return CK_BitCast;
+    }
     case Type::STK_BlockPointer:
       return (SrcKind == Type::STK_BlockPointer
                 ? CK_BitCast : CK_AnyPointerToBlockPointerCast);
@@ -7836,10 +7841,14 @@ QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
       diagnoseDistinctPointerComparison(*this, Loc, LHS, RHS, /*isError*/false);
     }
     if (LCanPointeeTy != RCanPointeeTy) {
+      unsigned AddrSpaceL = LCanPointeeTy.getAddressSpace();
+      unsigned AddrSpaceR = RCanPointeeTy.getAddressSpace();
+      CastKind Kind = AddrSpaceL != AddrSpaceR ? CK_AddressSpaceConversion
+                                               : CK_BitCast;
       if (LHSIsNull && !RHSIsNull)
-        LHS = ImpCastExprToType(LHS.take(), RHSType, CK_BitCast);
+        LHS = ImpCastExprToType(LHS.take(), RHSType, Kind);
       else
-        RHS = ImpCastExprToType(RHS.take(), LHSType, CK_BitCast);
+        RHS = ImpCastExprToType(RHS.take(), LHSType, Kind);
     }
     return ResultTy;
   }
@@ -9878,7 +9887,7 @@ Sema::ActOnStmtExpr(SourceLocation LPLoc, Stmt *SubStmt,
   // example, it is not possible to goto into a stmt expression apparently.
   // More semantic analysis is needed.
 
-  // If there are sub stmts in the compound stmt, take the type of the last one
+  // If there are sub-stmts in the compound stmt, take the type of the last one
   // as the type of the stmtexpr.
   QualType Ty = Context.VoidTy;
   bool StmtExprMayBindToTemp = false;
@@ -10641,6 +10650,9 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
     MayHaveConvFixit = true;
     break;
   case IncompatiblePointer:
+    if (getLangOpts().ObjC1 &&
+        CheckObjCBridgeRelatedConversions(Loc, DstType, SrcType, SrcExpr))
+      return false;
     MakeObjCStringLiteralFixItHint(*this, DstType, SrcExpr, Hint, IsNSString);
       DiagKind =
         (Action == AA_Passing_CFAudited ?
@@ -10720,6 +10732,9 @@ bool Sema::DiagnoseAssignmentResult(AssignConvertType ConvTy,
     DiagKind = diag::err_arc_weak_unavailable_assign;
     break;
   case Incompatible:
+    if (getLangOpts().ObjC1 &&
+        CheckObjCBridgeRelatedConversions(Loc, DstType, SrcType, SrcExpr))
+      return true;
     DiagKind = diag::err_typecheck_convert_incompatible;
     ConvHints.tryToFixConversion(SrcExpr, SrcType, DstType, *this);
     MayHaveConvFixit = true;
@@ -11180,37 +11195,34 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
 
   // Note that this declaration has been used.
   if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(Func)) {
+    Constructor = cast<CXXConstructorDecl>(Constructor->getFirstDecl());
     if (Constructor->isDefaulted() && !Constructor->isDeleted()) {
       if (Constructor->isDefaultConstructor()) {
         if (Constructor->isTrivial())
           return;
-        if (!Constructor->isUsed(false))
-          DefineImplicitDefaultConstructor(Loc, Constructor);
+        DefineImplicitDefaultConstructor(Loc, Constructor);
       } else if (Constructor->isCopyConstructor()) {
-        if (!Constructor->isUsed(false))
-          DefineImplicitCopyConstructor(Loc, Constructor);
+        DefineImplicitCopyConstructor(Loc, Constructor);
       } else if (Constructor->isMoveConstructor()) {
-        if (!Constructor->isUsed(false))
-          DefineImplicitMoveConstructor(Loc, Constructor);
+        DefineImplicitMoveConstructor(Loc, Constructor);
       }
     } else if (Constructor->getInheritedConstructor()) {
-      if (!Constructor->isUsed(false))
-        DefineInheritingConstructor(Loc, Constructor);
+      DefineInheritingConstructor(Loc, Constructor);
     }
 
     MarkVTableUsed(Loc, Constructor->getParent());
   } else if (CXXDestructorDecl *Destructor =
                  dyn_cast<CXXDestructorDecl>(Func)) {
-    if (Destructor->isDefaulted() && !Destructor->isDeleted() &&
-        !Destructor->isUsed(false))
+    Destructor = cast<CXXDestructorDecl>(Destructor->getFirstDecl());
+    if (Destructor->isDefaulted() && !Destructor->isDeleted())
       DefineImplicitDestructor(Loc, Destructor);
     if (Destructor->isVirtual())
       MarkVTableUsed(Loc, Destructor->getParent());
   } else if (CXXMethodDecl *MethodDecl = dyn_cast<CXXMethodDecl>(Func)) {
-    if (MethodDecl->isDefaulted() && !MethodDecl->isDeleted() &&
-        MethodDecl->isOverloadedOperator() &&
+    if (MethodDecl->isOverloadedOperator() &&
         MethodDecl->getOverloadedOperator() == OO_Equal) {
-      if (!MethodDecl->isUsed(false)) {
+      MethodDecl = cast<CXXMethodDecl>(MethodDecl->getFirstDecl());
+      if (MethodDecl->isDefaulted() && !MethodDecl->isDeleted()) {
         if (MethodDecl->isCopyAssignmentOperator())
           DefineImplicitCopyAssignment(Loc, MethodDecl);
         else
@@ -11218,7 +11230,8 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func) {
       }
     } else if (isa<CXXConversionDecl>(MethodDecl) &&
                MethodDecl->getParent()->isLambda()) {
-      CXXConversionDecl *Conversion = cast<CXXConversionDecl>(MethodDecl);
+      CXXConversionDecl *Conversion =
+          cast<CXXConversionDecl>(MethodDecl->getFirstDecl());
       if (Conversion->isLambdaToBlockPointerConversion())
         DefineImplicitLambdaToBlockPointerConversion(Loc, Conversion);
       else

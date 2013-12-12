@@ -41,8 +41,11 @@ def main():
                                    'introduced.')
   parser.add_argument('-i', action='store_true', default=False,
                       help='apply edits to files instead of displaying a diff')
-  parser.add_argument('-p', default=0,
+  parser.add_argument('-p', metavar='NUM', default=0,
                       help='strip the smallest prefix containing P slashes')
+  parser.add_argument('-regex', metavar='PATTERN', default=
+                      r'.*\.(cpp|cc|CPP|C|c\+\+|cxx|c|h|hpp|m|mm|inc|js)',
+                      help='custom pattern selecting file paths to reformat')
   parser.add_argument(
       '-style',
       help=
@@ -59,9 +62,7 @@ def main():
     if filename == None:
       continue
 
-    # FIXME: Add other types containing C++/ObjC code.
-    if not (filename.endswith(".cpp") or filename.endswith(".cc") or
-            filename.endswith(".h")):
+    if not re.match(args.regex, filename):
       continue
 
     match = re.search('^@@.*\+(\d+)(,(\d+))?', line)
@@ -85,11 +86,8 @@ def main():
     if args.style:
       command.extend(['-style', args.style])
     p = subprocess.Popen(command, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE,
-                         stdin=subprocess.PIPE)
+                         stderr=None, stdin=subprocess.PIPE)
     stdout, stderr = p.communicate()
-    if stderr:
-      print stderr
     if p.returncode != 0:
       sys.exit(p.returncode);
 
@@ -102,7 +100,7 @@ def main():
                                   '(before formatting)', '(after formatting)')
       diff_string = string.join(diff, '')
       if len(diff_string) > 0:
-        print diff_string
+        sys.stdout.write(diff_string)
 
 if __name__ == '__main__':
   main()

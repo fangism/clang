@@ -462,7 +462,7 @@ static const char *getLLVMArchSuffixForARM(StringRef CPU) {
     .Cases("arm1176jzf-s",  "mpcorenovfp",  "mpcore", "v6")
     .Cases("arm1156t2-s",  "arm1156t2f-s", "v6t2")
     .Cases("cortex-a5", "cortex-a7", "cortex-a8", "v7")
-    .Cases("cortex-a9", "cortex-a12", "cortex-a15", "v7")
+    .Cases("cortex-a9", "cortex-a12", "cortex-a15", "krait", "v7")
     .Cases("cortex-r4", "cortex-r5", "v7r")
     .Case("cortex-m0", "v6m")
     .Case("cortex-m3", "v7m")
@@ -497,6 +497,11 @@ static std::string getARMTargetCPU(const ArgList &Args,
   } else {
     // Otherwise, use the Arch from the triple.
     MArch = Triple.getArchName();
+  }
+
+  if (Triple.getOS() == llvm::Triple::NetBSD) {
+    if (MArch == "armv6")
+      return "arm1176jzf-s";
   }
 
   // Handle -march=native.
@@ -1594,7 +1599,7 @@ shouldUseExceptionTablesForObjCExceptions(const ObjCRuntime &runtime,
   if (runtime.isNonFragile())
     return true;
 
-  if (!Triple.isOSDarwin())
+  if (!Triple.isMacOSX())
     return false;
 
   return (!Triple.isMacOSXVersionLT(10,5) &&
@@ -2799,7 +2804,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     Args.AddLastArg(CmdArgs, options::OPT_objcmt_atomic_property);
     Args.AddLastArg(CmdArgs, options::OPT_objcmt_returns_innerpointer_property);
     Args.AddLastArg(CmdArgs, options::OPT_objcmt_ns_nonatomic_iosonly);
-    Args.AddLastArg(CmdArgs, options::OPT_objcmt_white_list_dir_path);
+    Args.AddLastArg(CmdArgs, options::OPT_objcmt_migrate_designated_init);
+    Args.AddLastArg(CmdArgs, options::OPT_objcmt_whitelist_dir_path);
   }
 
   // Add preprocessing options like -I, -D, etc. if we are using the
@@ -4632,11 +4638,11 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // If -no_integrated_as is used add -Q to the darwin assember driver to make
   // sure it runs its system assembler not clang's integrated assembler.
   // Applicable to darwin11+ and Xcode 4+.  darwin<10 lacked integrated-as.
-  // FIXME: grosbach: it would be better if option support were detected in 
-  // the chosen assembler.
+  // FIXME: at run-time detect assembler capabilities or rely on version
+  // information forwarded by -target-assembler-version (future)
   if (Args.hasArg(options::OPT_no_integrated_as)) {
-    const llvm::Triple& t(getToolChain().getTriple());
-    if (!(t.isMacOSX() && t.isMacOSXVersionLT(10, 7)))
+    const llvm::Triple &T(getToolChain().getTriple());
+    if (!(T.isMacOSX() && T.isMacOSXVersionLT(10, 7)))
       CmdArgs.push_back("-Q");
   }
 
@@ -5519,6 +5525,40 @@ void openbsd::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
                                      const char *LinkingOutput) const {
   ArgStringList CmdArgs;
 
+  // When building 32-bit code on OpenBSD/amd64, we have to explicitly
+  // instruct as in the base system to assemble 32-bit code.
+  if (getToolChain().getArch() == llvm::Triple::x86)
+    CmdArgs.push_back("--32");
+  else if (getToolChain().getArch() == llvm::Triple::ppc) {
+    CmdArgs.push_back("-mppc");
+    CmdArgs.push_back("-many");
+  } else if (getToolChain().getArch() == llvm::Triple::mips64 ||
+             getToolChain().getArch() == llvm::Triple::mips64el) {
+    StringRef CPUName;
+    StringRef ABIName;
+    getMipsCPUAndABI(Args, getToolChain().getTriple(), CPUName, ABIName);
+
+    CmdArgs.push_back("-mabi");
+    CmdArgs.push_back(getGnuCompatibleMipsABIName(ABIName).data());
+
+    if (getToolChain().getArch() == llvm::Triple::mips64)
+      CmdArgs.push_back("-EB");
+    else
+      CmdArgs.push_back("-EL");
+
+    Arg *LastPICArg = Args.getLastArg(options::OPT_fPIC, options::OPT_fno_PIC,
+                                      options::OPT_fpic, options::OPT_fno_pic,
+                                      options::OPT_fPIE, options::OPT_fno_PIE,
+                                      options::OPT_fpie, options::OPT_fno_pie);
+    if (LastPICArg &&
+        (LastPICArg->getOption().matches(options::OPT_fPIC) ||
+         LastPICArg->getOption().matches(options::OPT_fpic) ||
+         LastPICArg->getOption().matches(options::OPT_fPIE) ||
+         LastPICArg->getOption().matches(options::OPT_fpie))) {
+      CmdArgs.push_back("-KPIC");
+    }
+  }
+
   Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA,
                        options::OPT_Xassembler);
 
@@ -5551,6 +5591,11 @@ void openbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
   // and for "clang -w foo.o -o foo". Other warning options are already
   // handled somewhere else.
   Args.ClaimAllArgs(options::OPT_w);
+
+  if (getToolChain().getArch() == llvm::Triple::mips64)
+    CmdArgs.push_back("-EB");
+  else if (getToolChain().getArch() == llvm::Triple::mips64el)
+    CmdArgs.push_back("-EL");
 
   if ((!Args.hasArg(options::OPT_nostdlib)) &&
       (!Args.hasArg(options::OPT_shared))) {
@@ -6069,11 +6114,45 @@ void netbsd::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   if (getToolChain().getArch() == llvm::Triple::x86)
     CmdArgs.push_back("--32");
 
-  // Set byte order explicitly
-  if (getToolChain().getArch() == llvm::Triple::mips)
-    CmdArgs.push_back("-EB");
-  else if (getToolChain().getArch() == llvm::Triple::mipsel)
-    CmdArgs.push_back("-EL");
+  // Pass the target CPU to GNU as for ARM, since the source code might
+  // not have the correct .cpu annotation.
+  if (getToolChain().getArch() == llvm::Triple::arm) {
+    std::string MArch(getARMTargetCPU(Args, getToolChain().getTriple()));
+    CmdArgs.push_back(Args.MakeArgString("-mcpu=" + MArch));
+  }
+
+  if (getToolChain().getArch() == llvm::Triple::mips ||
+      getToolChain().getArch() == llvm::Triple::mipsel ||
+      getToolChain().getArch() == llvm::Triple::mips64 ||
+      getToolChain().getArch() == llvm::Triple::mips64el) {
+    StringRef CPUName;
+    StringRef ABIName;
+    getMipsCPUAndABI(Args, getToolChain().getTriple(), CPUName, ABIName);
+
+    CmdArgs.push_back("-march");
+    CmdArgs.push_back(CPUName.data());
+
+    CmdArgs.push_back("-mabi");
+    CmdArgs.push_back(getGnuCompatibleMipsABIName(ABIName).data());
+
+    if (getToolChain().getArch() == llvm::Triple::mips ||
+        getToolChain().getArch() == llvm::Triple::mips64)
+      CmdArgs.push_back("-EB");
+    else
+      CmdArgs.push_back("-EL");
+
+    Arg *LastPICArg = Args.getLastArg(options::OPT_fPIC, options::OPT_fno_PIC,
+                                      options::OPT_fpic, options::OPT_fno_pic,
+                                      options::OPT_fPIE, options::OPT_fno_PIE,
+                                      options::OPT_fpie, options::OPT_fno_pie);
+    if (LastPICArg &&
+        (LastPICArg->getOption().matches(options::OPT_fPIC) ||
+         LastPICArg->getOption().matches(options::OPT_fpic) ||
+         LastPICArg->getOption().matches(options::OPT_fPIE) ||
+         LastPICArg->getOption().matches(options::OPT_fpie))) {
+      CmdArgs.push_back("-KPIC");
+    }
+  }
 
   Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA,
                        options::OPT_Xassembler);
@@ -6248,7 +6327,16 @@ void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString("-mfloat-abi=" + ARMFloatABI));
 
     Args.AddLastArg(CmdArgs, options::OPT_march_EQ);
-    Args.AddLastArg(CmdArgs, options::OPT_mcpu_EQ);
+
+    // FIXME: remove krait check when GNU tools support krait cpu
+    // for now replace it with -march=armv7-a  to avoid a lower
+    // march from being picked in the absence of a cpu flag.
+    Arg *A;
+    if ((A = Args.getLastArg(options::OPT_mcpu_EQ)) &&
+      StringRef(A->getValue()) == "krait")
+        CmdArgs.push_back("-march=armv7-a");
+    else
+      Args.AddLastArg(CmdArgs, options::OPT_mcpu_EQ);
     Args.AddLastArg(CmdArgs, options::OPT_mfpu_EQ);
   } else if (getToolChain().getArch() == llvm::Triple::mips ||
              getToolChain().getArch() == llvm::Triple::mipsel ||
@@ -6597,8 +6685,8 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       if (OpenMP) {
         CmdArgs.push_back("-lgomp");
 
-        // FIXME: Exclude this for platforms whith libgomp that doesn't require
-        // librt. Most modern Linux platfroms require it, but some may not.
+        // FIXME: Exclude this for platforms with libgomp that don't require
+        // librt. Most modern Linux platforms require it, but some may not.
         CmdArgs.push_back("-lrt");
       }
 

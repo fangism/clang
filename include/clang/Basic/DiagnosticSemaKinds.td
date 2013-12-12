@@ -1941,8 +1941,6 @@ def err_only_annotate_after_access_spec : Error<
 
 def err_attribute_section_invalid_for_target : Error<
   "argument to 'section' attribute is not valid for this target: %0">;
-def err_attribute_section_local_variable : Error<
-  "'section' attribute is not valid on local variables">;
 def warn_mismatched_section : Warning<
   "section does not match previous declaration">, InGroup<Section>;
 
@@ -2037,7 +2035,9 @@ def warn_attribute_wrong_decl_type : Warning<
   "variables and fields|variables, data members and tag types|"
   "types and namespaces|Objective-C interfaces|methods and properties|"
   "struct or union|struct, union or class|types|"
-  "Objective-C instance methods|variables, functions and classes}1">,
+  "Objective-C instance methods|init methods of interface declarations|"
+  "variables, functions and classes|Objective-C protocols|"
+  "functions and global variables}1">,
   InGroup<IgnoredAttributes>;
 def err_attribute_wrong_decl_type : Error<
   "%0 attribute only applies to %select{functions|unions|"
@@ -2049,7 +2049,9 @@ def err_attribute_wrong_decl_type : Error<
   "variables and fields|variables, data members and tag types|"
   "types and namespaces|Objective-C interfaces|methods and properties|"
   "struct or union|struct, union or class|types|"
-  "Objective-C instance methods|variables, functions and classes}1">;
+  "Objective-C instance methods|init methods of interface declarations|"
+  "variables, functions and classes|Objective-C protocols|"
+  "functions and global variables}1">;
 def warn_type_attribute_wrong_type : Warning<
   "'%0' only applies to %select{function|pointer|"
   "Objective-C object or block pointer}1 types; type here is %2">,
@@ -2428,10 +2430,6 @@ def note_protocol_decl : Note<
   "protocol is declared here">;
 
 // objc_designated_initializer attribute diagnostics.
-def err_attr_objc_designated_not_init_family : Error<
-  "'objc_designated_initializer' only applies to methods of the init family">;
-def err_attr_objc_designated_not_interface : Error<
-  "'objc_designated_initializer' only applies to methods of interface declarations">;
 def warn_objc_designated_init_missing_super_call : Warning<
   "designated initializer missing a 'super' call to a designated initializer of the super class">,
   InGroup<ObjCDesignatedInit>;
@@ -2468,6 +2466,17 @@ def warn_objc_invalid_bridge : Warning<
 def warn_objc_invalid_bridge_to_cf : Warning<
   "%0 cannot bridge to %1">, InGroup<ObjCBridge>;
 
+// objc_bridge_related attribute diagnostics.
+def err_objc_bridged_related_invalid_class : Error<
+  "could not find Objective-C class %0 to convert %1 to %2">;
+def err_objc_bridged_related_invalid_class_name : Error<
+  "%0 must be name of an Objective-C class to be able to convert %1 to %2">;
+ def err_objc_bridged_related_unknown_method : Error<
+ "%0 cannot be directly converted to %1">;
+def err_objc_bridged_related_known_method : Error<
+ "%0 must be explicitly converted to %1; use %select{%objcclass2|%objcinstance2}3 "
+ "method for this conversion">;
+  
 // Function Parameter Semantic Analysis.
 def err_param_with_void_type : Error<"argument may not have 'void' type">;
 def err_void_only_param : Error<
@@ -3932,6 +3941,9 @@ def note_exits_cleanup : Note<
   "jump exits scope of variable with __attribute__((cleanup))">;
 def note_exits_dtor : Note<
   "jump exits scope of variable with non-trivial destructor">;
+def note_exits_temporary_dtor : Note<
+  "jump exits scope of lifetime-extended temporary with non-trivial "
+  "destructor">;
 def note_exits___block : Note<
   "jump exits scope of __block variable">;
 def note_exits_objc_try : Note<
@@ -4458,6 +4470,9 @@ def warn_member_extra_qualification : Warning<
   "extra qualification on member %0">, InGroup<Microsoft>;
 def err_member_extra_qualification : Error<
   "extra qualification on member %0">;
+def warn_namespace_member_extra_qualification : Warning<
+  "extra qualification on member %0">,
+  InGroup<DiagGroup<"extra-qualification">>;
 def err_member_qualification : Error<
   "non-friend class member %0 cannot have a qualified name">;  
 def note_member_def_close_match : Note<"member declaration nearly matches">;

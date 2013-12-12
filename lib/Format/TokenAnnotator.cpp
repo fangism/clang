@@ -529,6 +529,7 @@ private:
     if (CurrentToken != NULL) {
       determineTokenType(*CurrentToken);
       CurrentToken->BindingStrength = Contexts.back().BindingStrength;
+      CurrentToken->NestingLevel = Contexts.size() - 1;
     }
 
     if (CurrentToken != NULL)
@@ -1134,15 +1135,14 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   if (Left.is(tok::comma))
     return 1;
   if (Right.is(tok::l_square))
-    return 150;
+    return 250;
 
   if (Right.Type == TT_StartOfName || Right.is(tok::kw_operator)) {
     if (Line.First->is(tok::kw_for) && Right.PartOfMultiVariableDeclStmt)
       return 3;
     if (Left.Type == TT_StartOfName)
       return 20;
-    if (InFunctionDecl && Right.BindingStrength == 1)
-      // FIXME: Clean up hack of using BindingStrength to find top-level names.
+    if (InFunctionDecl && Right.NestingLevel == 0)
       return Style.PenaltyReturnTypeOnItsOwnLine;
     return 200;
   }
@@ -1293,9 +1293,12 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return Line.Type == LT_ObjCDecl ||
            Left.isOneOf(tok::kw_return, tok::kw_new, tok::kw_delete,
                         tok::semi) ||
-           (Style.SpaceAfterControlStatementKeyword &&
+           (Style.SpaceBeforeParens != FormatStyle::SBPO_Never &&
             Left.isOneOf(tok::kw_if, tok::kw_for, tok::kw_while, tok::kw_switch,
-                         tok::kw_catch));
+                         tok::kw_catch)) ||
+           (Style.SpaceBeforeParens == FormatStyle::SBPO_Always &&
+            Left.isOneOf(tok::identifier, tok::kw___attribute) &&
+            Line.Type != LT_PreprocessorDirective);
   }
   if (Left.is(tok::at) && Right.Tok.getObjCKeywordID() != tok::objc_not_keyword)
     return false;
@@ -1396,9 +1399,8 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     return true;
   } else if (Right.Previous->ClosesTemplateDeclaration &&
              Right.Previous->MatchingParen &&
-             Right.Previous->MatchingParen->BindingStrength == 1 &&
+             Right.Previous->MatchingParen->NestingLevel == 0 &&
              Style.AlwaysBreakTemplateDeclarations) {
-    // FIXME: Fix horrible hack of using BindingStrength to find top-level <>.
     return true;
   } else if (Right.Type == TT_CtorInitializerComma &&
              Style.BreakConstructorInitializersBeforeComma &&
