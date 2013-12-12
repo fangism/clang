@@ -342,8 +342,9 @@ public:
   }
   
   virtual bool IsObjCNonFragileABIDefault() const {
-    // Non-fragile ABI is default for everything but i386.
-    return getTriple().getArch() != llvm::Triple::x86;
+    // Non-fragile ABI is default for everything but i386 and ppc.
+    return (getTriple().getArch() != llvm::Triple::x86
+	    && getTriple().getArch() != llvm::Triple::ppc);
   }
 
   virtual bool UseObjCMixedDispatch() const {
@@ -407,17 +408,16 @@ public:
   /// }
 };
 
-/// Darwin_Generic_GCC - Generic Darwin tool chain using gcc.
-class LLVM_LIBRARY_VISIBILITY Darwin_Generic_GCC : public Generic_GCC {
+/// Darwin_Legacy - Toolchain using the older 'as' and 'ld' installation.
+class LLVM_LIBRARY_VISIBILITY DarwinLegacy : public DarwinClang {
 public:
-  Darwin_Generic_GCC(const Driver &D, const llvm::Triple &Triple,
+  DarwinLegacy(const Driver &D, const llvm::Triple &Triple,
                      const llvm::opt::ArgList &Args)
-      : Generic_GCC(D, Triple, Args) {}
+      : DarwinClang(D, Triple, Args) {}
 
-  std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
-                                          types::ID InputType) const;
+protected:
+  virtual Tool *buildAssembler() const;
 
-  virtual bool isPICDefault() const { return false; }
 };
 
 class LLVM_LIBRARY_VISIBILITY Generic_ELF : public Generic_GCC {

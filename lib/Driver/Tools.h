@@ -257,6 +257,20 @@ namespace darwin {
                               const char *LinkingOutput) const;
   };
 
+  class LLVM_LIBRARY_VISIBILITY AssembleWithAs: public DarwinTool  {
+  public:
+    AssembleWithAs(const ToolChain &TC) : DarwinTool("darwin::AssembleWithAs",
+                                               "assembler", TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const llvm::opt::ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+
   class LLVM_LIBRARY_VISIBILITY Link : public DarwinTool  {
     bool NeedsTempPath(const InputInfoList &Inputs) const;
     void AddLinkArgs(Compilation &C, const llvm::opt::ArgList &Args,
