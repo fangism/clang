@@ -52,13 +52,18 @@ enum OpKind {
   OpMla,
   OpMlal,
   OpMullHi,
+  OpMullHiN,
   OpMlalHi,
+  OpMlalHiN,
   OpMls,
   OpMlsl,
   OpMlslHi,
+  OpMlslHiN,
   OpMulN,
   OpMlaN,
   OpMlsN,
+  OpFMlaN,
+  OpFMlsN,
   OpMlalN,
   OpMlslN,
   OpMulLane,
@@ -126,8 +131,11 @@ enum OpKind {
   OpAbal,
   OpAbalHi,
   OpQDMullHi,
+  OpQDMullHiN,
   OpQDMlalHi,
+  OpQDMlalHiN,
   OpQDMlslHi,
+  OpQDMlslHiN,
   OpDiv,
   OpLongHi,
   OpNarrowHi,
@@ -146,7 +154,9 @@ enum OpKind {
   OpScalarQDMulHiLane,
   OpScalarQDMulHiLaneQ,
   OpScalarQRDMulHiLane,
-  OpScalarQRDMulHiLaneQ
+  OpScalarQRDMulHiLaneQ,
+  OpScalarGetLane,
+  OpScalarSetLane
 };
 
 enum ClassKind {
@@ -224,13 +234,18 @@ public:
     OpMap["OP_MLA"]   = OpMla;
     OpMap["OP_MLAL"]  = OpMlal;
     OpMap["OP_MULLHi"]  = OpMullHi;
+    OpMap["OP_MULLHi_N"]  = OpMullHiN;
     OpMap["OP_MLALHi"]  = OpMlalHi;
+    OpMap["OP_MLALHi_N"]  = OpMlalHiN;
     OpMap["OP_MLS"]   = OpMls;
     OpMap["OP_MLSL"]  = OpMlsl;
     OpMap["OP_MLSLHi"] = OpMlslHi;
+    OpMap["OP_MLSLHi_N"] = OpMlslHiN;
     OpMap["OP_MUL_N"] = OpMulN;
     OpMap["OP_MLA_N"] = OpMlaN;
     OpMap["OP_MLS_N"] = OpMlsN;
+    OpMap["OP_FMLA_N"] = OpFMlaN;
+    OpMap["OP_FMLS_N"] = OpFMlsN;
     OpMap["OP_MLAL_N"] = OpMlalN;
     OpMap["OP_MLSL_N"] = OpMlslN;
     OpMap["OP_MUL_LN"]= OpMulLane;
@@ -298,8 +313,11 @@ public:
     OpMap["OP_ABAL"]  = OpAbal;
     OpMap["OP_ABALHi"] = OpAbalHi;
     OpMap["OP_QDMULLHi"] = OpQDMullHi;
+    OpMap["OP_QDMULLHi_N"] = OpQDMullHiN;
     OpMap["OP_QDMLALHi"] = OpQDMlalHi;
+    OpMap["OP_QDMLALHi_N"] = OpQDMlalHiN;
     OpMap["OP_QDMLSLHi"] = OpQDMlslHi;
+    OpMap["OP_QDMLSLHi_N"] = OpQDMlslHiN;
     OpMap["OP_DIV"] = OpDiv;
     OpMap["OP_LONG_HI"] = OpLongHi;
     OpMap["OP_NARROW_HI"] = OpNarrowHi;
@@ -319,7 +337,8 @@ public:
     OpMap["OP_SCALAR_QDMULH_LNQ"] = OpScalarQDMulHiLaneQ;
     OpMap["OP_SCALAR_QRDMULH_LN"] = OpScalarQRDMulHiLane;
     OpMap["OP_SCALAR_QRDMULH_LNQ"] = OpScalarQRDMulHiLaneQ;
-
+    OpMap["OP_SCALAR_GET_LN"] = OpScalarGetLane;
+    OpMap["OP_SCALAR_SET_LN"] = OpScalarSetLane;
 
     Record *SI = R.getClass("SInst");
     Record *II = R.getClass("IInst");
@@ -531,6 +550,10 @@ static char ModType(const char mod, char type, bool &quad, bool &poly,
       if (type == 'h')
         quad = true;
       type = 'f';
+      usgn = false;
+      break;
+    case 'F':
+      type = 'd';
       usgn = false;
       break;
     case 'g':
@@ -765,7 +788,7 @@ static std::string BuiltinTypeString(const char mod, StringRef typestr,
       return "vv*"; // void result with void* first argument
     if (mod == 'f' || (ck != ClassB && type == 'f'))
       return quad ? "V4f" : "V2f";
-    if (ck != ClassB && type == 'd')
+    if (mod == 'F' || (ck != ClassB && type == 'd'))
       return quad ? "V2d" : "V1d";
     if (ck != ClassB && type == 's')
       return quad ? "V8s" : "V4s";
@@ -787,7 +810,7 @@ static std::string BuiltinTypeString(const char mod, StringRef typestr,
 
   if (mod == 'f' || (ck != ClassB && type == 'f'))
     return quad ? "V4f" : "V2f";
-  if (ck != ClassB && type == 'd')
+  if (mod == 'F' || (ck != ClassB && type == 'd'))
     return quad ? "V2d" : "V1d";
   if (ck != ClassB && type == 's')
     return quad ? "V8s" : "V4s";
@@ -910,7 +933,8 @@ static bool endsWith_xN(std::string const &name) {
 /// Insert proper 'b' 'h' 's' 'd' if prefix 'S' is used.
 static std::string MangleName(const std::string &name, StringRef typestr,
                               ClassKind ck) {
-  if (name == "vcvt_f32_f16" || name == "vcvt_f32_f64")
+  if (name == "vcvt_f32_f16" || name == "vcvt_f32_f64" ||
+      name == "vcvt_f64_f32")
     return name;
 
   bool quad = false;
@@ -1088,6 +1112,7 @@ static void NormalizeProtoForRegisterPatternCreation(const std::string &Name,
     switch (Proto[i]) {
     case 'u':
     case 'f':
+    case 'F':
     case 'd':
     case 's':
     case 'x':
@@ -1650,6 +1675,14 @@ static std::string GenOpString(const std::string &name, OpKind op,
   case OpMul:
     s += "__a * __b;";
     break;
+  case OpFMlaN:
+    s += MangleName("vfma", typestr, ClassS);
+    s += "(__a, __b, " + Duplicate(nElts,typestr, "__c") + ");";
+    break;
+  case OpFMlsN:
+    s += MangleName("vfms", typestr, ClassS);
+    s += "(__a, __b, " + Duplicate(nElts,typestr, "__c") + ");";
+    break;
   case OpMullLane:
     s += MangleName("vmull", typestr, ClassS) + "(__a, " +
       SplatLane(nElts, "__b", "__c") + ");";
@@ -1685,9 +1718,17 @@ static std::string GenOpString(const std::string &name, OpKind op,
   case OpMullHi:
     s += Gen2OpWith2High(typestr, "vmull", "__a", "__b");
     break;
+  case OpMullHiN:
+    s += MangleName("vmull_n", typestr, ClassS);
+    s += "(" + GetHigh("__a", typestr) + ", __b);";
+    return s;
   case OpMlalHi:
     s += Gen3OpWith2High(typestr, "vmlal", "__a", "__b", "__c");
     break;
+  case OpMlalHiN:
+    s += MangleName("vmlal_n", typestr, ClassS);
+    s += "(__a, " + GetHigh("__b", typestr) + ", __c);";
+    return s;
   case OpMlsN:
     s += "__a - (__b * " + Duplicate(nElts, typestr, "__c") + ");";
     break;
@@ -1726,6 +1767,10 @@ static std::string GenOpString(const std::string &name, OpKind op,
     break;
   case OpMlslHi:
     s += Gen3OpWith2High(typestr, "vmlsl", "__a", "__b", "__c");
+    break;
+  case OpMlslHiN:
+    s += MangleName("vmlsl_n", typestr, ClassS);
+    s += "(__a, " + GetHigh("__b", typestr) + ", __c);";
     break;
   case OpQDMullLane:
     s += MangleName("vqdmull", typestr, ClassS) + "(__a, " +
@@ -1993,12 +2038,24 @@ static std::string GenOpString(const std::string &name, OpKind op,
   case OpQDMullHi:
     s += Gen2OpWith2High(typestr, "vqdmull", "__a", "__b");
     break;
+  case OpQDMullHiN:
+    s += MangleName("vqdmull_n", typestr, ClassS);
+    s += "(" + GetHigh("__a", typestr) + ", __b);";
+    return s;
   case OpQDMlalHi:
     s += Gen3OpWith2High(typestr, "vqdmlal", "__a", "__b", "__c");
     break;
+  case OpQDMlalHiN:
+    s += MangleName("vqdmlal_n", typestr, ClassS);
+    s += "(__a, " + GetHigh("__b", typestr) + ", __c);";
+    return s;
   case OpQDMlslHi:
     s += Gen3OpWith2High(typestr, "vqdmlsl", "__a", "__b", "__c");
     break;
+  case OpQDMlslHiN:
+    s += MangleName("vqdmlsl_n", typestr, ClassS);
+    s += "(__a, " + GetHigh("__b", typestr) + ", __c);";
+    return s;
   case OpDiv:
     s += "__a / __b;";
     break;
@@ -2155,6 +2212,34 @@ static std::string GenOpString(const std::string &name, OpKind op,
     "vgetq_lane_" + typeCode + "(__b, __c));";
     break;
   }
+  case OpScalarGetLane:{
+    std::string typeCode = "";
+    InstructionTypeCode(typestr, ClassS, quad, typeCode);
+    if (quad) {
+     s += "int16x8_t __a1 = vreinterpretq_s16_f16(__a);\\\n";
+     s += "  vgetq_lane_s16(__a1, __b);";
+    } else {
+     s += "int16x4_t __a1 = vreinterpret_s16_f16(__a);\\\n";
+     s += "  vget_lane_s16(__a1, __b);";
+    }
+    break;
+  }
+  case OpScalarSetLane:{
+    std::string typeCode = "";
+    InstructionTypeCode(typestr, ClassS, quad, typeCode);
+    s += "int16_t __a1 = (int16_t)__a;\\\n";
+    if (quad) {
+     s += "  int16x8_t __b1 = vreinterpretq_s16_f16(b);\\\n";
+     s += "  int16x8_t __b2 = vsetq_lane_s16(__a1, __b1, __c);\\\n";
+     s += "  vreinterpretq_f16_s16(__b2);";
+    } else {
+     s += "  int16x4_t __b1 = vreinterpret_s16_f16(b);\\\n";
+     s += "  int16x4_t __b2 = vset_lane_s16(__a1, __b1, __c);\\\n";
+     s += "  vreinterpret_f16_s16(__b2);";
+    }
+    break;
+  }
+
   default:
     PrintFatalError("unknown OpKind!");
   }
@@ -2164,7 +2249,7 @@ static std::string GenOpString(const std::string &name, OpKind op,
 static unsigned GetNeonEnum(const std::string &proto, StringRef typestr) {
   unsigned mod = proto[0];
 
-  if (mod == 'v' || mod == 'f')
+  if (mod == 'v' || mod == 'f' || mod == 'F')
     mod = proto[1];
 
   bool quad = false;
@@ -2210,10 +2295,17 @@ static unsigned GetNeonEnum(const std::string &proto, StringRef typestr) {
   return Flags.getFlags();
 }
 
+// We don't check 'a' in this function, because for builtin function the
+// argument matching to 'a' uses a vector type splatted from a scalar type.
 static bool ProtoHasScalar(const std::string proto)
 {
   return (proto.find('s') != std::string::npos
-          || proto.find('r') != std::string::npos);
+          || proto.find('z') != std::string::npos
+          || proto.find('r') != std::string::npos
+          || proto.find('b') != std::string::npos
+          || proto.find('$') != std::string::npos
+          || proto.find('y') != std::string::npos
+          || proto.find('o') != std::string::npos);
 }
 
 // Generate the definition for this intrinsic, e.g. __builtin_neon_cls(a)
@@ -2783,6 +2875,8 @@ NeonEmitter::genIntrinsicRangeCheckCode(raw_ostream &OS,
       PrintFatalError(R->getLoc(), "Builtin has no class kind");
 
     ClassKind ck = ClassMap[R->getSuperClasses()[1]];
+    if (!ProtoHasScalar(Proto))
+      ck = ClassB;
 
     // Do not include AArch64 range checks if not generating code for AArch64.
     bool isA64 = R->getValueAsBit("isA64");
@@ -2819,19 +2913,21 @@ NeonEmitter::genIntrinsicRangeCheckCode(raw_ostream &OS,
             name.find("cvt") != std::string::npos)
           rangestr = "l = 1; ";
 
-        rangestr += "u = " +
-          utostr(RangeScalarShiftImm(Proto[immPos - 1], TypeVec[ti]));
-      } else if (!ProtoHasScalar(Proto)) {
+        unsigned upBound = RangeScalarShiftImm(Proto[immPos - 1], TypeVec[ti]);
+        // Narrow shift has half the upper bound
+        if (R->getValueAsBit("isScalarNarrowShift"))
+          upBound /= 2;
+
+        rangestr += "u = " + utostr(upBound);
+      } else if (R->getValueAsBit("isShift")) {
         // Builtins which are overloaded by type will need to have their upper
         // bound computed at Sema time based on the type constant.
-        ck = ClassB;
-        if (R->getValueAsBit("isShift")) {
-          shiftstr = ", true";
+        shiftstr = ", true";
 
-          // Right shifts have an 'r' in the name, left shifts do not.
-          if (name.find('r') != std::string::npos)
-            rangestr = "l = 1; ";
-        }
+        // Right shifts have an 'r' in the name, left shifts do not.
+        if (name.find('r') != std::string::npos)
+          rangestr = "l = 1; ";
+
         rangestr += "u = RFT(TV" + shiftstr + ")";
       } else {
         // The immediate generally refers to a lane in the preceding argument.
