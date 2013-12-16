@@ -4974,7 +4974,8 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
   // we follow suite for ease of comparison.
   AddLinkArgs(C, Args, CmdArgs, Inputs);
 
-  Args.AddAllArgs(CmdArgs, options::OPT_B);
+  // if 'gcc/g++' are used to drive the linker, but not if ld is called directly
+  // Args.AddAllArgs(CmdArgs, options::OPT_B);
   Args.AddAllArgs(CmdArgs, options::OPT_d_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_s);
   Args.AddAllArgs(CmdArgs, options::OPT_t);
