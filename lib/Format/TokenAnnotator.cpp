@@ -367,7 +367,7 @@ private:
       if (!parseParens())
         return false;
       if (Line.MustBeDeclaration && Contexts.size() == 1 &&
-          !Contexts.back().IsExpression)
+          !Contexts.back().IsExpression && Line.First->Type != TT_ObjCProperty)
         Line.MightBeFunctionDecl = true;
       break;
     case tok::l_square:
@@ -605,12 +605,17 @@ private:
           Previous->Type = TT_PointerOrReference;
         }
       }
-    } else if (Current.isOneOf(tok::kw_return, tok::kw_throw) ||
-               (Current.is(tok::l_paren) && !Line.MustBeDeclaration &&
-                !Line.InPPDirective &&
-                (!Current.Previous ||
-                 !Current.Previous->isOneOf(tok::kw_for, tok::kw_catch)))) {
+    } else if (Current.isOneOf(tok::kw_return, tok::kw_throw)) {
       Contexts.back().IsExpression = true;
+    } else if (Current.is(tok::l_paren) && !Line.MustBeDeclaration &&
+               !Line.InPPDirective) {
+      bool ParametersOfFunctionType =
+          Current.Previous && Current.Previous->is(tok::r_paren) &&
+          Current.Previous->MatchingParen &&
+          Current.Previous->MatchingParen->Type == TT_FunctionTypeLParen;
+      bool IsForOrCatch = Current.Previous &&
+                          Current.Previous->isOneOf(tok::kw_for, tok::kw_catch);
+      Contexts.back().IsExpression = !ParametersOfFunctionType && !IsForOrCatch;
     } else if (Current.isOneOf(tok::r_paren, tok::greater, tok::comma)) {
       for (FormatToken *Previous = Current.Previous;
            Previous && Previous->isOneOf(tok::star, tok::amp);
@@ -710,6 +715,11 @@ private:
         if (PreviousNoComment &&
             PreviousNoComment->isOneOf(tok::comma, tok::l_brace))
           Current.Type = TT_DesignatedInitializerPeriod;
+      } else if (Current.isOneOf(tok::identifier, tok::kw_const) &&
+                 Line.MightBeFunctionDecl && Contexts.size() == 1) {
+        // Line.MightBeFunctionDecl can only be true after the parentheses of a
+        // function declaration have been found.
+        Current.Type = TT_TrailingAnnotation;
       }
     }
   }
@@ -1166,11 +1176,13 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     return 150;
   }
 
-  // Breaking before a trailing 'const' or not-function-like annotation is bad.
-  if (Left.is(tok::r_paren) && Line.Type != LT_ObjCProperty &&
-      (Right.is(tok::kw_const) || (Right.is(tok::identifier) && Right.Next &&
-                                   Right.Next->isNot(tok::l_paren))))
-    return 100;
+  if (Right.Type == TT_TrailingAnnotation && Right.Next &&
+      Right.Next->isNot(tok::l_paren)) {
+    // Breaking before a trailing annotation is bad unless it is function-like.
+    // Use a slightly higher penalty after ")" so that annotations like
+    // "const override" are kept together.
+    return Left.is(tok::r_paren) ? 100 : 120;
+  }
 
   // In for-loops, prefer breaking at ',' and ';'.
   if (Line.First->is(tok::kw_for) && Left.is(tok::equal))
@@ -1402,7 +1414,8 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
              Right.Previous->MatchingParen->NestingLevel == 0 &&
              Style.AlwaysBreakTemplateDeclarations) {
     return true;
-  } else if (Right.Type == TT_CtorInitializerComma &&
+  } else if ((Right.Type == TT_CtorInitializerComma ||
+              Right.Type == TT_CtorInitializerColon) &&
              Style.BreakConstructorInitializersBeforeComma &&
              !Style.ConstructorInitializerAllOnOneLineOrOnePerLine) {
     return true;
@@ -1410,7 +1423,14 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
              Right.Previous->isNot(tok::r_brace) && Right.isNot(tok::r_brace)) {
     return true;
   } else if (Right.is(tok::l_brace) && (Right.BlockKind == BK_Block)) {
-    return Style.BreakBeforeBraces == FormatStyle::BS_Allman;
+    return Style.BreakBeforeBraces == FormatStyle::BS_Allman ||
+           Style.BreakBeforeBraces == FormatStyle::BS_GNU;
+  } else if (Right.is(tok::string_literal) &&
+             Right.TokenText.startswith("R\"")) {
+    // Raw string literals are special wrt. line breaks. The author has made a
+    // deliberate choice and might have aligned the contents of the string
+    // literal accordingly. Thus, we try keep existing line breaks.
+    return Right.NewlinesBefore > 0;
   }
   return false;
 }

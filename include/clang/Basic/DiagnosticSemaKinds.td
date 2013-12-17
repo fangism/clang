@@ -551,8 +551,6 @@ def err_inconsistent_ivar_count : Error<
   "inconsistent number of instance variables specified">;
 def warn_undef_method_impl : Warning<"method definition for %0 not found">,
   InGroup<DiagGroup<"incomplete-implementation">>;
-def note_required_for_protocol_at : 
-  Note<"required for direct or indirect protocol %0">;
 
 def warn_conflicting_overriding_ret_types : Warning<
   "conflicting return type in "
@@ -701,8 +699,8 @@ def warn_owning_getter_rule : Warning<
   " convention for returning 'owned' objects">,
   InGroup<DiagGroup<"objc-property-matches-cocoa-ownership-rule">>;
 def warn_auto_synthesizing_protocol_property :Warning<
-  "auto property synthesis will not synthesize property"
-  " declared in a protocol">,
+  "auto property synthesis will not synthesize property %0"
+  " declared in protocol %1">,
   InGroup<DiagGroup<"objc-protocol-property-synthesis">>;
 def warn_no_autosynthesis_shared_ivar_property : Warning <
   "auto property synthesis will not synthesize property "
@@ -822,9 +820,6 @@ def error_dynamic_property_ivar_decl : Error<
 def error_duplicate_ivar_use : Error<
   "synthesized properties %0 and %1 both claim instance variable %2">;
 def error_property_implemented : Error<"property %0 is already implemented">;
-def warn_objc_property_attr_mutually_exclusive : Warning<
-  "property attributes '%0' and '%1' are mutually exclusive">,
-  InGroup<ReadOnlySetterAttrs>, DefaultIgnore;
 def warn_objc_missing_super_call : Warning<
   "method possibly missing a [super %0] call">,
   InGroup<ObjCMissingSuperCalls>;
@@ -852,7 +847,7 @@ def warn_unimplemented_selector:  Warning<
 def warning_multiple_selectors: Warning<
   "multiple selectors named %0 found">, InGroup<SelectorTypeMismatch>, DefaultIgnore;
 def warn_unimplemented_protocol_method : Warning<
-  "method %0 in protocol not implemented">, InGroup<Protocol>;
+  "method %0 in protocol %1 not implemented">, InGroup<Protocol>;
 
 // C++ declarations
 def err_static_assert_expression_is_not_constant : Error<
@@ -2471,8 +2466,6 @@ def err_objc_bridged_related_invalid_class : Error<
   "could not find Objective-C class %0 to convert %1 to %2">;
 def err_objc_bridged_related_invalid_class_name : Error<
   "%0 must be name of an Objective-C class to be able to convert %1 to %2">;
- def err_objc_bridged_related_unknown_method : Error<
- "%0 cannot be directly converted to %1">;
 def err_objc_bridged_related_known_method : Error<
  "%0 must be explicitly converted to %1; use %select{%objcclass2|%objcinstance2}3 "
  "method for this conversion">;
@@ -5750,9 +5743,6 @@ def note_inequality_comparison_to_or_assign : Note<
 
 def err_incomplete_type_used_in_type_trait_expr : Error<
   "incomplete type %0 used in type trait expression">;
-def err_type_trait_arity : Error<
-  "type trait requires %0%select{| or more}1 argument%select{|s}2; have "
-  "%3 argument%s3">;
   
 def err_dimension_expr_not_constant_integer : Error<
   "dimension expression does not evaluate to a constant unsigned int">;
@@ -6731,6 +6721,8 @@ def err_wrong_sampler_addressspace: Error<
 def err_opencl_global_invalid_addr_space : Error<
   "global variables must have a constant address space qualifier">;
 def err_opencl_no_main : Error<"%select{function|kernel}0 cannot be called 'main'">;
+def err_opencl_kernel_attr :
+  Error<"attribute '%0' can only be applied to a kernel function">;
 } // end of sema category
 
 let CategoryName = "OpenMP Issue" in {

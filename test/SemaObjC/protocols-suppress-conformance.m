@@ -18,10 +18,29 @@ __attribute__((objc_protocol_requires_explicit_implementation))
 
 // This class subclasses ClassA (which adopts 'Protocol'),
 // but does not provide the needed implementation.
-@interface ClassB : ClassA <Protocol> // expected-note {{required for direct or indirect protocol 'Protocol'}}
+@interface ClassB : ClassA <Protocol>
 @end
 
-@implementation ClassB // expected-warning {{method 'theBestOfTimes' in protocol not implemented}}
+@implementation ClassB // expected-warning {{method 'theBestOfTimes' in protocol 'Protocol' not implemented}}
+@end
+
+// Test that inherited protocols do not get the explicit conformance requirement.
+@protocol Inherited
+- (void) fairIsFoul;
+@end
+
+__attribute__((objc_protocol_requires_explicit_implementation))
+@protocol Derived <Inherited>
+- (void) foulIsFair; // expected-note {{method 'foulIsFair' declared here}}
+@end
+
+@interface ClassC <Inherited>
+@end
+
+@interface ClassD : ClassC <Derived>
+@end
+
+@implementation ClassD // expected-warning {{method 'foulIsFair' in protocol 'Derived' not implemented}}
 @end
 
 // Test that the attribute is used correctly.
@@ -34,4 +53,50 @@ __attribute__((objc_protocol_requires_explicit_implementation)) // expected-erro
 
 __attribute__((objc_protocol_requires_explicit_implementation)) // expected-error {{attribute only applies to Objective-C protocols}}
 int x;
+
+// Test that inherited protocols with the attribute
+// are treated properly.
+__attribute__((objc_protocol_requires_explicit_implementation))
+@protocol ProtocolA
+@required
+- (void)rlyeh;
+- (void)innsmouth;
+@end
+
+@protocol ProtocolB <ProtocolA>
+@required
+- (void)dunwich;
+- (id)innsmouth;
+@end
+
+@protocol ProtocolC
+@required
+- (void)rlyeh;
+- (void)innsmouth;
+- (void)dunwich;
+@end
+
+@interface MyObject <ProtocolC>
+@end
+
+@interface MyLovecraft <ProtocolA>
+@end
+
+@interface MyShoggoth : MyLovecraft <ProtocolB>
+@end
+
+@implementation MyObject
+- (void)innsmouth {}
+- (void)rlyeh {}
+- (void)dunwich {}
+@end
+
+@implementation MyLovecraft
+- (void)innsmouth {}
+- (void)rlyeh {}
+@end
+
+@implementation MyShoggoth
+- (void)dunwich {}
+@end
 

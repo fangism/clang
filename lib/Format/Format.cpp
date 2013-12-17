@@ -68,6 +68,7 @@ template <> struct ScalarEnumerationTraits<FormatStyle::BraceBreakingStyle> {
     IO.enumCase(Value, "Linux", FormatStyle::BS_Linux);
     IO.enumCase(Value, "Stroustrup", FormatStyle::BS_Stroustrup);
     IO.enumCase(Value, "Allman", FormatStyle::BS_Allman);
+    IO.enumCase(Value, "GNU", FormatStyle::BS_GNU);
   }
 };
 
@@ -359,7 +360,7 @@ FormatStyle getWebKitStyle() {
 FormatStyle getGNUStyle() {
   FormatStyle Style = getLLVMStyle();
   Style.BreakBeforeBinaryOperators = true;
-  Style.BreakBeforeBraces = FormatStyle::BS_Allman;
+  Style.BreakBeforeBraces = FormatStyle::BS_GNU;
   Style.BreakBeforeTernaryOperators = true;
   Style.ColumnLimit = 79;
   Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
@@ -454,13 +455,12 @@ public:
 
   /// \brief Formats the line starting at \p State, simply keeping all of the
   /// input's line breaking decisions.
-  void format(unsigned FirstIndent, const AnnotatedLine *Line,
-              bool LineIsMerged) {
+  void format(unsigned FirstIndent, const AnnotatedLine *Line) {
     LineState State =
         Indenter->getInitialState(FirstIndent, Line, /*DryRun=*/false);
     while (State.NextToken != NULL) {
       bool Newline =
-          (!LineIsMerged && Indenter->mustBreak(State)) ||
+          Indenter->mustBreak(State) ||
           (Indenter->canBreak(State) && State.NextToken->NewlinesBefore > 0);
       Indenter->addTokenToState(State, Newline, /*DryRun=*/false);
     }
@@ -561,7 +561,8 @@ private:
       SmallVectorImpl<AnnotatedLine *>::const_iterator E, unsigned Limit) {
     if (Limit == 0)
       return 0;
-    if (Style.BreakBeforeBraces == FormatStyle::BS_Allman &&
+    if ((Style.BreakBeforeBraces == FormatStyle::BS_Allman ||
+         Style.BreakBeforeBraces == FormatStyle::BS_GNU) &&
         I[1]->First->is(tok::l_brace))
       return 0;
     if (I[1]->InPPDirective != (*I)->InPPDirective ||
@@ -726,8 +727,7 @@ public:
           // FIXME: Implement nested blocks for ColumnLimit = 0.
           NoColumnLimitFormatter Formatter(Indenter);
           if (!DryRun)
-            Formatter.format(Indent, &TheLine,
-                             /*LineIsMerged=*/MergedLines > 0);
+            Formatter.format(Indent, &TheLine);
         } else {
           Penalty += format(TheLine, Indent, DryRun);
         }

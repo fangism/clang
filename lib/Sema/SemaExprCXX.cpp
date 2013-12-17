@@ -3595,24 +3595,6 @@ ExprResult Sema::BuildUnaryTypeTrait(UnaryTypeTrait UTT,
                                                 RParen, Context.BoolTy));
 }
 
-ExprResult Sema::ActOnBinaryTypeTrait(BinaryTypeTrait BTT,
-                                      SourceLocation KWLoc,
-                                      ParsedType LhsTy,
-                                      ParsedType RhsTy,
-                                      SourceLocation RParen) {
-  TypeSourceInfo *LhsTSInfo;
-  QualType LhsT = GetTypeFromParser(LhsTy, &LhsTSInfo);
-  if (!LhsTSInfo)
-    LhsTSInfo = Context.getTrivialTypeSourceInfo(LhsT);
-
-  TypeSourceInfo *RhsTSInfo;
-  QualType RhsT = GetTypeFromParser(RhsTy, &RhsTSInfo);
-  if (!RhsTSInfo)
-    RhsTSInfo = Context.getTrivialTypeSourceInfo(RhsT);
-
-  return BuildBinaryTypeTrait(BTT, KWLoc, LhsTSInfo, RhsTSInfo, RParen);
-}
-
 /// \brief Determine whether T has a non-trivial Objective-C lifetime in
 /// ARC mode.
 static bool hasNontrivialObjCLifetime(QualType T) {
@@ -3632,9 +3614,16 @@ static bool hasNontrivialObjCLifetime(QualType T) {
   llvm_unreachable("Unknown ObjC lifetime qualifier");
 }
 
+static bool EvaluateBinaryTypeTrait(Sema &Self, TypeTrait BTT, QualType LhsT,
+                                    QualType RhsT, SourceLocation KeyLoc);
+
 static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
                               ArrayRef<TypeSourceInfo *> Args,
                               SourceLocation RParenLoc) {
+  if (Kind <= BTT_Last)
+    return EvaluateBinaryTypeTrait(S, Kind, Args[0]->getType(),
+                                   Args[1]->getType(), RParenLoc);
+
   switch (Kind) {
   case clang::TT_IsTriviallyConstructible: {
     // C++11 [meta.unary.prop]:
@@ -3650,11 +3639,7 @@ static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
     //   variable t:
     //
     //     T t(create<Args>()...);
-    if (Args.empty()) {
-      S.Diag(KWLoc, diag::err_type_trait_arity)
-        << 1 << 1 << 1 << (int)Args.size();
-      return false;
-    }
+    assert(!Args.empty());
 
     // Precondition: T and all types in the parameter pack Args shall be
     // complete types, (possibly cv-qualified) void, or arrays of
@@ -3713,6 +3698,7 @@ static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
     // calls.
     return !Result.get()->hasNonTrivialCall(S.Context);
   }
+    default: llvm_unreachable("not a TT");
   }
   
   return false;
@@ -3721,6 +3707,17 @@ static bool evaluateTypeTrait(Sema &S, TypeTrait Kind, SourceLocation KWLoc,
 ExprResult Sema::BuildTypeTrait(TypeTrait Kind, SourceLocation KWLoc, 
                                 ArrayRef<TypeSourceInfo *> Args, 
                                 SourceLocation RParenLoc) {
+  QualType ResultType = Context.BoolTy;
+  // __builtin_types_compatible_p is a GNU C extension, not a C++ type trait.
+  if (Kind == BTT_TypeCompatible) {
+    ResultType = Context.IntTy;
+    if (getLangOpts().CPlusPlus) {
+      Diag(KWLoc, diag::err_types_compatible_p_in_cplusplus)
+          << SourceRange(KWLoc, RParenLoc);
+      return ExprError();
+    }
+  }
+
   bool Dependent = false;
   for (unsigned I = 0, N = Args.size(); I != N; ++I) {
     if (Args[I]->getType()->isDependentType()) {
@@ -3728,17 +3725,17 @@ ExprResult Sema::BuildTypeTrait(TypeTrait Kind, SourceLocation KWLoc,
       break;
     }
   }
-  
-  bool Value = false;
+
+  bool Result = false;
   if (!Dependent)
-    Value = evaluateTypeTrait(*this, Kind, KWLoc, Args, RParenLoc);
-  
-  return TypeTraitExpr::Create(Context, Context.BoolTy, KWLoc, Kind,
-                               Args, RParenLoc, Value);
+    Result = evaluateTypeTrait(*this, Kind, KWLoc, Args, RParenLoc);
+
+  return TypeTraitExpr::Create(Context, ResultType, KWLoc, Kind, Args,
+                               RParenLoc, Result);
 }
 
-ExprResult Sema::ActOnTypeTrait(TypeTrait Kind, SourceLocation KWLoc, 
-                                ArrayRef<ParsedType> Args, 
+ExprResult Sema::ActOnTypeTrait(TypeTrait Kind, SourceLocation KWLoc,
+                                ArrayRef<ParsedType> Args,
                                 SourceLocation RParenLoc) {
   SmallVector<TypeSourceInfo *, 4> ConvertedArgs;
   ConvertedArgs.reserve(Args.size());
@@ -3751,13 +3748,12 @@ ExprResult Sema::ActOnTypeTrait(TypeTrait Kind, SourceLocation KWLoc,
     
     ConvertedArgs.push_back(TInfo);    
   }
-  
+
   return BuildTypeTrait(Kind, KWLoc, ConvertedArgs, RParenLoc);
 }
 
-static bool EvaluateBinaryTypeTrait(Sema &Self, BinaryTypeTrait BTT,
-                                    QualType LhsT, QualType RhsT,
-                                    SourceLocation KeyLoc) {
+static bool EvaluateBinaryTypeTrait(Sema &Self, TypeTrait BTT, QualType LhsT,
+                                    QualType RhsT, SourceLocation KeyLoc) {
   assert(!LhsT->isDependentType() && !RhsT->isDependentType() &&
          "Cannot evaluate traits of dependent types");
 
@@ -3914,36 +3910,9 @@ static bool EvaluateBinaryTypeTrait(Sema &Self, BinaryTypeTrait BTT,
 
     return !Result.get()->hasNonTrivialCall(Self.Context);
   }
+    default: llvm_unreachable("not a BTT");
   }
   llvm_unreachable("Unknown type trait or not implemented");
-}
-
-ExprResult Sema::BuildBinaryTypeTrait(BinaryTypeTrait BTT,
-                                      SourceLocation KWLoc,
-                                      TypeSourceInfo *LhsTSInfo,
-                                      TypeSourceInfo *RhsTSInfo,
-                                      SourceLocation RParen) {
-  QualType LhsT = LhsTSInfo->getType();
-  QualType RhsT = RhsTSInfo->getType();
-  QualType ResultType = Context.BoolTy;
-
-  // __builtin_types_compatible_p is a GNU C extension, not a C++ type trait.
-  if (BTT == BTT_TypeCompatible) {
-    ResultType = Context.IntTy;
-    if (getLangOpts().CPlusPlus) {
-      Diag(KWLoc, diag::err_types_compatible_p_in_cplusplus)
-        << SourceRange(KWLoc, RParen);
-      return ExprError();
-    }
-  }
-
-  bool Value = false;
-  if (!LhsT->isDependentType() && !RhsT->isDependentType())
-    Value = EvaluateBinaryTypeTrait(*this, BTT, LhsT, RhsT, KWLoc);
-
-  return Owned(new (Context) BinaryTypeTraitExpr(KWLoc, BTT, LhsTSInfo,
-                                                 RhsTSInfo, Value, RParen,
-                                                 ResultType));
 }
 
 ExprResult Sema::ActOnArrayTypeTrait(ArrayTypeTrait ATT,
@@ -4136,22 +4105,23 @@ QualType Sema::CheckPointerToMemberOperands(ExprResult &LHS, ExprResult &RHS,
                             OpSpelling, (int)isIndirect)) {
       return QualType();
     }
-    CXXBasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/true,
-                       /*DetectVirtual=*/false);
-    // FIXME: Would it be useful to print full ambiguity paths, or is that
-    // overkill?
-    if (!IsDerivedFrom(LHSType, Class, Paths) ||
-        Paths.isAmbiguous(Context.getCanonicalType(Class))) {
+
+    if (!IsDerivedFrom(LHSType, Class)) {
       Diag(Loc, diag::err_bad_memptr_lhs) << OpSpelling
         << (int)isIndirect << LHS.get()->getType();
       return QualType();
     }
+
+    CXXCastPath BasePath;
+    if (CheckDerivedToBaseConversion(LHSType, Class, Loc,
+                                     SourceRange(LHS.get()->getLocStart(),
+                                                 RHS.get()->getLocEnd()),
+                                     &BasePath))
+      return QualType();
+
     // Cast LHS to type of use.
     QualType UseType = isIndirect ? Context.getPointerType(Class) : Class;
     ExprValueKind VK = isIndirect ? VK_RValue : LHS.get()->getValueKind();
-
-    CXXCastPath BasePath;
-    BuildBasePathArray(Paths, BasePath);
     LHS = ImpCastExprToType(LHS.take(), UseType, CK_DerivedToBase, VK,
                             &BasePath);
   }

@@ -442,109 +442,6 @@ void Clang::AddPreprocessingOptions(Compilation &C,
   getToolChain().AddClangSystemIncludeArgs(Args, CmdArgs);
 }
 
-/// getLLVMArchSuffixForARM - Get the LLVM arch name to use for a particular
-/// CPU.
-//
-// FIXME: This is redundant with -mcpu, why does LLVM use this.
-// FIXME: tblgen this, or kill it!
-static const char *getLLVMArchSuffixForARM(StringRef CPU) {
-  return llvm::StringSwitch<const char *>(CPU)
-    .Case("strongarm", "v4")
-    .Cases("arm7tdmi", "arm7tdmi-s", "arm710t", "v4t")
-    .Cases("arm720t", "arm9", "arm9tdmi", "v4t")
-    .Cases("arm920", "arm920t", "arm922t", "v4t")
-    .Cases("arm940t", "ep9312","v4t")
-    .Cases("arm10tdmi",  "arm1020t", "v5")
-    .Cases("arm9e",  "arm926ej-s",  "arm946e-s", "v5e")
-    .Cases("arm966e-s",  "arm968e-s",  "arm10e", "v5e")
-    .Cases("arm1020e",  "arm1022e",  "xscale", "iwmmxt", "v5e")
-    .Cases("arm1136j-s",  "arm1136jf-s",  "arm1176jz-s", "v6")
-    .Cases("arm1176jzf-s",  "mpcorenovfp",  "mpcore", "v6")
-    .Cases("arm1156t2-s",  "arm1156t2f-s", "v6t2")
-    .Cases("cortex-a5", "cortex-a7", "cortex-a8", "v7")
-    .Cases("cortex-a9", "cortex-a12", "cortex-a15", "krait", "v7")
-    .Cases("cortex-r4", "cortex-r5", "v7r")
-    .Case("cortex-m0", "v6m")
-    .Case("cortex-m3", "v7m")
-    .Case("cortex-m4", "v7em")
-    .Case("cortex-a9-mp", "v7f")
-    .Case("swift", "v7s")
-    .Cases("cortex-a53", "cortex-a57", "v8")
-    .Default("");
-}
-
-/// getARMTargetCPU - Get the (LLVM) name of the ARM cpu we are targeting.
-//
-// FIXME: tblgen this.
-static std::string getARMTargetCPU(const ArgList &Args,
-                                   const llvm::Triple &Triple) {
-  // FIXME: Warn on inconsistent use of -mcpu and -march.
-
-  // If we have -mcpu=, use that.
-  if (Arg *A = Args.getLastArg(options::OPT_mcpu_EQ)) {
-    StringRef MCPU = A->getValue();
-    // Handle -mcpu=native.
-    if (MCPU == "native")
-      return llvm::sys::getHostCPUName();
-    else
-      return MCPU;
-  }
-
-  StringRef MArch;
-  if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
-    // Otherwise, if we have -march= choose the base CPU for that arch.
-    MArch = A->getValue();
-  } else {
-    // Otherwise, use the Arch from the triple.
-    MArch = Triple.getArchName();
-  }
-
-  if (Triple.getOS() == llvm::Triple::NetBSD) {
-    if (MArch == "armv6")
-      return "arm1176jzf-s";
-  }
-
-  // Handle -march=native.
-  std::string NativeMArch;
-  if (MArch == "native") {
-    std::string CPU = llvm::sys::getHostCPUName();
-    if (CPU != "generic") {
-      // Translate the native cpu into the architecture. The switch below will
-      // then chose the minimum cpu for that arch.
-      NativeMArch = std::string("arm") + getLLVMArchSuffixForARM(CPU);
-      MArch = NativeMArch;
-    }
-  }
-
-  return llvm::StringSwitch<const char *>(MArch)
-    .Cases("armv2", "armv2a","arm2")
-    .Case("armv3", "arm6")
-    .Case("armv3m", "arm7m")
-    .Case("armv4", "strongarm")
-    .Case("armv4t", "arm7tdmi")
-    .Cases("armv5", "armv5t", "arm10tdmi")
-    .Cases("armv5e", "armv5te", "arm1022e")
-    .Case("armv5tej", "arm926ej-s")
-    .Cases("armv6", "armv6k", "arm1136jf-s")
-    .Case("armv6j", "arm1136j-s")
-    .Cases("armv6z", "armv6zk", "arm1176jzf-s")
-    .Case("armv6t2", "arm1156t2-s")
-    .Cases("armv6m", "armv6-m", "cortex-m0")
-    .Cases("armv7", "armv7a", "armv7-a", "cortex-a8")
-    .Cases("armv7em", "armv7e-m", "cortex-m4")
-    .Cases("armv7f", "armv7-f", "cortex-a9-mp")
-    .Cases("armv7s", "armv7-s", "swift")
-    .Cases("armv7r", "armv7-r", "cortex-r4")
-    .Cases("armv7m", "armv7-m", "cortex-m3")
-    .Cases("armv8", "armv8a", "armv8-a", "cortex-a53")
-    .Case("ep9312", "ep9312")
-    .Case("iwmmxt", "iwmmxt")
-    .Case("xscale", "xscale")
-    // If all else failed, return the most base CPU with thumb interworking
-    // supported by LLVM.
-    .Default("arm7tdmi");
-}
-
 /// getAArch64TargetCPU - Get the (LLVM) name of the AArch64 cpu we are targeting.
 //
 // FIXME: tblgen this.
@@ -703,9 +600,8 @@ static void getARMFPUFeatures(const Driver &D, const Arg *A,
 
 // Select the float ABI as determined by -msoft-float, -mhard-float, and
 // -mfloat-abi=.
-static StringRef getARMFloatABI(const Driver &D,
-                                const ArgList &Args,
-                                const llvm::Triple &Triple) {
+StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
+                                     const llvm::Triple &Triple) {
   StringRef FloatABI;
   if (Arg *A = Args.getLastArg(options::OPT_msoft_float,
                                options::OPT_mhard_float,
@@ -734,7 +630,7 @@ static StringRef getARMFloatABI(const Driver &D,
       //
       // FIXME: Factor out an ARM class so we can cache the arch somewhere.
       std::string ArchName =
-        getLLVMArchSuffixForARM(getARMTargetCPU(Args, Triple));
+        arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple));
       if (StringRef(ArchName).startswith("v6") ||
           StringRef(ArchName).startswith("v7"))
         FloatABI = "softfp";
@@ -756,13 +652,16 @@ static StringRef getARMFloatABI(const Driver &D,
       case llvm::Triple::GNUEABI:
         FloatABI = "softfp";
         break;
+      case llvm::Triple::EABIHF:
+        FloatABI = "hard";
+        break;
       case llvm::Triple::EABI:
         // EABI is always AAPCS, and if it was not marked 'hard', it's softfp
         FloatABI = "softfp";
         break;
       case llvm::Triple::Android: {
         std::string ArchName =
-          getLLVMArchSuffixForARM(getARMTargetCPU(Args, Triple));
+          arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple));
         if (StringRef(ArchName).startswith("v7"))
           FloatABI = "softfp";
         else
@@ -785,7 +684,7 @@ static void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
                                  const ArgList &Args,
                                  std::vector<const char *> &Features,
                                  bool ForAS) {
-  StringRef FloatABI = getARMFloatABI(D, Args, Triple);
+  StringRef FloatABI = tools::arm::getARMFloatABI(D, Args, Triple);
   if (!ForAS) {
     // FIXME: Note, this is a hack, the LLVM backend doesn't actually use these
     // yet (it uses the -mfloat-abi and -msoft-float options), and it is
@@ -836,7 +735,7 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   // Get the effective triple, which takes into account the deployment target.
   std::string TripleStr = getToolChain().ComputeEffectiveClangTriple(Args);
   llvm::Triple Triple(TripleStr);
-  std::string CPUName = getARMTargetCPU(Args, Triple);
+  std::string CPUName = arm::getARMTargetCPU(Args, Triple);
 
   // Select the ABI to use.
   //
@@ -861,6 +760,7 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
     case llvm::Triple::GNUEABIHF:
       ABIName = "aapcs-linux";
       break;
+    case llvm::Triple::EABIHF:
     case llvm::Triple::EABI:
       ABIName = "aapcs";
       break;
@@ -872,7 +772,7 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
   CmdArgs.push_back(ABIName);
 
   // Determine floating point ABI from the options & target defaults.
-  StringRef FloatABI = getARMFloatABI(D, Args, Triple);
+  StringRef FloatABI = tools::arm::getARMFloatABI(D, Args, Triple);
   if (FloatABI == "soft") {
     // Floating point operations and argument passing are soft.
     //
@@ -1353,7 +1253,7 @@ static std::string getCPUName(const ArgList &Args, const llvm::Triple &T) {
 
   case llvm::Triple::arm:
   case llvm::Triple::thumb:
-    return getARMTargetCPU(Args, T);
+    return arm::getARMTargetCPU(Args, T);
 
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
@@ -4555,6 +4455,135 @@ void hexagon::Link::ConstructJob(Compilation &C, const JobAction &JA,
 }
 // Hexagon tools end.
 
+/// getARMCPUForMArch - Get the (LLVM) name of the minimum ARM CPU for the arch we are targeting
+//
+// FIXME: tblgen this.
+const char *arm::getARMCPUForMArch(const ArgList &Args,
+                                   const llvm::Triple &Triple) {
+  StringRef MArch;
+  if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
+    // Otherwise, if we have -march= choose the base CPU for that arch.
+    MArch = A->getValue();
+  } else {
+    // Otherwise, use the Arch from the triple.
+    MArch = Triple.getArchName();
+  }
+
+  // Handle -march=native.
+  if (MArch == "native") {
+    std::string CPU = llvm::sys::getHostCPUName();
+    if (CPU != "generic") {
+      // Translate the native cpu into the architecture. The switch below will
+      // then chose the minimum cpu for that arch.
+      MArch = std::string("arm") + arm::getLLVMArchSuffixForARM(CPU);
+    }
+  }
+
+  if (Triple.getOS() == llvm::Triple::NetBSD) {
+    if (MArch == "armv6")
+      return "arm1176jzf-s";
+  }
+
+  const char *result = llvm::StringSwitch<const char *>(MArch)
+    .Cases("armv2", "armv2a","arm2")
+    .Case("armv3", "arm6")
+    .Case("armv3m", "arm7m")
+    .Case("armv4", "strongarm")
+    .Case("armv4t", "arm7tdmi")
+    .Case("thumbv4t", "arm7tdmi")
+    .Cases("armv5", "armv5t", "arm10tdmi")
+    .Cases("thumbv5", "thumbv5t", "arm10tdmi")
+    .Cases("armv5e", "armv5te", "arm1022e")
+    .Cases("thumbv5e", "thumbv5te", "arm1022e")
+    .Case("armv5tej", "arm926ej-s")
+    .Case("thumbv5tej", "arm926ej-s")
+    .Cases("armv6", "armv6k", "arm1136jf-s")
+    .Cases("thumbv6", "thumbv6k", "arm1136jf-s")
+    .Case("armv6j", "arm1136j-s")
+    .Case("thumbv6j", "arm1136j-s")
+    .Cases("armv6z", "armv6zk", "arm1176jzf-s")
+    .Cases("thumbv6z", "thumbv6zk", "arm1176jzf-s")
+    .Case("armv6t2", "arm1156t2-s")
+    .Case("thumbv6t2", "arm1156t2-s")
+    .Cases("armv6m", "armv6-m", "cortex-m0")
+    .Case("thumbv6m", "cortex-m0")
+    .Cases("armv7", "armv7a", "armv7-a", "cortex-a8")
+    .Cases("thumbv7", "thumbv7a", "cortex-a8")
+    .Cases("armv7l", "armv7-l", "cortex-a8")
+    .Cases("armv7f", "armv7-f", "cortex-a9-mp")
+    .Cases("armv7s", "armv7-s", "swift")
+    .Cases("armv7r", "armv7-r", "cortex-r4")
+    .Case("thumbv7r", "cortex-r4")
+    .Cases("armv7m", "armv7-m", "cortex-m3")
+    .Case("thumbv7m", "cortex-m3")
+    .Cases("armv7em", "armv7e-m", "cortex-m4")
+    .Cases("thumbv7em", "thumbv7e-m", "cortex-m4")
+    .Cases("armv8", "armv8a", "armv8-a", "cortex-a53")
+    .Cases("thumbv8", "thumbv8a", "cortex-a53")
+    .Case("ep9312", "ep9312")
+    .Case("iwmmxt", "iwmmxt")
+    .Case("xscale", "xscale")
+    // If all else failed, return the most base CPU with thumb interworking
+    // supported by LLVM.
+    .Default(0);
+
+  if (result)
+    return result;
+
+  return
+    Triple.getEnvironment() == llvm::Triple::GNUEABIHF
+      ? "arm1176jzf-s"
+      : "arm7tdmi";
+}
+
+/// getARMTargetCPU - Get the (LLVM) name of the ARM cpu we are targeting.
+StringRef arm::getARMTargetCPU(const ArgList &Args,
+                               const llvm::Triple &Triple) {
+  // FIXME: Warn on inconsistent use of -mcpu and -march.
+  // If we have -mcpu=, use that.
+  if (Arg *A = Args.getLastArg(options::OPT_mcpu_EQ)) {
+    StringRef MCPU = A->getValue();
+    // Handle -mcpu=native.
+    if (MCPU == "native")
+      return llvm::sys::getHostCPUName();
+    else
+      return MCPU;
+  }
+
+  return getARMCPUForMArch(Args, Triple);
+}
+
+/// getLLVMArchSuffixForARM - Get the LLVM arch name to use for a particular
+/// CPU.
+//
+// FIXME: This is redundant with -mcpu, why does LLVM use this.
+// FIXME: tblgen this, or kill it!
+const char *arm::getLLVMArchSuffixForARM(StringRef CPU) {
+  return llvm::StringSwitch<const char *>(CPU)
+    .Case("strongarm", "v4")
+    .Cases("arm7tdmi", "arm7tdmi-s", "arm710t", "v4t")
+    .Cases("arm720t", "arm9", "arm9tdmi", "v4t")
+    .Cases("arm920", "arm920t", "arm922t", "v4t")
+    .Cases("arm940t", "ep9312","v4t")
+    .Cases("arm10tdmi",  "arm1020t", "v5")
+    .Cases("arm9e",  "arm926ej-s",  "arm946e-s", "v5e")
+    .Cases("arm966e-s",  "arm968e-s",  "arm10e", "v5e")
+    .Cases("arm1020e",  "arm1022e",  "xscale", "iwmmxt", "v5e")
+    .Cases("arm1136j-s",  "arm1136jf-s",  "arm1176jz-s", "v6")
+    .Cases("arm1176jzf-s",  "mpcorenovfp",  "mpcore", "v6")
+    .Cases("arm1156t2-s",  "arm1156t2f-s", "v6t2")
+    .Cases("cortex-a5", "cortex-a7", "cortex-a8", "v7")
+    .Cases("cortex-a9", "cortex-a12", "cortex-a15", "krait", "v7")
+    .Cases("cortex-r4", "cortex-r5", "v7r")
+    .Case("cortex-m0", "v6m")
+    .Case("cortex-m3", "v7m")
+    .Case("cortex-m4", "v7em")
+    .Case("cortex-a9-mp", "v7f")
+    .Case("swift", "v7s")
+    .Cases("cortex-a53", "cortex-a57", "v8")
+    .Default("");
+}
+
 llvm::Triple::ArchType darwin::getArchTypeForDarwinArchName(StringRef Str) {
   // See arch(3) and llvm-gcc's driver-driver.c. We don't implement support for
   // archs which Darwin doesn't use.
@@ -4835,7 +4864,7 @@ void darwin::Link::AddLinkArgs(Compilation &C,
   Args.AddLastArg(CmdArgs, options::OPT_all__load);
   Args.AddAllArgs(CmdArgs, options::OPT_allowable__client);
   Args.AddLastArg(CmdArgs, options::OPT_bind__at__load);
-  if (DarwinTC.isTargetIPhoneOS())
+  if (DarwinTC.isTargetIOSBased())
     Args.AddLastArg(CmdArgs, options::OPT_arch__errors__fatal);
   Args.AddLastArg(CmdArgs, options::OPT_dead__strip);
   Args.AddLastArg(CmdArgs, options::OPT_no__dead__strip__inits__and__terms);
@@ -4862,10 +4891,10 @@ void darwin::Link::AddLinkArgs(Compilation &C,
   if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ)) {
     CmdArgs.push_back("-ios_simulator_version_min");
     CmdArgs.push_back(Args.MakeArgString(mmvs1));
-  } else if (DarwinTC.isTargetIPhoneOS()) {
+  } else if (DarwinTC.isTargetIOSBased()) {
     CmdArgs.push_back("-iphoneos_version_min");
     CmdArgs.push_back(Args.MakeArgString(mmvs1));
-  } else {
+  } else if (DarwinTC.isTargetMacOS()) {
     CmdArgs.push_back("-macosx_version_min");
     const unsigned vmin = *TargetVersion.getMinor();
     if (vmin <= 4) {
@@ -5004,7 +5033,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
       } else if (getDarwinToolChain().isTargetIPhoneOS()) {
         if (getDarwinToolChain().isIPhoneOSVersionLT(3, 1))
           CmdArgs.push_back("-ldylib1.o");
-      } else {
+      } else if (getDarwinToolChain().isTargetMacOS()) {
         if (getDarwinToolChain().isMacosxVersionLT(10, 5))
           CmdArgs.push_back("-ldylib1.o");
         else if (getDarwinToolChain().isMacosxVersionLT(10, 6))
@@ -5020,7 +5049,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
           } else if (getDarwinToolChain().isTargetIPhoneOS()) {
             if (getDarwinToolChain().isIPhoneOSVersionLT(3, 1))
               CmdArgs.push_back("-lbundle1.o");
-          } else {
+          } else if (getDarwinToolChain().isTargetMacOS()) {
             if (getDarwinToolChain().isMacosxVersionLT(10, 6))
               CmdArgs.push_back("-lbundle1.o");
           }
@@ -5060,7 +5089,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
                 CmdArgs.push_back("-lcrt1.o");
               else if (getDarwinToolChain().isIPhoneOSVersionLT(6, 0))
                 CmdArgs.push_back("-lcrt1.3.1.o");
-            } else {
+            } else if (getDarwinToolChain().isTargetMacOS()) {
               if (getDarwinToolChain().isMacosxVersionLT(10, 5))
                 CmdArgs.push_back("-lcrt1.o");
               else if (getDarwinToolChain().isMacosxVersionLT(10, 6))
@@ -5075,7 +5104,7 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
       }
     }
 
-    if (!getDarwinToolChain().isTargetIPhoneOS() &&
+    if (getDarwinToolChain().isTargetMacOS() &&
         Args.hasArg(options::OPT_shared_libgcc) &&
         getDarwinToolChain().isMacosxVersionLT(10, 5)) {
       const char *Str =
@@ -6055,7 +6084,7 @@ void netbsd::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // Pass the target CPU to GNU as for ARM, since the source code might
   // not have the correct .cpu annotation.
   if (getToolChain().getArch() == llvm::Triple::arm) {
-    std::string MArch(getARMTargetCPU(Args, getToolChain().getTriple()));
+    std::string MArch(arm::getARMTargetCPU(Args, getToolChain().getTriple()));
     CmdArgs.push_back(Args.MakeArgString("-mcpu=" + MArch));
   }
 
@@ -6260,8 +6289,8 @@ void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     if (MArch == "armv8" || MArch == "armv8a" || MArch == "armv8-a")
       CmdArgs.push_back("-mfpu=crypto-neon-fp-armv8");
 
-    StringRef ARMFloatABI = getARMFloatABI(getToolChain().getDriver(), Args,
-                                           getToolChain().getTriple());
+    StringRef ARMFloatABI = tools::arm::getARMFloatABI(
+        getToolChain().getDriver(), Args, getToolChain().getTriple());
     CmdArgs.push_back(Args.MakeArgString("-mfloat-abi=" + ARMFloatABI));
 
     Args.AddLastArg(CmdArgs, options::OPT_march_EQ);

@@ -3071,9 +3071,26 @@ public:
   }
 
   bool isEABI() const {
-    StringRef Env = getTarget().getTriple().getEnvironmentName();
-    return (Env == "gnueabi" || Env == "eabi" ||
-            Env == "android" || Env == "androideabi");
+    switch (getTarget().getTriple().getEnvironment()) {
+    case llvm::Triple::Android:
+    case llvm::Triple::EABI:
+    case llvm::Triple::EABIHF:
+    case llvm::Triple::GNUEABI:
+    case llvm::Triple::GNUEABIHF:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  bool isEABIHF() const {
+    switch (getTarget().getTriple().getEnvironment()) {
+    case llvm::Triple::EABIHF:
+    case llvm::Triple::GNUEABIHF:
+      return true;
+    default:
+      return false;
+    }
   }
 
   ABIKind getABIKind() const { return Kind; }
@@ -3209,7 +3226,7 @@ void ARMABIInfo::computeInfo(CGFunctionInfo &FI) const {
 /// Return the default calling convention that LLVM will use.
 llvm::CallingConv::ID ARMABIInfo::getLLVMDefaultCC() const {
   // The default calling convention that LLVM will infer.
-  if (getTarget().getTriple().getEnvironmentName()=="gnueabihf")
+  if (isEABIHF())
     return llvm::CallingConv::ARM_AAPCS_VFP;
   else if (isEABI())
     return llvm::CallingConv::ARM_AAPCS;

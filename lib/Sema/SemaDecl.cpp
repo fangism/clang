@@ -5599,6 +5599,8 @@ void Sema::CheckShadow(Scope *S, VarDecl *D, const LookupResult& R) {
   DeclarationName Name = R.getLookupName();
 
   // Emit warning and note.
+  if (getSourceManager().isInSystemMacro(R.getNameLoc()))
+    return;
   Diag(R.getNameLoc(), diag::warn_decl_shadow) << Name << Kind << OldDC;
   Diag(ShadowedDecl->getLocation(), diag::note_previous_declaration);
 }
@@ -11307,7 +11309,8 @@ ExprResult Sema::VerifyBitField(SourceLocation FieldLoc,
   if (!FieldTy->isDependentType()) {
     uint64_t TypeSize = Context.getTypeSize(FieldTy);
     if (Value.getZExtValue() > TypeSize) {
-      if (!getLangOpts().CPlusPlus || IsMsStruct) {
+      if (!getLangOpts().CPlusPlus || IsMsStruct ||
+          Context.getTargetInfo().getCXXABI().isMicrosoft()) {
         if (FieldName) 
           return Diag(FieldLoc, diag::err_bitfield_width_exceeds_type_size)
             << FieldName << (unsigned)Value.getZExtValue() 

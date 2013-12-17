@@ -136,7 +136,7 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
   if (Style.AlwaysBreakBeforeMultilineStrings &&
       State.Column > State.Stack.back().Indent && // Breaking saves columns.
       !Previous.isOneOf(tok::kw_return, tok::lessless, tok::at) &&
-      Previous.Type != TT_InlineASMColon && NextIsMultilineString(State))
+      Previous.Type != TT_InlineASMColon && nextIsMultilineString(State))
     return true;
   if (((Previous.Type == TT_DictLiteral && Previous.is(tok::l_brace)) ||
        Previous.Type == TT_ArrayInitializerLSquare) &&
@@ -183,9 +183,12 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
       Current.LongestObjCSelectorName == 0 &&
       State.Stack.back().BreakBeforeParameter)
     return true;
-  if ((Current.Type == TT_CtorInitializerColon ||
-       (Previous.ClosesTemplateDeclaration && State.ParenLevel == 0 &&
-        !Current.isTrailingComment())))
+  if (Current.Type == TT_CtorInitializerColon &&
+      (!Style.AllowShortFunctionsOnASingleLine ||
+       Style.BreakConstructorInitializersBeforeComma || Style.ColumnLimit != 0))
+    return true;
+  if (Previous.ClosesTemplateDeclaration && State.ParenLevel == 0 &&
+      !Current.isTrailingComment())
     return true;
 
   if ((Current.Type == TT_StartOfName || Current.is(tok::kw_operator)) &&
@@ -865,12 +868,13 @@ unsigned ContinuationIndenter::getColumnLimit(const LineState &State) const {
   return Style.ColumnLimit - (State.Line->InPPDirective ? 2 : 0);
 }
 
-bool ContinuationIndenter::NextIsMultilineString(const LineState &State) {
+bool ContinuationIndenter::nextIsMultilineString(const LineState &State) {
   const FormatToken &Current = *State.NextToken;
   if (!Current.is(tok::string_literal))
     return false;
   // We never consider raw string literals "multiline" for the purpose of
-  // AlwaysBreakBeforeMultilineStrings implementation.
+  // AlwaysBreakBeforeMultilineStrings implementation as they are special-cased
+  // (see TokenAnnotator::mustBreakBefore().
   if (Current.TokenText.startswith("R\""))
     return false;
   if (Current.IsMultiline)

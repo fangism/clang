@@ -1225,8 +1225,11 @@ void Sema::CheckImplementationIvars(ObjCImplementationDecl *ImpDecl,
     Diag(IVI->getLocation(), diag::err_inconsistent_ivar_count);
 }
 
-void Sema::WarnUndefinedMethod(SourceLocation ImpLoc, ObjCMethodDecl *method,
-                               bool &IncompleteImpl, unsigned DiagID) {
+static void WarnUndefinedMethod(Sema &S, SourceLocation ImpLoc,
+                                ObjCMethodDecl *method,
+                                bool &IncompleteImpl,
+                                unsigned DiagID,
+                                NamedDecl *NeededFor = 0) {
   // No point warning no definition of method which is 'unavailable'.
   switch (method->getAvailability()) {
   case AR_Available:
@@ -1244,13 +1247,17 @@ void Sema::WarnUndefinedMethod(SourceLocation ImpLoc, ObjCMethodDecl *method,
   // warning, but some users strongly voiced that they would prefer
   // separate warnings.  We will give that approach a try, as that
   // matches what we do with protocols.
-  
-  Diag(ImpLoc, DiagID) << method->getDeclName();
+  {
+    const Sema::SemaDiagnosticBuilder &B = S.Diag(ImpLoc, DiagID);
+    B << method;
+    if (NeededFor)
+      B << NeededFor;
+  }
 
   // Issue a note to the original declaration.
   SourceLocation MethodLoc = method->getLocStart();
   if (MethodLoc.isValid())
-    Diag(MethodLoc, diag::note_method_declared_at) << method;
+    S.Diag(MethodLoc, diag::note_method_declared_at) << method;
 }
 
 /// Determines if type B can be substituted for type A.  Returns true if we can
@@ -1629,12 +1636,14 @@ void Sema::WarnExactTypedMethods(ObjCMethodDecl *ImpMethodDecl,
 
 /// CheckProtocolMethodDefs - This routine checks unimplemented methods
 /// Declared in protocol, and those referenced by it.
-void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
-                                   ObjCProtocolDecl *PDecl,
-                                   bool& IncompleteImpl,
-                                   const SelectorSet &InsMap,
-                                   const SelectorSet &ClsMap,
-                                   ObjCContainerDecl *CDecl) {
+static void CheckProtocolMethodDefs(Sema &S,
+                                    SourceLocation ImpLoc,
+                                    ObjCProtocolDecl *PDecl,
+                                    bool& IncompleteImpl,
+                                    const Sema::SelectorSet &InsMap,
+                                    const Sema::SelectorSet &ClsMap,
+                                    ObjCContainerDecl *CDecl,
+                                    bool isExplicitProtocol = true) {
   ObjCCategoryDecl *C = dyn_cast<ObjCCategoryDecl>(CDecl);
   ObjCInterfaceDecl *IDecl = C ? C->getClassInterface() 
                                : dyn_cast<ObjCInterfaceDecl>(CDecl);
@@ -1642,7 +1651,7 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
   
   ObjCInterfaceDecl *Super = IDecl->getSuperClass();
   ObjCInterfaceDecl *NSIDecl = 0;
-  if (getLangOpts().ObjCRuntime.isNeXTFamily()) {
+  if (S.getLangOpts().ObjCRuntime.isNeXTFamily()) {
     // check to see if class implements forwardInvocation method and objects
     // of this class are derived from 'NSProxy' so that to forward requests
     // from one object to another.
@@ -1650,12 +1659,12 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
     // implemented in the class, we should not issue "Method definition not
     // found" warnings.
     // FIXME: Use a general GetUnarySelector method for this.
-    IdentifierInfo* II = &Context.Idents.get("forwardInvocation");
-    Selector fISelector = Context.Selectors.getSelector(1, &II);
+    IdentifierInfo* II = &S.Context.Idents.get("forwardInvocation");
+    Selector fISelector = S.Context.Selectors.getSelector(1, &II);
     if (InsMap.count(fISelector))
       // Is IDecl derived from 'NSProxy'? If so, no instance methods
       // need be implemented in the implementation.
-      NSIDecl = IDecl->lookupInheritedClass(&Context.Idents.get("NSProxy"));
+      NSIDecl = IDecl->lookupInheritedClass(&S.Context.Idents.get("NSProxy"));
   }
 
   // If this is a forward protocol declaration, get its definition.
@@ -1667,7 +1676,7 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
   // the method was implemented by a base class or an inherited
   // protocol. This lookup is slow, but occurs rarely in correct code
   // and otherwise would terminate in a warning.
-  if (PDecl->hasAttr<ObjCExplicitProtocolImplAttr>())
+  if (isExplicitProtocol && PDecl->hasAttr<ObjCExplicitProtocolImplAttr>())
     Super = NULL;
 
   // check unimplemented instance methods.
@@ -1700,11 +1709,10 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
               if (C || MethodInClass->isPropertyAccessor())
                 continue;
             unsigned DIAG = diag::warn_unimplemented_protocol_method;
-            if (Diags.getDiagnosticLevel(DIAG, ImpLoc)
+            if (S.Diags.getDiagnosticLevel(DIAG, ImpLoc)
                 != DiagnosticsEngine::Ignored) {
-              WarnUndefinedMethod(ImpLoc, method, IncompleteImpl, DIAG);
-              Diag(CDecl->getLocation(), diag::note_required_for_protocol_at)
-                << PDecl->getDeclName();
+              WarnUndefinedMethod(S, ImpLoc, method, IncompleteImpl, DIAG,
+                                  PDecl);
             }
           }
     }
@@ -1728,18 +1736,17 @@ void Sema::CheckProtocolMethodDefs(SourceLocation ImpLoc,
         continue;
 
       unsigned DIAG = diag::warn_unimplemented_protocol_method;
-      if (Diags.getDiagnosticLevel(DIAG, ImpLoc) !=
+      if (S.Diags.getDiagnosticLevel(DIAG, ImpLoc) !=
             DiagnosticsEngine::Ignored) {
-        WarnUndefinedMethod(ImpLoc, method, IncompleteImpl, DIAG);
-        Diag(IDecl->getLocation(), diag::note_required_for_protocol_at) <<
-          PDecl->getDeclName();
+        WarnUndefinedMethod(S, ImpLoc, method, IncompleteImpl, DIAG, PDecl);
       }
     }
   }
   // Check on this protocols's referenced protocols, recursively.
   for (ObjCProtocolDecl::protocol_iterator PI = PDecl->protocol_begin(),
        E = PDecl->protocol_end(); PI != E; ++PI)
-    CheckProtocolMethodDefs(ImpLoc, *PI, IncompleteImpl, InsMap, ClsMap, CDecl);
+    CheckProtocolMethodDefs(S, ImpLoc, *PI, IncompleteImpl, InsMap, ClsMap,
+                            CDecl, /* isExplicitProtocl */ false);
 }
 
 /// MatchAllMethodDeclarations - Check methods declared in interface
@@ -1763,7 +1770,7 @@ void Sema::MatchAllMethodDeclarations(const SelectorSet &InsMap,
     if (!(*I)->isPropertyAccessor() &&
         !InsMap.count((*I)->getSelector())) {
       if (ImmediateClass)
-        WarnUndefinedMethod(IMPDecl->getLocation(), *I, IncompleteImpl,
+        WarnUndefinedMethod(*this, IMPDecl->getLocation(), *I, IncompleteImpl,
                             diag::warn_undef_method_impl);
       continue;
     } else {
@@ -1793,7 +1800,7 @@ void Sema::MatchAllMethodDeclarations(const SelectorSet &InsMap,
       continue;
     if (!ClsMap.count((*I)->getSelector())) {
       if (ImmediateClass)
-        WarnUndefinedMethod(IMPDecl->getLocation(), *I, IncompleteImpl,
+        WarnUndefinedMethod(*this, IMPDecl->getLocation(), *I, IncompleteImpl,
                             diag::warn_undef_method_impl);
     } else {
       ObjCMethodDecl *ImpMethodDecl =
@@ -1956,8 +1963,8 @@ void Sema::ImplMethodsVsClassMethods(Scope *S, ObjCImplDecl* IMPDecl,
     for (ObjCInterfaceDecl::all_protocol_iterator
           PI = I->all_referenced_protocol_begin(),
           E = I->all_referenced_protocol_end(); PI != E; ++PI)
-      CheckProtocolMethodDefs(IMPDecl->getLocation(), *PI, IncompleteImpl,
-                              InsMap, ClsMap, I);
+      CheckProtocolMethodDefs(*this, IMPDecl->getLocation(), *PI,
+                              IncompleteImpl, InsMap, ClsMap, I);
     // Check class extensions (unnamed categories)
     for (ObjCInterfaceDecl::visible_extensions_iterator
            Ext = I->visible_extensions_begin(),
@@ -1971,8 +1978,8 @@ void Sema::ImplMethodsVsClassMethods(Scope *S, ObjCImplDecl* IMPDecl,
     if (!C->IsClassExtension()) {
       for (ObjCCategoryDecl::protocol_iterator PI = C->protocol_begin(),
            E = C->protocol_end(); PI != E; ++PI)
-        CheckProtocolMethodDefs(IMPDecl->getLocation(), *PI, IncompleteImpl,
-                                InsMap, ClsMap, CDecl);
+        CheckProtocolMethodDefs(*this, IMPDecl->getLocation(), *PI,
+                                IncompleteImpl, InsMap, ClsMap, CDecl);
       DiagnoseUnimplementedProperties(S, IMPDecl, CDecl);
     } 
   } else

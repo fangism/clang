@@ -3066,6 +3066,11 @@ TEST_F(FormatTest, BreaksFunctionDeclarationsWithTrailingTokens) {
                "                  aaaaa aaaaaaaaaaaaaaaaaaaa) OVERRIDE FINAL;");
   verifyFormat("void SomeFunction(aaaaa aaaaaaaaaaaaaaaaaaaa,\n"
                "                  aaaaa aaaaaaaaaaaaaaaaaaaa) override final;");
+  verifyFormat("virtual void aaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaa aaaa,\n"
+               "                   aaaaaaaaaaa aaaaa) const override;");
+  verifyGoogleFormat(
+      "virtual void aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+      "    const override;");
 
   // Unless this would lead to the first parameter being broken.
   verifyFormat("void someLongFunction(int someLongParameter)\n"
@@ -4241,6 +4246,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyFormat("auto a = [](int **&, int ***) {};");
   verifyFormat("auto PointerBinding = [](const char *S) {};");
   verifyFormat("typedef typeof(int(int, int)) *MyFunc;");
+  verifyIndependentOfContext("typedef void (*f)(int *a);");
 
   verifyIndependentOfContext("InvalidRegions[*R] = 0;");
 
@@ -6187,7 +6193,7 @@ TEST_F(FormatTest, DontSplitStringLiteralsWithEscapedNewlines) {
 
 TEST_F(FormatTest, CountsCharactersInMultilineRawStringLiterals) {
   EXPECT_EQ("f(g(R\"x(raw literal)x\", a), b);",
-            format("f(g(R\"x(raw literal)x\", a), b);", getGoogleStyle()));
+            format("f(g(R\"x(raw literal)x\",   a), b);", getGoogleStyle()));
   EXPECT_EQ("fffffffffff(g(R\"x(\n"
             "multiline raw string literal xxxxxxxxxxxxxx\n"
             ")x\",\n"
@@ -6220,6 +6226,16 @@ TEST_F(FormatTest, CountsCharactersInMultilineRawStringLiterals) {
             ")x\" +\n"
             "            bbbbbb);",
             format("fffffffffff(R\"x(\n"
+                   "multiline raw string literal xxxxxxxxxxxxxx\n"
+                   ")x\" + bbbbbb);",
+                   getGoogleStyleWithColumns(20)));
+  EXPECT_EQ("fffffffffff(\n"
+            "    R\"x(\n"
+            "multiline raw string literal xxxxxxxxxxxxxx\n"
+            ")x\" +\n"
+            "    bbbbbb);",
+            format("fffffffffff(\n"
+                   " R\"x(\n"
                    "multiline raw string literal xxxxxxxxxxxxxx\n"
                    ")x\" + bbbbbb);",
                    getGoogleStyleWithColumns(20)));
@@ -6935,6 +6951,91 @@ TEST_F(FormatTest, AllmanBraceBreaking) {
                BreakBeforeBraceShortIfs);
 }
 
+TEST_F(FormatTest, GNUBraceBreaking) {
+  FormatStyle GNUBraceStyle = getLLVMStyle();
+  GNUBraceStyle.BreakBeforeBraces = FormatStyle::BS_GNU;
+  verifyFormat("namespace a\n"
+               "{\n"
+               "class A\n"
+               "{\n"
+               "  void f()\n"
+               "  {\n"
+               "    int a;\n"
+               "    {\n"
+               "      int b;\n"
+               "    }\n"
+               "    if (true)\n"
+               "      {\n"
+               "        a();\n"
+               "        b();\n"
+               "      }\n"
+               "  }\n"
+               "  void g() { return; }\n"
+               "}\n"
+               "}",
+               GNUBraceStyle);
+
+  verifyFormat("void f()\n"
+               "{\n"
+               "  if (true)\n"
+               "    {\n"
+               "      a();\n"
+               "    }\n"
+               "  else if (false)\n"
+               "    {\n"
+               "      b();\n"
+               "    }\n"
+               "  else\n"
+               "    {\n"
+               "      c();\n"
+               "    }\n"
+               "}\n",
+               GNUBraceStyle);
+
+  verifyFormat("void f()\n"
+               "{\n"
+               "  for (int i = 0; i < 10; ++i)\n"
+               "    {\n"
+               "      a();\n"
+               "    }\n"
+               "  while (false)\n"
+               "    {\n"
+               "      b();\n"
+               "    }\n"
+               "  do\n"
+               "    {\n"
+               "      c();\n"
+               "    }\n"
+               "  while (false);\n"
+               "}\n",
+               GNUBraceStyle);
+
+  verifyFormat("void f(int a)\n"
+               "{\n"
+               "  switch (a)\n"
+               "    {\n"
+               "    case 0:\n"
+               "      break;\n"
+               "    case 1:\n"
+               "      {\n"
+               "        break;\n"
+               "      }\n"
+               "    case 2:\n"
+               "      {\n"
+               "      }\n"
+               "      break;\n"
+               "    default:\n"
+               "      break;\n"
+               "    }\n"
+               "}\n",
+               GNUBraceStyle);
+
+  verifyFormat("enum X\n"
+               "{\n"
+               "  Y = 0,\n"
+               "}\n",
+               GNUBraceStyle);
+}
 TEST_F(FormatTest, CatchExceptionReferenceBinding) {
   verifyFormat("void f() {\n"
                "  try {\n"
@@ -7132,6 +7233,9 @@ TEST_F(FormatTest, ParsesConfiguration) {
               FormatStyle::BS_Linux);
   CHECK_PARSE("BreakBeforeBraces: Stroustrup", BreakBeforeBraces,
               FormatStyle::BS_Stroustrup);
+  CHECK_PARSE("BreakBeforeBraces: Allman", BreakBeforeBraces,
+              FormatStyle::BS_Allman);
+  CHECK_PARSE("BreakBeforeBraces: GNU", BreakBeforeBraces, FormatStyle::BS_GNU);
 
   Style.NamespaceIndentation = FormatStyle::NI_All;
   CHECK_PARSE("NamespaceIndentation: None", NamespaceIndentation,
@@ -7425,7 +7529,38 @@ TEST_F(FormatTest, ConstructorInitializerIndentWidth) {
                "    , b(b)\n"
                "    , c(c) {}",
                Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a) {}",
+               Style);
 
+  Style.ColumnLimit = 0;
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a) {}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a)\n"
+               "    , b(b)\n"
+               "    , c(c) {}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a) {\n"
+               "  foo();\n"
+               "  bar();\n"
+               "}",
+               Style);
+
+  Style.AllowShortFunctionsOnASingleLine = false;
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a)\n"
+               "    , b(b)\n"
+               "    , c(c) {\n}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a) {\n}",
+               Style);
+
+  Style.ColumnLimit = 80;
+  Style.AllowShortFunctionsOnASingleLine = true;
   Style.ConstructorInitializerIndentWidth = 2;
   verifyFormat("SomeClass::Constructor()\n"
                "  : a(a)\n"
@@ -7442,6 +7577,10 @@ TEST_F(FormatTest, ConstructorInitializerIndentWidth) {
 
   Style.ConstructorInitializerAllOnOneLineOrOnePerLine = true;
   Style.ConstructorInitializerIndentWidth = 4;
+  verifyFormat("SomeClass::Constructor() : aaaaaaaa(aaaaaaaa) {}", Style);
+  verifyFormat(
+      "SomeClass::Constructor() : aaaaa(aaaaa), aaaaa(aaaaa), aaaaa(aaaaa)\n",
+      Style);
   verifyFormat(
       "SomeClass::Constructor()\n"
       "    : aaaaaaaa(aaaaaaaa), aaaaaaaa(aaaaaaaa), aaaaaaaa(aaaaaaaa) {}",
@@ -7501,18 +7640,27 @@ TEST_F(FormatTest, FormatsWithWebKitStyle) {
 
   // Constructor initializers are formatted one per line with the "," on the
   // new line.
-  EXPECT_EQ(
-      "Constructor()\n"
-      "    : aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-      "    , aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaa, // break\n"
-      "                               aaaaaaaaaaaaaa)\n"
-      "    , aaaaaaaaaaaaaaaaaaaaaaa() {}",
-      format("Constructor()\n"
-             "    : aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-             "    , aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaa, // break\n"
-             "                               aaaaaaaaaaaaaa)\n"
-             "    , aaaaaaaaaaaaaaaaaaaaaaa() {}",
-             Style));
+  verifyFormat("Constructor()\n"
+               "    : aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
+               "    , aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaa, // break\n"
+               "                               aaaaaaaaaaaaaa)\n"
+               "    , aaaaaaaaaaaaaaaaaaaaaaa() {}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a) {}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a)\n"
+               "    , b(b)\n"
+               "    , c(c) {}",
+               Style);
+  verifyFormat("SomeClass::Constructor()\n"
+               "    : a(a)\n"
+               "{\n"
+               "    foo();\n"
+               "    bar();\n"
+               "}",
+               Style);
 
   // Access specifiers should be aligned left.
   verifyFormat("class C {\n"

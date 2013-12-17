@@ -149,6 +149,10 @@ public:
                            CallExpr::const_arg_iterator ArgBeg,
                            CallExpr::const_arg_iterator ArgEnd);
 
+  void EmitDestructorCall(CodeGenFunction &CGF, const CXXDestructorDecl *DD,
+                          CXXDtorType Type, bool ForVirtualBase,
+                          bool Delegating, llvm::Value *This);
+
   void emitVTableDefinitions(CodeGenVTables &CGVT, const CXXRecordDecl *RD);
 
   llvm::Value *getVTableAddressPointInStructor(
@@ -878,7 +882,7 @@ void ItaniumCXXABI::BuildInstanceFunctionParams(CodeGenFunction &CGF,
       = ImplicitParamDecl::Create(Context, 0, MD->getLocation(),
                                   &Context.Idents.get("vtt"), T);
     Params.push_back(VTTDecl);
-    getVTTDecl(CGF) = VTTDecl;
+    getStructorImplicitParamDecl(CGF) = VTTDecl;
   }
 }
 
@@ -887,10 +891,9 @@ void ItaniumCXXABI::EmitInstanceFunctionProlog(CodeGenFunction &CGF) {
   EmitThisParam(CGF);
 
   /// Initialize the 'vtt' slot if needed.
-  if (getVTTDecl(CGF)) {
-    getVTTValue(CGF)
-      = CGF.Builder.CreateLoad(CGF.GetAddrOfLocalVar(getVTTDecl(CGF)),
-                               "vtt");
+  if (getStructorImplicitParamDecl(CGF)) {
+    getStructorImplicitParamValue(CGF) = CGF.Builder.CreateLoad(
+        CGF.GetAddrOfLocalVar(getStructorImplicitParamDecl(CGF)), "vtt");
   }
 
   /// If this is a function that the ABI specifies returns 'this', initialize
@@ -918,8 +921,31 @@ void ItaniumCXXABI::EmitConstructorCall(CodeGenFunction &CGF,
   llvm::Value *Callee = CGM.GetAddrOfCXXConstructor(D, Type);
 
   // FIXME: Provide a source location here.
-  CGF.EmitCXXMemberCall(D, SourceLocation(), Callee, ReturnValueSlot(),
-                        This, VTT, VTTTy, ArgBeg, ArgEnd);
+  CGF.EmitCXXMemberCall(D, SourceLocation(), Callee, ReturnValueSlot(), This,
+                        VTT, VTTTy, ArgBeg, ArgEnd);
+}
+
+void ItaniumCXXABI::EmitDestructorCall(CodeGenFunction &CGF,
+                                       const CXXDestructorDecl *DD,
+                                       CXXDtorType Type, bool ForVirtualBase,
+                                       bool Delegating, llvm::Value *This) {
+  GlobalDecl GD(DD, Type);
+  llvm::Value *VTT = CGF.GetVTTParameter(GD, ForVirtualBase, Delegating);
+  QualType VTTTy = getContext().getPointerType(getContext().VoidPtrTy);
+
+  llvm::Value *Callee = 0;
+  if (getContext().getLangOpts().AppleKext)
+    Callee = CGF.BuildAppleKextVirtualDestructorCall(DD, Type, DD->getParent());
+
+  if (!Callee)
+    Callee = CGM.GetAddrOfCXXDestructor(DD, Type);
+
+  if (DD->isVirtual())
+    This = adjustThisArgumentForVirtualCall(CGF, GD, This);
+
+  // FIXME: Provide a source location here.
+  CGF.EmitCXXMemberCall(DD, SourceLocation(), Callee, ReturnValueSlot(), This,
+                        VTT, VTTTy, 0, 0);
 }
 
 void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
