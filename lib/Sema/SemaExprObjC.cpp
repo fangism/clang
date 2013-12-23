@@ -3095,8 +3095,7 @@ static inline T *getObjCBridgeAttr(const TypedefType *TD) {
     QT = QT->getPointeeType();
     if (const RecordType *RT = QT->getAs<RecordType>())
       if (RecordDecl *RD = RT->getDecl())
-        if (RD->hasAttr<T>())
-          return RD->getAttr<T>();
+        return RD->getAttr<T>();
   }
   return 0;
 }
@@ -3612,6 +3611,13 @@ Sema::CheckObjCARCConversion(SourceRange castRange, QualType castType,
       CCK != CCK_ImplicitConversion)
     return ACR_unbridged;
 
+  // Do not issue bridge cast" diagnostic when implicit casting a cstring
+  // to 'NSString *'. Let caller issue a normal mismatched diagnostic with
+  // suitable fix-it.
+  if (castACTC == ACTC_retainable && exprACTC == ACTC_none &&
+      ConversionToObjCStringLiteralCheck(castType, castExpr))
+    return ACR_okay;
+  
   // Do not issue "bridge cast" diagnostic when implicit casting
   // a retainable object to a CF type parameter belonging to an audited
   // CF API function. Let caller issue a normal type mismatched diagnostic

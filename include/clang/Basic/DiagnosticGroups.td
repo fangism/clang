@@ -71,6 +71,7 @@ def CXX11CompatDeprecatedWritableStr :
   DiagGroup<"c++11-compat-deprecated-writable-strings">;
 
 def DeprecatedDeclarations : DiagGroup<"deprecated-declarations">;
+def UnavailableDeclarations : DiagGroup<"unavailable-declarations">;
 def DeprecatedImplementations :DiagGroup<"deprecated-implementations">;
 def DeprecatedIncrementBool : DiagGroup<"deprecated-increment-bool">;
 def DeprecatedRegister : DiagGroup<"deprecated-register">;
@@ -168,6 +169,7 @@ def OverloadedShiftOpParentheses: DiagGroup<"overloaded-shift-op-parentheses">;
 def DanglingElse: DiagGroup<"dangling-else">;
 def DanglingField : DiagGroup<"dangling-field">;
 def DistributedObjectModifiers : DiagGroup<"distributed-object-modifiers">;
+def InfiniteRecursion : DiagGroup<"infinite-recursion">;
 def GNUImaginaryConstant : DiagGroup<"gnu-imaginary-constant">;
 def IgnoredQualifiers : DiagGroup<"ignored-qualifiers">;
 def : DiagGroup<"import">;
@@ -385,6 +387,7 @@ def ARCRepeatedUseOfWeak : DiagGroup<"arc-repeated-use-of-weak",
                                      [ARCRepeatedUseOfWeakMaybe]>;
 def ObjCBridge : DiagGroup<"bridge-cast">;
 
+def DeallocInCategory:DiagGroup<"dealloc-in-category">;
 def SelectorTypeMismatch : DiagGroup<"selector-type-mismatch">;
 def Selector : DiagGroup<"selector", [SelectorTypeMismatch]>;
 def Protocol : DiagGroup<"protocol">;
@@ -608,8 +611,6 @@ def ObjCStringConcatenation : DiagGroup<"objc-string-concatenation">;
 def ObjCLiteralComparison : DiagGroup<"objc-literal-compare", [
     ObjCStringComparison
   ]>;
-
-def ObjCLiteralMissingAtSign : DiagGroup<"objc-literal-missing-atsign">;
 
 // Inline ASM warnings.
 def ASMOperandWidths : DiagGroup<"asm-operand-widths">;

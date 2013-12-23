@@ -268,7 +268,7 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
   }
 
   if (Previous.opensScope() && Previous.Type != TT_ObjCMethodExpr &&
-      Current.Type != TT_LineComment)
+      (Current.Type != TT_LineComment || Previous.BlockKind == BK_BracedInit))
     State.Stack.back().Indent = State.Column + Spaces;
   if (State.Stack.back().AvoidBinPacking && startsNextParameter(Current, Style))
     State.Stack.back().NoLineBreak = true;
@@ -338,7 +338,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
   // short. Also always add the penalty if the LHS is split over mutliple lines
   // to avoid unncessary line breaks that just work around this penalty.
   if (Current.is(tok::lessless) && State.Stack.back().FirstLessLess == 0 &&
-      (State.Column <= Style.ColumnLimit / 2 ||
+      (State.Column <= Style.ColumnLimit / 3 ||
        State.Stack.back().BreakBeforeParameter))
     Penalty += Style.PenaltyBreakFirstLessLess;
 
@@ -352,8 +352,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
       State.Column = State.Stack[State.Stack.size() - 2].LastSpace;
     else
       State.Column = State.FirstIndent;
-  } else if (Current.is(tok::string_literal) &&
-             State.StartOfStringLiteral != 0) {
+  } else if (Current.isStringLiteral() && State.StartOfStringLiteral != 0) {
     State.Column = State.StartOfStringLiteral;
     State.Stack.back().BreakBeforeParameter = true;
   } else if (Current.is(tok::lessless) &&
@@ -546,6 +545,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
     //       ParameterToInnerFunction));
     if (*I > prec::Unknown)
       NewParenState.LastSpace = std::max(NewParenState.LastSpace, State.Column);
+    NewParenState.StartOfFunctionCall = State.Column;
 
     // Always indent conditional expressions. Never indent expression where
     // the 'operator' is ',', ';' or an assignment (i.e. *I <=
@@ -573,7 +573,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
       if (Current.MatchingParen && Current.BlockKind == BK_Block) {
         // If this is an l_brace starting a nested block, we pretend (wrt. to
         // indentation) that we already consumed the corresponding r_brace.
-        // Thus, we remove all ParenStates caused bake fake parentheses that end
+        // Thus, we remove all ParenStates caused by fake parentheses that end
         // at the r_brace. The net effect of this is that we don't indent
         // relative to the l_brace, if the nested block is the last parameter of
         // a function. For example, this formats:
@@ -595,9 +595,11 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
         NewIndent = State.Stack.back().LastSpace;
         if (Current.opensBlockTypeList(Style)) {
           NewIndent += Style.IndentWidth;
+          NewIndent = std::min(State.Column + 2, NewIndent);
           ++NewIndentLevel;
         } else {
           NewIndent += Style.ContinuationIndentWidth;
+          NewIndent = std::min(State.Column + 1, NewIndent);
         }
       }
       const FormatToken *NextNoComment = Current.getNextNonComment();
@@ -661,10 +663,10 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
     }
   }
 
-  if (Current.is(tok::string_literal) && State.StartOfStringLiteral == 0) {
+  if (Current.isStringLiteral() && State.StartOfStringLiteral == 0) {
     State.StartOfStringLiteral = State.Column;
-  } else if (!Current.isOneOf(tok::comment, tok::identifier, tok::hash,
-                              tok::string_literal)) {
+  } else if (!Current.isOneOf(tok::comment, tok::identifier, tok::hash) &&
+             !Current.isStringLiteral()) {
     State.StartOfStringLiteral = 0;
   }
 
@@ -734,19 +736,14 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
   if (Current.Type == TT_ImplicitStringLiteral)
     return 0;
 
-  if (!Current.isOneOf(tok::string_literal, tok::wide_string_literal,
-                       tok::utf8_string_literal, tok::utf16_string_literal,
-                       tok::utf32_string_literal, tok::comment))
+  if (!Current.isStringLiteral() && !Current.is(tok::comment))
     return 0;
 
   llvm::OwningPtr<BreakableToken> Token;
   unsigned StartColumn = State.Column - Current.ColumnWidth;
   unsigned ColumnLimit = getColumnLimit(State);
 
-  if (Current.isOneOf(tok::string_literal, tok::wide_string_literal,
-                      tok::utf8_string_literal, tok::utf16_string_literal,
-                      tok::utf32_string_literal) &&
-      Current.Type != TT_ImplicitStringLiteral) {
+  if (Current.isStringLiteral()) {
     // Don't break string literals inside preprocessor directives (except for
     // #define directives, as their contents are stored in separate lines and
     // are not affected by this check).
@@ -855,8 +852,8 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
         State.Stack[i].BreakBeforeParameter = true;
     }
 
-    Penalty += Current.is(tok::string_literal) ? Style.PenaltyBreakString
-                                               : Style.PenaltyBreakComment;
+    Penalty += Current.isStringLiteral() ? Style.PenaltyBreakString
+                                         : Style.PenaltyBreakComment;
 
     State.Stack.back().LastSpace = StartColumn;
   }
@@ -870,7 +867,7 @@ unsigned ContinuationIndenter::getColumnLimit(const LineState &State) const {
 
 bool ContinuationIndenter::nextIsMultilineString(const LineState &State) {
   const FormatToken &Current = *State.NextToken;
-  if (!Current.is(tok::string_literal))
+  if (!Current.isStringLiteral())
     return false;
   // We never consider raw string literals "multiline" for the purpose of
   // AlwaysBreakBeforeMultilineStrings implementation as they are special-cased
@@ -880,7 +877,7 @@ bool ContinuationIndenter::nextIsMultilineString(const LineState &State) {
   if (Current.IsMultiline)
     return true;
   if (Current.getNextNonComment() &&
-      Current.getNextNonComment()->is(tok::string_literal))
+      Current.getNextNonComment()->isStringLiteral())
     return true; // Implicit concatenation.
   if (State.Column + Current.ColumnWidth + Current.UnbreakableTailLength >
       Style.ColumnLimit)
