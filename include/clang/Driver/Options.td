@@ -197,7 +197,8 @@ def _HASH_HASH_HASH : Flag<["-"], "###">, Flags<[DriverOption, CoreOption]>,
 def _DASH_DASH : Option<["--"], "", KIND_REMAINING_ARGS>,
     Flags<[DriverOption, CoreOption]>;
 def A : JoinedOrSeparate<["-"], "A">, Flags<[RenderJoined]>;
-def B : JoinedOrSeparate<["-"], "B">;
+def B : JoinedOrSeparate<["-"], "B">, Flags<[RenderJoined]>,
+  HelpText<"Add search paths for compiler executables (ld,as)">;
 def CC : Flag<["-"], "CC">, Flags<[CC1Option]>;
 def C : Flag<["-"], "C">, Flags<[CC1Option]>;
 def D : JoinedOrSeparate<["-"], "D">, Group<CompileOnly_Group>, Flags<[CC1Option]>;

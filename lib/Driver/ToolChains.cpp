@@ -358,8 +358,19 @@ void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
     // We currently always need a static runtime library for iOS.
     AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.ios.a");
   } else {
+    // darwin8 also has symbols defined in libSystemStubs.a
+    // does darwin9 need this too?
+    if (isMacosxVersionLT(10, 5))
+      CmdArgs.push_back("-lSystemStubs");
+    // use runtime functions from compiler-rt first
+    // does darwin9 need this too?  probably.  x86?
+    if (isMacosxVersionLT(10, 6))
+      if (getTriple().getArch() == llvm::Triple::ppc)
+        AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.ppc.a");
+
     // The dynamic runtime library was merged with libSystem for 10.6 and
     // beyond; only 10.4 and 10.5 need an additional runtime library.
+    // These include the system libunwind.
     if (isMacosxVersionLT(10, 5))
       CmdArgs.push_back("-lgcc_s.10.4");
     else if (isMacosxVersionLT(10, 6))
@@ -543,6 +554,9 @@ void DarwinClang::AddCXXStdlibLibArgs(const ArgList &Args,
   switch (Type) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");
+    // darwin8: now libc++ is staticallly linked to libsupc++.a
+    // instead of libc++abi.dylib
+    CmdArgs.push_back("-lsupc++");
     break;
 
   case ToolChain::CST_Libstdcxx: {

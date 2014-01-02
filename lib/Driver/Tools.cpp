@@ -4626,6 +4626,9 @@ void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   // Derived from asm spec.
   AddDarwinArch(Args, CmdArgs);
 
+  // We probably want to allow use of newer assemblers.
+  // Args.AddAllArgs(CmdArgs, options::OPT_B);
+
   // Use -force_cpusubtype_ALL on x86 by default.
   if (getToolChain().getArch() == llvm::Triple::x86 ||
       getToolChain().getArch() == llvm::Triple::x86_64 ||
@@ -4939,6 +4942,8 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
   // we follow suite for ease of comparison.
   AddLinkArgs(C, Args, CmdArgs, Inputs);
 
+  // if 'gcc/g++' are used to drive the linker, but not if ld is called directly
+  // Args.AddAllArgs(CmdArgs, options::OPT_B);
   Args.AddAllArgs(CmdArgs, options::OPT_d_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_s);
   Args.AddAllArgs(CmdArgs, options::OPT_t);
