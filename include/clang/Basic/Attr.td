@@ -432,6 +432,7 @@ def CXX11NoReturn : InheritableAttr {
 
 def OpenCLKernel : InheritableAttr {
   let Spellings = [Keyword<"__kernel">, Keyword<"kernel">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
 }
 
 def OpenCLImageAccess : Attr {
@@ -778,9 +779,10 @@ def Pure : InheritableAttr {
   let Spellings = [GNU<"pure">, CXX11<"gnu", "pure">];
 }
 
-def Regparm : InheritableAttr {
+def Regparm : TypeAttr {
   let Spellings = [GNU<"regparm">, CXX11<"gnu", "regparm">];
   let Args = [UnsignedArgument<"NumParams">];
+  let ASTNode = 0;
 }
 
 def ReqdWorkGroupSize : InheritableAttr {

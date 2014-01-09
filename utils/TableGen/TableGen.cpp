@@ -32,6 +32,7 @@ enum ActionType {
   GenClangAttrPCHWrite,
   GenClangAttrSpellingList,
   GenClangAttrSpellingListIndex,
+  GenClangAttrASTVisitor,
   GenClangAttrLateParsedList,
   GenClangAttrTemplateInstantiate,
   GenClangAttrParsedAttrList,
@@ -82,6 +83,9 @@ cl::opt<ActionType> Action(
         clEnumValN(GenClangAttrSpellingListIndex,
                    "gen-clang-attr-spelling-index",
                    "Generate a clang attribute spelling index"),
+        clEnumValN(GenClangAttrASTVisitor,
+                   "gen-clang-attr-ast-visitor",
+                   "Generate a recursive AST visitor for clang attributes"),
         clEnumValN(GenClangAttrLateParsedList,
                    "gen-clang-attr-late-parsed-list",
                    "Generate a clang attribute LateParsed list"),
@@ -171,6 +175,9 @@ bool ClangTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenClangAttrSpellingListIndex:
     EmitClangAttrSpellingListIndex(Records, OS);
     break;
+  case GenClangAttrASTVisitor:
+    EmitClangAttrASTVisitor(Records, OS);
+    break;
   case GenClangAttrLateParsedList:
     EmitClangAttrLateParsedList(Records, OS);
     break;
@@ -248,3 +255,10 @@ int main(int argc, char **argv) {
 
   return TableGenMain(argv[0], &ClangTableGenMain);
 }
+
+extern "C" {
+// Disable LeakSanitizer for this binary as it has too many leaks that are not
+// very interesting to fix. __lsan_is_turned_off is explained in
+// compiler-rt/include/sanitizer/lsan_interface.h
+int __lsan_is_turned_off() { return 1; }
+}  // extern "C"

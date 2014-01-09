@@ -152,14 +152,8 @@ static bool IsCommonTypo(tok::TokenKind ExpectedTok, const Token &Tok) {
   }
 }
 
-/// ExpectAndConsume - The parser expects that 'ExpectedTok' is next in the
-/// input.  If so, it is consumed and false is returned.
-///
-/// If the input is malformed, this emits the specified diagnostic.  Next, if
-/// SkipToTok is specified, it calls SkipUntil(SkipToTok).  Finally, true is
-/// returned.
 bool Parser::ExpectAndConsume(tok::TokenKind ExpectedTok, unsigned DiagID,
-                              const char *Msg, tok::TokenKind SkipToTok) {
+                              const char *Msg) {
   if (Tok.is(ExpectedTok) || Tok.is(tok::code_completion)) {
     ConsumeAnyToken();
     return false;
@@ -168,35 +162,46 @@ bool Parser::ExpectAndConsume(tok::TokenKind ExpectedTok, unsigned DiagID,
   // Detect common single-character typos and resume.
   if (IsCommonTypo(ExpectedTok, Tok)) {
     SourceLocation Loc = Tok.getLocation();
-    Diag(Loc, DiagID)
-      << Msg
-      << FixItHint::CreateReplacement(SourceRange(Loc),
-                                      getTokenSimpleSpelling(ExpectedTok));
+    DiagnosticBuilder DB = Diag(Loc, DiagID);
+    DB << FixItHint::CreateReplacement(SourceRange(Loc),
+                                       getPunctuatorSpelling(ExpectedTok));
+    if (DiagID == diag::err_expected)
+      DB << ExpectedTok;
+    else if (DiagID == diag::err_expected_after)
+      DB << Msg << ExpectedTok;
+    else
+      DB << Msg;
     ConsumeAnyToken();
 
     // Pretend there wasn't a problem.
     return false;
   }
 
-  const char *Spelling = 0;
   SourceLocation EndLoc = PP.getLocForEndOfToken(PrevTokLocation);
-  if (EndLoc.isValid() &&
-      (Spelling = tok::getTokenSimpleSpelling(ExpectedTok))) {
-    // Show what code to insert to fix this problem.
-    Diag(EndLoc, DiagID)
-      << Msg
-      << FixItHint::CreateInsertion(EndLoc, Spelling);
-  } else
-    Diag(Tok, DiagID) << Msg;
+  const char *Spelling = 0;
+  if (EndLoc.isValid())
+    Spelling = tok::getPunctuatorSpelling(ExpectedTok);
 
-  if (SkipToTok != tok::unknown)
-    SkipUntil(SkipToTok, StopAtSemi);
+  DiagnosticBuilder DB =
+      Spelling
+          ? Diag(EndLoc, DiagID) << FixItHint::CreateInsertion(EndLoc, Spelling)
+          : Diag(Tok, DiagID);
+  if (DiagID == diag::err_expected)
+    DB << ExpectedTok;
+  else if (DiagID == diag::err_expected_after)
+    DB << Msg << ExpectedTok;
+  else
+    DB << Msg;
+
   return true;
 }
 
 bool Parser::ExpectAndConsumeSemi(unsigned DiagID) {
-  if (Tok.is(tok::semi) || Tok.is(tok::code_completion)) {
-    ConsumeToken();
+  if (TryConsumeToken(tok::semi))
+    return false;
+
+  if (Tok.is(tok::code_completion)) {
+    handleUnexpectedCodeCompletionToken();
     return false;
   }
   
@@ -310,7 +315,7 @@ bool Parser::SkipUntil(ArrayRef<tok::TokenKind> Toks, SkipUntilFlags Flags) {
 
     case tok::code_completion:
       if (!HasFlagsSet(Flags, StopAtCodeCompletion))
-        ConsumeToken();
+        handleUnexpectedCodeCompletionToken();
       return false;
         
     case tok::l_paren:
@@ -722,7 +727,7 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
     SourceLocation EndLoc;
     ExprResult Result(ParseSimpleAsm(&EndLoc));
 
-    ExpectAndConsume(tok::semi, diag::err_expected_semi_after,
+    ExpectAndConsume(tok::semi, diag::err_expected_after,
                      "top-level asm block");
 
     if (Result.isInvalid())
@@ -1048,7 +1053,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       if (!IsThreadSafetyAttribute(DtorAttrs->getName()->getName()) &&
           !DtorAttrs->isCXX11Attribute()) {
         Diag(DtorAttrs->getLoc(), diag::warn_attribute_on_function_definition)
-          << DtorAttrs->getName()->getName();
+          << DtorAttrs->getName();
       }
       DtorAttrs = DtorAttrs->getNext();
     }
@@ -1124,28 +1129,22 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   // safe because we're always the sole owner.
   D.getMutableDeclSpec().abort();
 
-  if (Tok.is(tok::equal)) {
+  if (TryConsumeToken(tok::equal)) {
     assert(getLangOpts().CPlusPlus && "Only C++ function definitions have '='");
-    ConsumeToken();
-
     Actions.ActOnFinishFunctionBody(Res, 0, false);
  
     bool Delete = false;
     SourceLocation KWLoc;
-    if (Tok.is(tok::kw_delete)) {
-      Diag(Tok, getLangOpts().CPlusPlus11 ?
-           diag::warn_cxx98_compat_deleted_function :
-           diag::ext_deleted_function);
-
-      KWLoc = ConsumeToken();
+    if (TryConsumeToken(tok::kw_delete, KWLoc)) {
+      Diag(KWLoc, getLangOpts().CPlusPlus11
+                      ? diag::warn_cxx98_compat_deleted_function
+                      : diag::ext_deleted_function);
       Actions.SetDeclDeleted(Res, KWLoc);
       Delete = true;
-    } else if (Tok.is(tok::kw_default)) {
-      Diag(Tok, getLangOpts().CPlusPlus11 ?
-           diag::warn_cxx98_compat_defaulted_function :
-           diag::ext_defaulted_function);
-
-      KWLoc = ConsumeToken();
+    } else if (TryConsumeToken(tok::kw_default, KWLoc)) {
+      Diag(KWLoc, getLangOpts().CPlusPlus11
+                      ? diag::warn_cxx98_compat_defaulted_function
+                      : diag::ext_defaulted_function);
       Actions.SetDeclDefaulted(Res, KWLoc);
     } else {
       llvm_unreachable("function definition after = not 'delete' or 'default'");
@@ -1155,9 +1154,9 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       Diag(KWLoc, diag::err_default_delete_in_multiple_declaration)
         << Delete;
       SkipUntil(tok::semi);
-    } else {
-      ExpectAndConsume(tok::semi, diag::err_expected_semi_after,
-                       Delete ? "delete" : "default", tok::semi);
+    } else if (ExpectAndConsume(tok::semi, diag::err_expected_after,
+                                Delete ? "delete" : "default")) {
+      SkipUntil(tok::semi);
     }
 
     return Res;
@@ -1211,9 +1210,8 @@ void Parser::ParseKNRParamDeclarations(Declarator &D) {
     // NOTE: GCC just makes this an ext-warn.  It's not clear what it does with
     // the declarations though.  It's trivial to ignore them, really hard to do
     // anything else with them.
-    if (Tok.is(tok::semi)) {
+    if (TryConsumeToken(tok::semi)) {
       Diag(DSStart, diag::err_declaration_does_not_declare_param);
-      ConsumeToken();
       continue;
     }
 
@@ -1287,12 +1285,14 @@ void Parser::ParseKNRParamDeclarations(Declarator &D) {
       ParseDeclarator(ParmDeclarator);
     }
 
-    if (ExpectAndConsumeSemi(diag::err_expected_semi_declaration)) {
-      // Skip to end of block or statement
-      SkipUntil(tok::semi);
-      if (Tok.is(tok::semi))
-        ConsumeToken();
-    }
+    // Consume ';' and continue parsing.
+    if (!ExpectAndConsumeSemi(diag::err_expected_semi_declaration))
+      continue;
+
+    // Otherwise recover by skipping to next semi or mandatory function body.
+    if (SkipUntil(tok::l_brace, StopAtSemi | StopBeforeMatch))
+      break;
+    TryConsumeToken(tok::semi);
   }
 
   // The actions module must verify that all arguments were declared.
@@ -1813,8 +1813,8 @@ bool Parser::isTokenEqualOrEqualTypo() {
   case tok::pipeequal:           // |=
   case tok::equalequal:          // ==
     Diag(Tok, diag::err_invalid_token_after_declarator_suggest_equal)
-      << getTokenSimpleSpelling(Kind)
-      << FixItHint::CreateReplacement(SourceRange(Tok.getLocation()), "=");
+        << Kind
+        << FixItHint::CreateReplacement(SourceRange(Tok.getLocation()), "=");
   case tok::equal:
     return true;
   }
@@ -1943,7 +1943,7 @@ void Parser::ParseMicrosoftIfExistsExternalDeclaration() {
   
   BalancedDelimiterTracker Braces(*this, tok::l_brace);
   if (Braces.consumeOpen()) {
-    Diag(Tok, diag::err_expected_lbrace);
+    Diag(Tok, diag::err_expected) << tok::l_brace;
     return;
   }
 
@@ -2030,12 +2030,15 @@ bool BalancedDelimiterTracker::diagnoseOverflow() {
 }
 
 bool BalancedDelimiterTracker::expectAndConsume(unsigned DiagID,
-                                            const char *Msg,
-                                            tok::TokenKind SkipToToc ) {
+                                                const char *Msg,
+                                                tok::TokenKind SkipToTok) {
   LOpen = P.Tok.getLocation();
-  if (P.ExpectAndConsume(Kind, DiagID, Msg, SkipToToc))
+  if (P.ExpectAndConsume(Kind, DiagID, Msg)) {
+    if (SkipToTok != tok::unknown)
+      P.SkipUntil(SkipToTok, Parser::StopAtSemi);
     return true;
-  
+  }
+
   if (getDepth() < MaxDepth)
     return false;
     
@@ -2044,17 +2047,9 @@ bool BalancedDelimiterTracker::expectAndConsume(unsigned DiagID,
 
 bool BalancedDelimiterTracker::diagnoseMissingClose() {
   assert(!P.Tok.is(Close) && "Should have consumed closing delimiter");
-  
-  const char *LHSName = "unknown";
-  diag::kind DID;
-  switch (Close) {
-  default: llvm_unreachable("Unexpected balanced token");
-  case tok::r_paren : LHSName = "("; DID = diag::err_expected_rparen; break;
-  case tok::r_brace : LHSName = "{"; DID = diag::err_expected_rbrace; break;
-  case tok::r_square: LHSName = "["; DID = diag::err_expected_rsquare; break;
-  }
-  P.Diag(P.Tok, DID);
-  P.Diag(LOpen, diag::note_matching) << LHSName;
+
+  P.Diag(P.Tok, diag::err_expected) << Close;
+  P.Diag(LOpen, diag::note_matching) << Kind;
 
   // If we're not already at some kind of closing bracket, skip to our closing
   // token.

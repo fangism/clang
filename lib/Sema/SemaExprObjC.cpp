@@ -1380,10 +1380,14 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
   return IsError;
 }
 
-bool Sema::isSelfExpr(Expr *receiver) {
+bool Sema::isSelfExpr(Expr *RExpr) {
   // 'self' is objc 'self' in an objc method only.
-  ObjCMethodDecl *method =
-    dyn_cast_or_null<ObjCMethodDecl>(CurContext->getNonClosureAncestor());
+  ObjCMethodDecl *Method =
+      dyn_cast_or_null<ObjCMethodDecl>(CurContext->getNonClosureAncestor());
+  return isSelfExpr(RExpr, Method);
+}
+
+bool Sema::isSelfExpr(Expr *receiver, const ObjCMethodDecl *method) {
   if (!method) return false;
 
   receiver = receiver->IgnoreParenLValueCasts();
@@ -1699,7 +1703,8 @@ ActOnClassPropertyRefExpr(IdentifierInfo &receiverName,
     }
     
     if (IFace == 0) {
-      Diag(receiverNameLoc, diag::err_expected_ident_or_lparen);
+      Diag(receiverNameLoc, diag::err_expected_either) << tok::identifier
+                                                       << tok::l_paren;
       return ExprError();
     }
   }
@@ -2642,7 +2647,7 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
       }
     }
   }
-      
+  
   return MaybeBindToTemporary(Result);
 }
 
@@ -3280,7 +3285,7 @@ static bool CheckObjCBridgeNSCast(Sema &S, QualType castType, Expr *castExpr) {
           }
         }
         S.Diag(castExpr->getLocStart(), diag::err_objc_cf_bridged_not_interface)
-        << castExpr->getType() << Parm->getName();
+          << castExpr->getType() << Parm;
         S.Diag(TDNDecl->getLocStart(), diag::note_declared_at);
         if (Target)
           S.Diag(Target->getLocStart(), diag::note_declared_at);

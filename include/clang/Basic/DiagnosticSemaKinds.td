@@ -146,7 +146,7 @@ def ext_flexible_array_init : Extension<
 def err_bad_variable_name : Error<
   "%0 cannot be the name of a variable or data member">;
 def err_bad_parameter_name : Error<
-  "'%0' cannot be the name of a parameter">;
+  "%0 cannot be the name of a parameter">;
 def err_parameter_name_omitted : Error<"parameter name omitted">;
 def warn_unused_parameter : Warning<"unused parameter %0">,
   InGroup<UnusedParameter>, DefaultIgnore;
@@ -367,8 +367,6 @@ def warn_redecl_library_builtin : Warning<
   "incompatible redeclaration of library function %0">,
   InGroup<DiagGroup<"incompatible-library-redeclaration">>;
 def err_builtin_definition : Error<"definition of builtin function %0">;
-def err_types_compatible_p_in_cplusplus : Error<
-  "__builtin_types_compatible_p is not valid in C++">;
 def warn_builtin_unknown : Warning<"use of unknown builtin %0">,
   InGroup<ImplicitFunctionDeclare>, DefaultError;
 def warn_dyn_class_memaccess : Warning<
@@ -392,11 +390,18 @@ def warn_sizeof_pointer_type_memaccess : Warning<
   "%select{destination|source}2; expected %3 or an explicit length">,
   InGroup<SizeofPointerMemaccess>;
 def warn_strlcpycat_wrong_size : Warning<
-  "size argument in %0 call appears to be size of the source; expected the size of "
-  "the destination">,
+  "size argument in %0 call appears to be size of the source; "
+  "expected the size of the destination">,
   InGroup<DiagGroup<"strlcpy-strlcat-size">>;
 def note_strlcpycat_wrong_size : Note<
   "change size argument to be the size of the destination">;
+def warn_memsize_comparison : Warning<
+  "size argument in %0 call is a comparison">,
+  InGroup<DiagGroup<"memsize-comparison">>;
+def warn_memsize_comparison_paren_note : Note<
+  "did you mean to compare the result of %0 instead?">;
+def warn_memsize_comparison_cast_note : Note<
+  "explicitly cast the argument to size_t to silence this warning">;
   
 def warn_strncat_large_size : Warning<
   "the value of the size argument in 'strncat' is too large, might lead to a " 
@@ -420,7 +425,7 @@ def ext_noreturn_main : ExtWarn<
 def note_main_remove_noreturn : Note<"remove '_Noreturn'">;
 def err_constexpr_main : Error<
   "'main' is not allowed to be declared constexpr">;
-def err_mainlike_template_decl : Error<"'%0' cannot be a template">;
+def err_mainlike_template_decl : Error<"%0 cannot be a template">;
 def err_main_returns_nonint : Error<"'main' must return 'int'">;
 def ext_main_returns_nonint : ExtWarn<"return type of 'main' is not 'int'">,
     InGroup<MainReturnType>;
@@ -708,11 +713,11 @@ def warn_auto_synthesizing_protocol_property :Warning<
   InGroup<DiagGroup<"objc-protocol-property-synthesis">>;
 def warn_no_autosynthesis_shared_ivar_property : Warning <
   "auto property synthesis will not synthesize property "
-  "'%0' because it cannot share an ivar with another synthesized property">,
+  "%0 because it cannot share an ivar with another synthesized property">,
   InGroup<ObjCNoPropertyAutoSynthesis>;
 def warn_no_autosynthesis_property : Warning<
   "auto property synthesis will not synthesize property "
-  "'%0' because it is 'readwrite' but it will be synthesized 'readonly' "
+  "%0 because it is 'readwrite' but it will be synthesized 'readonly' "
   "via another property">,
   InGroup<ObjCNoPropertyAutoSynthesis>;
 def warn_autosynthesis_property_ivar_match :Warning<
@@ -726,7 +731,7 @@ def warn_property_getter_owning_mismatch : Warning<
   "property declared as returning non-retained objects"
   "; getter returning retained objects">;
 def error_property_setter_ambiguous_use : Error<
-  "synthesized properties '%0' and '%1' both claim setter %2 -"
+  "synthesized properties %0 and %1 both claim setter %2 -"
   " use of this setter will cause unexpected behavior">;
 def err_ownin_getter_rule : Error<
   "property's synthesized getter follows Cocoa naming"
@@ -843,7 +848,7 @@ def warn_implicit_atomic_property : Warning<
 def note_auto_readonly_iboutlet_fixup_suggest : Note<
   "property should be changed to be readwrite">;
 def warn_auto_readonly_iboutlet_property : Warning<
-  "readonly IBOutlet property '%0' when auto-synthesized may "
+  "readonly IBOutlet property %0 when auto-synthesized may "
   "not work correctly with 'nib' loader">,
   InGroup<DiagGroup<"readonly-iboutlet-property">>;
 def warn_auto_implicit_atomic_property : Warning<
@@ -1574,7 +1579,7 @@ def warn_abstract_final_class : Warning<
   "abstract class is marked '%select{final|sealed}0'">, InGroup<AbstractFinalClass>;
 
 // C++11 attributes
-def err_repeat_attribute : Error<"'%0' attribute cannot be repeated">;
+def err_repeat_attribute : Error<"%0 attribute cannot be repeated">;
 
 // C++11 final
 def err_final_function_overridden : Error<
@@ -1790,7 +1795,7 @@ def warn_auto_var_is_id : Warning<
 
 // Attributes
 def err_nsobject_attribute : Error<
-  "__attribute ((NSObject)) is for pointer types only">;
+  "'NSObject' attribute is for pointer types only">;
 def err_attribute_can_be_applied_only_to_symbol_declaration : Error<
   "%0 attribute can be applied only to symbol declaration">;
 def err_attributes_are_not_compatible : Error<
@@ -1799,9 +1804,9 @@ def err_attribute_wrong_number_arguments : Error<
   "%0 attribute %plural{0:takes no arguments|1:takes one argument|"
   ":requires exactly %1 arguments}1">;
 def err_attribute_too_many_arguments : Error<
-  "attribute takes no more than %0 argument%s0">;
+  "%0 attribute takes no more than %1 argument%s1">;
 def err_attribute_too_few_arguments : Error<
-  "attribute takes at least %0 argument%s0">;
+  "%0 attribute takes at least %1 argument%s1">;
 def err_attribute_invalid_vector_type : Error<"invalid vector element type %0">;
 def err_attribute_bad_neon_vector_size : Error<
   "Neon vector size must be 64 or 128 bits">;
@@ -1810,14 +1815,11 @@ def err_attribute_unsupported : Error<
 def err_aligned_attribute_argument_not_int : Error<
   "'aligned' attribute requires integer constant">;
 def err_alignas_attribute_wrong_decl_type : Error<
-  "'%select{alignas|_Alignas}0' attribute cannot be applied to a %select{"
-  "function parameter|variable with 'register' storage class|"
-  "'catch' variable|bit-field}1">;
+  "%0 attribute cannot be applied to a %select{function parameter|"
+  "variable with 'register' storage class|'catch' variable|bit-field}1">;
 def err_alignas_missing_on_definition : Error<
-  "'%select{alignas|_Alignas}0' must be specified on definition if it is "
-  "specified on any declaration">;
-def note_alignas_on_declaration : Note<
-  "declared with '%select{alignas|_Alignas}0' attribute here">;
+  "%0 must be specified on definition if it is specified on any declaration">;
+def note_alignas_on_declaration : Note<"declared with %0 attribute here">;
 def err_alignas_mismatch : Error<
   "redeclaration has different alignment requirement (%1 vs %0)">;
 def err_alignas_underaligned : Error<
@@ -1837,17 +1839,17 @@ def err_init_priority_object_attr : Error<
 def err_attribute_argument_vec_type_hint : Error<
   "invalid attribute argument %0 - expecting a vector or vectorizable scalar type">;
 def err_attribute_argument_out_of_bounds : Error<
-  "'%0' attribute parameter %1 is out of bounds">;
+  "%0 attribute parameter %1 is out of bounds">;
 def err_attribute_uuid_malformed_guid : Error<
   "uuid attribute contains a malformed GUID">;
-def warn_nonnull_pointers_only : Warning<
-  "nonnull attribute only applies to pointer arguments">;
-def err_attribute_pointers_only : Error<
-  "%0 attribute only applies to pointer arguments">;
+def warn_attribute_pointers_only : Warning<
+  "%0 attribute only applies to pointer arguments">,
+  InGroup<IgnoredAttributes>;
+def err_attribute_pointers_only : Error<warn_attribute_pointers_only.Text>;
 def err_attribute_no_member_pointers : Error<
   "%0 attribute cannot be used with pointers to members">;
 def err_attribute_invalid_implicit_this_argument : Error<
-  "'%0' attribute is invalid for the implicit this argument">;
+  "%0 attribute is invalid for the implicit this argument">;
 def err_ownership_type : Error<
   "%0 attribute only applies to %select{pointer|integer}1 arguments">;
 def err_format_strftime_third_parameter : Error<
@@ -1867,6 +1869,8 @@ def err_attribute_zero_size : Error<"zero vector size">;
 def err_attribute_size_too_large : Error<"vector size too large">;
 def err_typecheck_vector_not_convertable : Error<
   "can't convert between vector values of different size (%0 and %1)">;
+def err_typecheck_vector_not_convertable_non_scalar : Error<
+  "can't convert between vector and non-scalar values (%0 and %1)">;
 def err_ext_vector_component_exceeds_length : Error<
   "vector component access exceeds type %0">;
 def err_ext_vector_component_name_illegal : Error<
@@ -1950,23 +1954,19 @@ def warn_mismatched_section : Warning<
 
 def err_anonymous_property: Error<
   "anonymous property is not supported">;
-def err_property_is_variably_modified: Error<
-  "property '%0' has a variably modified type">;
-def err_no_getter_for_property : Error<
-  "no getter defined for property '%0'">;
-def err_no_setter_for_property : Error<
-  "no setter defined for property '%0'">;
-def error_cannot_find_suitable_getter : Error<
-  "cannot find suitable getter for property '%0'">;
-def error_cannot_find_suitable_setter : Error<
-  "cannot find suitable setter for property '%0'">;
+def err_property_is_variably_modified : Error<
+  "property %0 has a variably modified type">;
+def err_no_accessor_for_property : Error<
+  "no %select{getter|setter}0 defined for property %1">;
+def error_cannot_find_suitable_accessor : Error<
+  "cannot find suitable %select{getter|setter}0 for property %1">;
 
 def err_attribute_aligned_not_power_of_two : Error<
   "requested alignment is not a power of 2">;
 def err_attribute_aligned_greater_than_8192 : Error<
   "requested alignment must be 8192 bytes or smaller">;
 def warn_redeclaration_without_attribute_prev_attribute_ignored : Warning<
-  "'%0' redeclared without %1 attribute: previous %1 ignored">;
+  "%0 redeclared without %1 attribute: previous %1 ignored">;
 def warn_attribute_ignored : Warning<"%0 attribute ignored">,
   InGroup<IgnoredAttributes>;
 def warn_attribute_after_definition_ignored : Warning<
@@ -2000,8 +2000,8 @@ def warn_gc_attribute_weak_on_local : Warning<
   "Objective-C GC does not allow weak variables on the stack">,
   InGroup<IgnoredAttributes>;
 def warn_nsobject_attribute : Warning<
-  "__attribute ((NSObject)) may be put on a typedef only, "
-  "attribute is ignored">, InGroup<NSobjectAttribute>;
+  "'NSObject' attribute may be put on a typedef only; attribute is ignored">,
+  InGroup<NSobjectAttribute>;
 def warn_attribute_weak_on_local : Warning<
   "__weak attribute cannot be specified on an automatic variable when ARC "
   "is not enabled">,
@@ -2018,9 +2018,9 @@ def warn_attribute_invalid_on_definition : Warning<
 def err_attribute_weakref_not_static : Error<
   "weakref declaration must have internal linkage">;
 def err_attribute_weakref_not_global_context : Error<
-  "weakref declaration of '%0' must be in a global context">;
+  "weakref declaration of %0 must be in a global context">;
 def err_attribute_weakref_without_alias : Error<
-  "weakref declaration of '%0' must also have an alias attribute">;
+  "weakref declaration of %0 must also have an alias attribute">;
 def err_alias_not_supported_on_darwin : Error <
   "only weak aliases are supported on darwin">;
 def err_alias_to_undefined : Error<
@@ -2043,19 +2043,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "variables, functions and classes|Objective-C protocols|"
   "functions and global variables}1">,
   InGroup<IgnoredAttributes>;
-def err_attribute_wrong_decl_type : Error<
-  "%0 attribute only applies to %select{functions|unions|"
-  "variables and functions|functions and methods|parameters|"
-  "functions, methods and blocks|functions, methods, and classes|"
-  "functions, methods, and parameters|classes|variables|methods|"
-  "variables, functions and labels|fields and global variables|structs|"
-  "variables, functions and tag types|thread-local variables|"
-  "variables and fields|variables, data members and tag types|"
-  "types and namespaces|Objective-C interfaces|methods and properties|"
-  "struct or union|struct, union or class|types|"
-  "Objective-C instance methods|init methods of interface declarations|"
-  "variables, functions and classes|Objective-C protocols|"
-  "functions and global variables}1">;
+def err_attribute_wrong_decl_type : Error<warn_attribute_wrong_decl_type.Text>;
 def warn_type_attribute_wrong_type : Warning<
   "'%0' only applies to %select{function|pointer|"
   "Objective-C object or block pointer}1 types; type here is %2">,
@@ -2095,8 +2083,6 @@ def warn_objc_precise_lifetime_meaningless : Error<
   "objc_precise_lifetime is not meaningful for "
   "%select{__unsafe_unretained|__autoreleasing}0 objects">;
 def err_invalid_pcs : Error<"invalid PCS type">;
-def err_attribute_can_be_applied_only_to_value_decl : Error<
-  "%0 attribute can only be applied to value declarations">;
 def warn_attribute_not_on_decl : Warning<
   "%0 attribute ignored when parsing type">, InGroup<IgnoredAttributes>;
 def err_base_specifier_attribute : Error<
@@ -2128,18 +2114,18 @@ def warn_thread_attribute_ignored : Warning<
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_argument_not_lockable : Warning<
   "%0 attribute requires arguments whose type is annotated "
-  "with 'lockable' attribute; type here is '%1'">,
+  "with 'lockable' attribute; type here is %1">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_argument_not_class : Warning<
   "%0 attribute requires arguments that are class type or point to"
-  " class type; type here is '%1'">,
+  " class type; type here is %1">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;  
 def warn_thread_attribute_decl_not_lockable : Warning<
   "%0 attribute can only be applied in a context annotated "
   "with 'lockable' attribute">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_decl_not_pointer : Warning<
-  "'%0' only applies to pointer types; type here is %1">,
+  "%0 only applies to pointer types; type here is %1">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def err_attribute_argument_out_of_range : Error<
   "%0 attribute parameter %1 is out of bounds: "
@@ -2354,14 +2340,13 @@ def warn_attribute_protected_visibility :
   InGroup<DiagGroup<"unsupported-visibility">>;
 def err_mismatched_visibility: Error<"visibility does not match previous declaration">;
 def note_previous_attribute : Note<"previous attribute is here">;
-def err_unknown_machine_mode : Error<"unknown machine mode %0">;
-def err_unsupported_machine_mode : Error<"unsupported machine mode %0">;
+def err_machine_mode : Error<"%select{unknown|unsupported}0 machine mode %1">;
 def err_mode_not_primitive : Error<
   "mode attribute only supported for integer and floating-point types">;
 def err_mode_wrong_type : Error<
   "type of machine mode does not match type of base type">;
 def err_attr_wrong_decl : Error<
-  "'%0' attribute invalid on this declaration, requires typedef or value">;
+  "%0 attribute invalid on this declaration, requires typedef or value">;
 def warn_attribute_nonnull_no_pointers : Warning<
   "'nonnull' attribute applied to function with no pointer arguments">,
   InGroup<IgnoredAttributes>;
@@ -2459,7 +2444,7 @@ def warn_objc_implementation_missing_designated_init_override : Warning<
 def err_objc_attr_not_id : Error<
   "parameter of %0 attribute must be a single name of an Objective-C %select{class|protocol}1">;
 def err_objc_cf_bridged_not_interface : Error<
-  "CF object of type %0 is bridged to '%1', which is not an Objective-C class">;
+  "CF object of type %0 is bridged to %1, which is not an Objective-C class">;
 def err_objc_ns_bridged_invalid_cfobject : Error<
   "ObjectiveC object of type %0 is bridged to %1, which is not valid CF object">;
 def warn_objc_invalid_bridge : Warning<
@@ -3429,6 +3414,8 @@ def note_template_declared_here : Note<
   "%select{function template|class template|variable template"
   "|type alias template|template template parameter}0 "
   "%1 declared here">;
+def err_alias_template_expansion_into_fixed_list : Error<
+  "pack expansion used as argument for non-pack parameter of alias template">;
 def note_parameter_type : Note<
   "parameter of type %0 is declared here">;
 
@@ -3799,7 +3786,7 @@ def err_initializer_string_for_char_array_too_long : Error<
 def warn_initializer_string_for_char_array_too_long : ExtWarn<
   "initializer-string for char array is too long">;
 def warn_missing_field_initializers : Warning<
-  "missing field '%0' initializer">,
+  "missing field %0 initializer">,
   InGroup<MissingFieldInitializers>, DefaultIgnore;
 def warn_braces_around_scalar_init : Warning<
   "braces around scalar initializer">;
@@ -4255,6 +4242,8 @@ def ext_sizeof_alignof_function_type : Extension<
 def ext_sizeof_alignof_void_type : Extension<
   "invalid application of '%select{sizeof|alignof|vec_step}0' to a void "
   "type">, InGroup<PointerArith>;
+def err_opencl_sizeof_alignof_type : Error<
+  "invalid application of '%select{sizeof|alignof|vec_step}0' to a void type">;
 def err_sizeof_alignof_incomplete_type : Error<
   "invalid application of '%select{sizeof|alignof|vec_step}0' to an "
   "incomplete type %1">;
@@ -5753,7 +5742,6 @@ def err_incomplete_type_used_in_type_trait_expr : Error<
   
 def err_dimension_expr_not_constant_integer : Error<
   "dimension expression does not evaluate to a constant unsigned int">;
-def err_expected_ident_or_lparen : Error<"expected identifier or '('">;
 
 def err_typecheck_cond_incompatible_operands_null : Error<
   "non-pointer operand type %0 incompatible with %select{NULL|nullptr}1">;
@@ -6285,7 +6273,7 @@ def warn_type_tag_for_datatype_wrong_kind : Warning<
   "this type tag was not designed to be used with this function">,
   InGroup<TypeSafety>;
 def warn_type_safety_type_mismatch : Warning<
-  "argument type %0 doesn't match specified '%1' type tag "
+  "argument type %0 doesn't match specified %1 type tag "
   "%select{that requires %3|}2">, InGroup<TypeSafety>;
 def warn_type_safety_null_pointer_required : Warning<
   "specified %0 type tag requires a null pointer">, InGroup<TypeSafety>;
@@ -6729,7 +6717,11 @@ def err_opencl_global_invalid_addr_space : Error<
   "global variables must have a constant address space qualifier">;
 def err_opencl_no_main : Error<"%select{function|kernel}0 cannot be called 'main'">;
 def err_opencl_kernel_attr :
-  Error<"attribute '%0' can only be applied to a kernel function">;
+  Error<"attribute %0 can only be applied to a kernel function">;
+def err_opencl_return_value_with_address_space : Error<
+  "return value cannot be qualified with address space">;
+def err_opencl_constant_no_init : Error<
+  "variable in constant address space must be initialized">;
 } // end of sema category
 
 let CategoryName = "OpenMP Issue" in {

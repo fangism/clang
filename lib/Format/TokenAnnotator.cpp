@@ -84,7 +84,7 @@ private:
     bool StartsObjCMethodExpr = false;
     FormatToken *Left = CurrentToken->Previous;
     if (CurrentToken->is(tok::caret)) {
-      // ^( starts a block.
+      // (^ can start a block type.
       Left->Type = TT_ObjCBlockLParen;
     } else if (FormatToken *MaybeSel = Left->Previous) {
       // @selector( starts a selector.
@@ -102,6 +102,10 @@ private:
                Left->Previous->MatchingParen &&
                Left->Previous->MatchingParen->Type == TT_LambdaLSquare) {
       // This is a parameter list of a lambda expression.
+      Contexts.back().IsExpression = false;
+    } else if (Left->Previous && Left->Previous->is(tok::caret) &&
+               Left->Previous->Type == TT_UnaryOperator) {
+      // This is the parameter list of an ObjC block.
       Contexts.back().IsExpression = false;
     }
 
@@ -226,9 +230,12 @@ private:
         }
         Left->MatchingParen = CurrentToken;
         CurrentToken->MatchingParen = Left;
-        if (Contexts.back().FirstObjCSelectorName != NULL)
+        if (Contexts.back().FirstObjCSelectorName != NULL) {
           Contexts.back().FirstObjCSelectorName->LongestObjCSelectorName =
               Contexts.back().LongestObjCSelectorName;
+          if (Contexts.back().NumBlockParameters > 1)
+            Contexts.back().FirstObjCSelectorName->LongestObjCSelectorName = 0;
+        }
         next();
         return true;
       }
@@ -467,6 +474,18 @@ private:
     }
   }
 
+  void parsePragma() {
+    next(); // Consume "pragma".
+    if (CurrentToken && CurrentToken->TokenText == "mark") {
+      next(); // Consume "mark".
+      next(); // Consume first token (so we fix leading whitespace).
+      while (CurrentToken != NULL) {
+        CurrentToken->Type = TT_ImplicitStringLiteral;
+        next();
+      }
+    }
+  }
+
   void parsePreprocessorDirective() {
     next();
     if (CurrentToken == NULL)
@@ -487,6 +506,9 @@ private:
     case tok::pp_error:
     case tok::pp_warning:
       parseWarningOrError();
+      break;
+    case tok::pp_pragma:
+      parsePragma();
       break;
     case tok::pp_if:
     case tok::pp_elif:
@@ -555,15 +577,16 @@ private:
     Context(tok::TokenKind ContextKind, unsigned BindingStrength,
             bool IsExpression)
         : ContextKind(ContextKind), BindingStrength(BindingStrength),
-          LongestObjCSelectorName(0), ColonIsForRangeExpr(false),
-          ColonIsDictLiteral(false), ColonIsObjCMethodExpr(false),
-          FirstObjCSelectorName(NULL), FirstStartOfName(NULL),
-          IsExpression(IsExpression), CanBeExpression(true),
-          InCtorInitializer(false) {}
+          LongestObjCSelectorName(0), NumBlockParameters(0),
+          ColonIsForRangeExpr(false), ColonIsDictLiteral(false),
+          ColonIsObjCMethodExpr(false), FirstObjCSelectorName(NULL),
+          FirstStartOfName(NULL), IsExpression(IsExpression),
+          CanBeExpression(true), InCtorInitializer(false) {}
 
     tok::TokenKind ContextKind;
     unsigned BindingStrength;
     unsigned LongestObjCSelectorName;
+    unsigned NumBlockParameters;
     bool ColonIsForRangeExpr;
     bool ColonIsDictLiteral;
     bool ColonIsObjCMethodExpr;
@@ -650,6 +673,8 @@ private:
                                                Contexts.back().IsExpression);
       } else if (Current.isOneOf(tok::minus, tok::plus, tok::caret)) {
         Current.Type = determinePlusMinusCaretUsage(Current);
+        if (Current.Type == TT_UnaryOperator)
+          ++Contexts.back().NumBlockParameters;
       } else if (Current.isOneOf(tok::minusminus, tok::plusplus)) {
         Current.Type = determineIncrementUsage(Current);
       } else if (Current.is(tok::exclaim)) {
@@ -916,8 +941,11 @@ public:
       int CurrentPrecedence = getCurrentPrecedence();
 
       if (Current && Current->Type == TT_ObjCSelectorName &&
-          Precedence == CurrentPrecedence)
+          Precedence == CurrentPrecedence) {
+        if (LatestOperator)
+          addFakeParenthesis(Start, prec::Level(Precedence));
         Start = Current;
+      }
 
       // At the end of the line or when an operator with higher precedence is
       // found, insert fake parenthesis and return.
@@ -1077,7 +1105,7 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
         Current->SpacesRequiredBefore = Style.Cpp11BracedListStyle ? 0 : 1;
       else
         Current->SpacesRequiredBefore = Style.SpacesBeforeTrailingComments;
-    } else if (Current->SpacesRequiredBefore == 0 && 
+    } else if (Current->SpacesRequiredBefore == 0 &&
              spaceRequiredBefore(Line, *Current)) {
       Current->SpacesRequiredBefore = 1;
     }
@@ -1201,6 +1229,8 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
 
   if (Left.is(tok::l_paren) && InFunctionDecl)
     return 100;
+  if (Left.is(tok::equal) && InFunctionDecl)
+    return 110;
   if (Left.opensScope())
     return Left.ParameterCount > 1 ? Style.PenaltyBreakBeforeFirstCallParameter
                                    : 19;
@@ -1263,7 +1293,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return false;
   if (Left.is(tok::coloncolon))
     return false;
-  if (Right.is(tok::coloncolon))
+  if (Right.is(tok::coloncolon) && Left.isNot(tok::l_brace))
     return (Left.is(tok::less) && Style.Standard == FormatStyle::LS_Cpp03) ||
            !Left.isOneOf(tok::identifier, tok::greater, tok::l_paren,
                          tok::r_paren, tok::less);
@@ -1320,7 +1350,9 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return false;
   if (Left.is(tok::l_brace) && Right.is(tok::r_brace))
     return !Left.Children.empty(); // No spaces in "{}".
-  if (Left.is(tok::l_brace) || Right.is(tok::r_brace))
+  if ((Left.is(tok::l_brace) && Left.BlockKind != BK_Block) ||
+      (Right.is(tok::r_brace) && Right.MatchingParen &&
+       Right.MatchingParen->BlockKind != BK_Block))
     return !Style.Cpp11BracedListStyle;
   if (Left.Type == TT_BlockComment && Left.TokenText.endswith("=*/"))
     return false;
@@ -1422,9 +1454,6 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
               Right.Type == TT_CtorInitializerColon) &&
              Style.BreakConstructorInitializersBeforeComma &&
              !Style.ConstructorInitializerAllOnOneLineOrOnePerLine) {
-    return true;
-  } else if (Right.Previous->BlockKind == BK_Block &&
-             Right.Previous->isNot(tok::r_brace) && Right.isNot(tok::r_brace)) {
     return true;
   } else if (Right.is(tok::l_brace) && (Right.BlockKind == BK_Block)) {
     return Style.BreakBeforeBraces == FormatStyle::BS_Allman ||

@@ -31,7 +31,7 @@ static void HandleARMInterruptAttr(Decl *d,
   // Check the attribute arguments.
   if (Attr.getNumArgs() > 1) {
     S.Diag(Attr.getLoc(), diag::err_attribute_too_many_arguments)
-        << 1;
+      << Attr.getName() << 1;
     return;
   }
 
@@ -97,7 +97,7 @@ static void HandleMSP430InterruptAttr(Decl *d,
   unsigned Num = NumParams.getLimitedValue(255);
   if ((Num & 1) || Num > 30) {
     S.Diag(Attr.getLoc(), diag::err_attribute_argument_out_of_bounds)
-      << "interrupt" << (int)NumParams.getSExtValue()
+      << Attr.getName() << (int)NumParams.getSExtValue()
       << NumParamsExpr->getSourceRange();
     return;
   }

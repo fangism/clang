@@ -25,9 +25,9 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Option/OptSpecifier.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Option/OptSpecifier.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -1868,17 +1868,24 @@ static llvm::Triple computeTargetTriple(StringRef DefaultTargetTriple,
   if (Target.isOSDarwin()) {
     // If an explict Darwin arch name is given, that trumps all.
     if (!DarwinArchName.empty()) {
-      Target.setArch(
-        tools::darwin::getArchTypeForDarwinArchName(DarwinArchName));
+      if (DarwinArchName == "x86_64h")
+        Target.setArchName(DarwinArchName);
+      else
+        Target.setArch(
+          tools::darwin::getArchTypeForDarwinArchName(DarwinArchName));
       return Target;
     }
 
     // Handle the Darwin '-arch' flag.
     if (Arg *A = Args.getLastArg(options::OPT_arch)) {
-      llvm::Triple::ArchType DarwinArch
-        = tools::darwin::getArchTypeForDarwinArchName(A->getValue());
-      if (DarwinArch != llvm::Triple::UnknownArch)
-        Target.setArch(DarwinArch);
+      if (StringRef(A->getValue()) == "x86_64h")
+        Target.setArchName(A->getValue());
+      else {
+        llvm::Triple::ArchType DarwinArch
+          = tools::darwin::getArchTypeForDarwinArchName(A->getValue());
+        if (DarwinArch != llvm::Triple::UnknownArch)
+          Target.setArch(DarwinArch);
+      }
     }
   }
 
