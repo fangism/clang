@@ -2896,6 +2896,13 @@ TEST_F(FormatTest, ConstructorInitializers) {
                "    : aaaaa(aaaaaaaaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaaaaaaaa,\n"
                "            aaaaaaaaaaaaaaaaaaaaaa) {}",
                OnePerLine);
+
+  EXPECT_EQ("Constructor()\n"
+            "    : // Comment forcing unwanted break.\n"
+            "      aaaa(aaaa) {}",
+            format("Constructor() :\n"
+                   "    // Comment forcing unwanted break.\n"
+                   "    aaaa(aaaa) {}"));
 }
 
 TEST_F(FormatTest, MemoizationTests) {
@@ -3333,15 +3340,15 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
       "void f() {\n"
       "  someo->Add((new util::filetools::Handler(dir))\n"
       "                 ->OnEvent1(NewPermanentCallback(\n"
-      "                       this, &HandlerHolderClass::EventHandlerCBA))\n"
+      "                     this, &HandlerHolderClass::EventHandlerCBA))\n"
       "                 ->OnEvent2(NewPermanentCallback(\n"
-      "                       this, &HandlerHolderClass::EventHandlerCBB))\n"
+      "                     this, &HandlerHolderClass::EventHandlerCBB))\n"
       "                 ->OnEvent3(NewPermanentCallback(\n"
-      "                       this, &HandlerHolderClass::EventHandlerCBC))\n"
+      "                     this, &HandlerHolderClass::EventHandlerCBC))\n"
       "                 ->OnEvent5(NewPermanentCallback(\n"
-      "                       this, &HandlerHolderClass::EventHandlerCBD))\n"
+      "                     this, &HandlerHolderClass::EventHandlerCBD))\n"
       "                 ->OnEvent6(NewPermanentCallback(\n"
-      "                       this, &HandlerHolderClass::EventHandlerCBE)));\n"
+      "                     this, &HandlerHolderClass::EventHandlerCBE)));\n"
       "}");
 
   verifyFormat(
@@ -3367,7 +3374,7 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
                "    .has<bbbbbbbbbbbbbbbbbbbbb>();");
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaa()\n"
                "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa<\n"
-               "         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>();");
+               "        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>();");
 
   // Prefer not to break after empty parentheses.
   verifyFormat("FirstToken->WhitespaceRange.getBegin().getLocWithOffset(\n"
@@ -3910,8 +3917,8 @@ TEST_F(FormatTest, WrapsAtFunctionCallsIfNecessary) {
 
   verifyFormat("EXPECT_CALL(SomeObject, SomeFunction(Parameter))\n"
                "    .WillRepeatedly(Return(SomeValue));");
-  verifyFormat("SomeMap[std::pair(aaaaaaaaaaaa, bbbbbbbbbbbbbbb)]\n"
-               "    .insert(ccccccccccccccccccccccc);");
+  verifyFormat("SomeMap[std::pair(aaaaaaaaaaaa, bbbbbbbbbbbbbbb)].insert(\n"
+               "    ccccccccccccccccccccccc);");
   verifyFormat("aaaaa(aaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
                "            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa).aaaaa(aaaaa),\n"
                "      aaaaaaaaaaaaaaaaaaaaa);");
@@ -4650,6 +4657,10 @@ TEST_F(FormatTest, HandlesIncludeDirectives) {
   verifyFormat("#if __has_include(<strstream>)\n"
                "#include <strstream>\n"
                "#endif");
+
+  // Protocol buffer definition or missing "#".
+  verifyFormat("import \"aaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaa\";",
+               getLLVMStyleWithColumns(30));
 }
 
 //===----------------------------------------------------------------------===//
@@ -5879,6 +5890,8 @@ TEST_F(FormatTest, ObjCLiterals) {
   verifyFormat("NSNumber *piOverTwo = @(M_PI / 2);");
   verifyFormat("NSNumber *favoriteColor = @(Green);");
   verifyFormat("NSString *path = @(getenv(\"PATH\"));");
+
+  verifyFormat("[dictionary setObject:@(1) forKey:@\"number\"];");
 }
 
 TEST_F(FormatTest, ObjCDictLiterals) {
@@ -6257,7 +6270,7 @@ TEST_F(FormatTest, BreaksWideAndNSStringLiterals) {
             format("L\"wide string literal\";", getGoogleStyleWithColumns(16)));
   EXPECT_EQ("@\"NSString \"\n"
             "@\"literal\";",
-            format("@\"NSString literal\";", getGoogleStyleWithColumns(16)));
+            format("@\"NSString literal\";", getGoogleStyleWithColumns(19)));
 }
 
 TEST_F(FormatTest, BreaksRawStringLiterals) {
@@ -7312,6 +7325,7 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE_BOOL(SpacesInParentheses);
   CHECK_PARSE_BOOL(SpacesInAngles);
   CHECK_PARSE_BOOL(SpaceInEmptyParentheses);
+  CHECK_PARSE_BOOL(SpacesInContainerLiterals);
   CHECK_PARSE_BOOL(SpacesInCStyleCastParentheses);
   CHECK_PARSE_BOOL(SpaceBeforeAssignmentOperators);
 
@@ -7880,6 +7894,10 @@ TEST_F(FormatTest, FormatsLambdas) {
                "        [&](int, int) { return 1; });\n"
                "}\n");
 
+  // Lambdas with return types.
+  verifyFormat("int c = []()->int { return 2; }();\n");
+  verifyFormat("int c = []()->vector<int> { return { 2 }; }();\n");
+
   // Not lambdas.
   verifyFormat("constexpr char hello[]{ \"hello\" };");
   verifyFormat("double &operator[](int i) { return 0; }\n"
@@ -7893,6 +7911,10 @@ TEST_F(FormatTest, FormatsBlocks) {
   verifyFormat("int i = {[operation setCompletionBlock : ^{ [self "
                "onOperationDone]; }] };");
   verifyFormat("[operation setCompletionBlock:^(int *i) { f(); }];");
+  verifyFormat("int a = [operation block:^int(int *i) { return 1; }];");
+  verifyFormat("[myObject doSomethingWith:arg1\n"
+               "                      aaa:^int(int *a) { return 1; }\n"
+               "                      bbb:f(a * b)];");
 
   verifyFormat("[operation setCompletionBlock:^{\n"
                "    [self.delegate newDataAvailable];\n"

@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fno-rtti -emit-llvm -fdump-vtable-layouts %s -o %t.ll -cxx-abi microsoft -triple=i386-pc-win32 >%t
+// RUN: %clang_cc1 -fno-rtti -emit-llvm -fdump-vtable-layouts %s -o %t.ll -triple=i386-pc-win32 > %t
 // RUN: FileCheck --check-prefix=VTABLE-SIMPLE-A %s < %t
 // RUN: FileCheck --check-prefix=VTABLE-SIMPLE-B %s < %t
 // RUN: FileCheck --check-prefix=VTABLE-SIMPLE-C %s < %t
@@ -13,7 +13,7 @@
 // RUN: FileCheck --check-prefix=MANGLING %s < %t.ll
 
 // For now, just make sure x86_64 doesn't crash.
-// RUN: %clang_cc1 -fno-rtti -emit-llvm-only -fdump-vtable-layouts %s -cxx-abi microsoft -triple=x86_64-pc-win32 >/dev/null
+// RUN: %clang_cc1 -fno-rtti -emit-llvm-only -fdump-vtable-layouts %s -triple=x86_64-pc-win32 > /dev/null
 
 struct V1 {
   virtual void f();
@@ -264,7 +264,7 @@ struct H : Z, A {
 
   // VTABLE-EXTENDED-H: VFTable for 'V1' in 'simple::A' in 'extended::A' in 'extended::H' (2 entries).
   // VTABLE-EXTENDED-H-NEXT: 0 | void simple::A::f()
-  // VTABLE-EXTENDED-H-NEXT:     [this adjustment: vtordisp at -4, vbptr at 4 to the left,
+  // VTABLE-EXTENDED-H-NEXT:     [this adjustment: vtordisp at -4, vbptr at 8 to the left,
   // VTABLE-EXTENDED-H-NEXT:      vboffset at 8 in the vbtable, 8 non-virtual]
 
   // MANGLING-DAG: @"\01?f@A@simple@@$R477PPPPPPPM@7AEXXZ"

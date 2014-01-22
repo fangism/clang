@@ -713,6 +713,58 @@ bool Sema::getFormatStringInfo(const FormatAttr *Format, bool IsCXXMember,
   return true;
 }
 
+static void CheckNonNullArgument(Sema &S,
+                                 const Expr *ArgExpr,
+                                 SourceLocation CallSiteLoc) {
+  // As a special case, transparent unions initialized with zero are
+  // considered null for the purposes of the nonnull attribute.
+  if (const RecordType *UT = ArgExpr->getType()->getAsUnionType()) {
+    if (UT->getDecl()->hasAttr<TransparentUnionAttr>())
+      if (const CompoundLiteralExpr *CLE =
+          dyn_cast<CompoundLiteralExpr>(ArgExpr))
+        if (const InitListExpr *ILE =
+            dyn_cast<InitListExpr>(CLE->getInitializer()))
+          ArgExpr = ILE->getInit(0);
+  }
+
+  bool Result;
+  if (ArgExpr->EvaluateAsBooleanCondition(Result, S.Context) && !Result)
+    S.Diag(CallSiteLoc, diag::warn_null_arg) << ArgExpr->getSourceRange();
+}
+
+static void CheckNonNullArguments(Sema &S,
+                                  const NamedDecl *FDecl,
+                                  const Expr * const *ExprArgs,
+                                  SourceLocation CallSiteLoc) {
+  // Check the attributes attached to the method/function itself.
+  for (specific_attr_iterator<NonNullAttr>
+       I = FDecl->specific_attr_begin<NonNullAttr>(),
+       E = FDecl->specific_attr_end<NonNullAttr>(); I != E; ++I) {
+
+    const NonNullAttr *NonNull = *I;
+    for (NonNullAttr::args_iterator i = NonNull->args_begin(),
+         e = NonNull->args_end();
+         i != e; ++i) {
+      CheckNonNullArgument(S, ExprArgs[*i], CallSiteLoc);
+    }
+  }
+
+  // Check the attributes on the parameters.
+  ArrayRef<ParmVarDecl*> parms;
+  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(FDecl))
+    parms = FD->parameters();
+  else if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(FDecl))
+    parms = MD->parameters();
+
+  unsigned argIndex = 0;
+  for (ArrayRef<ParmVarDecl*>::iterator I = parms.begin(), E = parms.end();
+       I != E; ++I, ++argIndex) {
+    const ParmVarDecl *PVD = *I;
+    if (PVD->hasAttr<NonNullAttr>())
+      CheckNonNullArgument(S, ExprArgs[argIndex], CallSiteLoc);
+  }
+}
+
 /// Handles the checks for format strings, non-POD arguments to vararg
 /// functions, and NULL arguments passed to non-NULL parameters.
 void Sema::checkCall(NamedDecl *FDecl,
@@ -754,10 +806,7 @@ void Sema::checkCall(NamedDecl *FDecl,
   }
 
   if (FDecl) {
-    for (specific_attr_iterator<NonNullAttr>
-           I = FDecl->specific_attr_begin<NonNullAttr>(),
-           E = FDecl->specific_attr_end<NonNullAttr>(); I != E; ++I)
-      CheckNonNullArguments(*I, Args.data(), Loc);
+    CheckNonNullArguments(*this, FDecl, Args.data(), Loc);
 
     // Type safety checking.
     for (specific_attr_iterator<ArgumentWithTypeTagAttr>
@@ -2178,32 +2227,6 @@ checkFormatStringExpr(Sema &S, const Expr *E, ArrayRef<const Expr *> Args,
 
   default:
     return SLCT_NotALiteral;
-  }
-}
-
-void
-Sema::CheckNonNullArguments(const NonNullAttr *NonNull,
-                            const Expr * const *ExprArgs,
-                            SourceLocation CallSiteLoc) {
-  for (NonNullAttr::args_iterator i = NonNull->args_begin(),
-                                  e = NonNull->args_end();
-       i != e; ++i) {
-    const Expr *ArgExpr = ExprArgs[*i];
-
-    // As a special case, transparent unions initialized with zero are
-    // considered null for the purposes of the nonnull attribute.
-    if (const RecordType *UT = ArgExpr->getType()->getAsUnionType()) {
-      if (UT->getDecl()->hasAttr<TransparentUnionAttr>())
-        if (const CompoundLiteralExpr *CLE =
-            dyn_cast<CompoundLiteralExpr>(ArgExpr))
-          if (const InitListExpr *ILE =
-              dyn_cast<InitListExpr>(CLE->getInitializer()))
-            ArgExpr = ILE->getInit(0);
-    }
-
-    bool Result;
-    if (ArgExpr->EvaluateAsBooleanCondition(Result, Context) && !Result)
-      Diag(CallSiteLoc, diag::warn_null_arg) << ArgExpr->getSourceRange();
   }
 }
 
@@ -4970,9 +4993,11 @@ static void DiagnoseOutOfRangeComparison(Sema &S, BinaryOperator *E,
   else
     OS << Value;
 
-  S.Diag(E->getOperatorLoc(), diag::warn_out_of_range_compare)
-      << OS.str() << OtherT << IsTrue
-      << E->getLHS()->getSourceRange() << E->getRHS()->getSourceRange();
+  S.DiagRuntimeBehavior(E->getOperatorLoc(), E,
+                        S.PDiag(diag::warn_out_of_range_compare)
+                          << OS.str() << OtherT << IsTrue
+                          << E->getLHS()->getSourceRange()
+                          << E->getRHS()->getSourceRange());
 }
 
 /// Analyze the operands of the given comparison.  Implements the
@@ -6239,12 +6264,23 @@ bool Sema::CheckParmsForFunctionDef(ParmVarDecl *const *P,
 
     // MSVC destroys objects passed by value in the callee.  Therefore a
     // function definition which takes such a parameter must be able to call the
-    // object's destructor.
+    // object's destructor.  However, we don't perform any direct access check
+    // on the dtor.
     if (getLangOpts().CPlusPlus && Context.getTargetInfo()
                                        .getCXXABI()
                                        .areArgsDestroyedLeftToRightInCallee()) {
-      if (const RecordType *RT = Param->getType()->getAs<RecordType>())
-        FinalizeVarWithDestructor(Param, RT);
+      if (!Param->isInvalidDecl()) {
+        if (const RecordType *RT = Param->getType()->getAs<RecordType>()) {
+          CXXRecordDecl *ClassDecl = cast<CXXRecordDecl>(RT->getDecl());
+          if (!ClassDecl->isInvalidDecl() &&
+              !ClassDecl->hasIrrelevantDestructor() &&
+              !ClassDecl->isDependentContext()) {
+            CXXDestructorDecl *Destructor = LookupDestructor(ClassDecl);
+            MarkFunctionReferenced(Param->getLocation(), Destructor);
+            DiagnoseUseOfDecl(Destructor, Param->getLocation());
+          }
+        }
+      }
     }
   }
 

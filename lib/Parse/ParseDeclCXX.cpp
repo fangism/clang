@@ -14,6 +14,7 @@
 #include "clang/Parse/Parser.h"
 #include "RAIIObjectsForParser.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/OperatorKinds.h"
 #include "clang/Parse/ParseDiagnostic.h"
@@ -465,10 +466,8 @@ Decl *Parser::ParseUsingDeclaration(unsigned Context,
 
   // Ignore optional 'typename'.
   // FIXME: This is wrong; we should parse this as a typename-specifier.
-  if (Tok.is(tok::kw_typename)) {
-    TypenameLoc = ConsumeToken();
+  if (TryConsumeToken(tok::kw_typename, TypenameLoc))
     HasTypenameKeyword = true;
-  }
 
   // Parse nested-name-specifier.
   IdentifierInfo *LastII = 0;
@@ -788,12 +787,13 @@ SourceLocation Parser::ParseDecltypeSpecifier(DeclSpec &DS) {
 
   const char *PrevSpec = 0;
   unsigned DiagID;
+  const PrintingPolicy &Policy = Actions.getASTContext().getPrintingPolicy();
   // Check for duplicate type specifiers (e.g. "int decltype(a)").
   if (Result.get()
         ? DS.SetTypeSpecType(DeclSpec::TST_decltype, StartLoc, PrevSpec,
-                             DiagID, Result.release())
+                             DiagID, Result.release(), Policy)
         : DS.SetTypeSpecType(DeclSpec::TST_decltype_auto, StartLoc, PrevSpec,
-                             DiagID)) {
+                             DiagID, Policy)) {
     Diag(StartLoc, DiagID) << PrevSpec;
     DS.SetTypeSpecError();
   }
@@ -844,7 +844,8 @@ void Parser::ParseUnderlyingTypeSpecifier(DeclSpec &DS) {
   const char *PrevSpec = 0;
   unsigned DiagID;
   if (DS.SetTypeSpecType(DeclSpec::TST_underlyingType, StartLoc, PrevSpec,
-                         DiagID, Result.release()))
+                         DiagID, Result.release(),
+                         Actions.getASTContext().getPrintingPolicy()))
     Diag(StartLoc, DiagID) << PrevSpec;
   DS.setTypeofParensRange(T.getRange());
 }
@@ -992,7 +993,8 @@ Parser::TypeResult Parser::ParseBaseTypeSpecifier(SourceLocation &BaseLoc,
 
   const char *PrevSpec = 0;
   unsigned DiagID;
-  DS.SetTypeSpecType(TST_typename, IdLoc, PrevSpec, DiagID, Type);
+  DS.SetTypeSpecType(TST_typename, IdLoc, PrevSpec, DiagID, Type,
+                     Actions.getASTContext().getPrintingPolicy());
 
   Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
   return Actions.ActOnTypeName(getCurScope(), DeclaratorInfo);
@@ -1313,6 +1315,7 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
   // If there are attributes after class name, parse them.
   MaybeParseCXX11Attributes(Attributes);
 
+  const PrintingPolicy &Policy = Actions.getASTContext().getPrintingPolicy();
   Sema::TagUseKind TUK;
   if (DSC == DSC_trailing)
     TUK = Sema::TUK_Reference;
@@ -1370,9 +1373,10 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
               (Tok.isAtStartOfLine() && !isValidAfterTypeSpecifier(false)))) {
     TUK = DS.isFriendSpecified() ? Sema::TUK_Friend : Sema::TUK_Declaration;
     if (Tok.isNot(tok::semi)) {
+      const PrintingPolicy &PPol = Actions.getASTContext().getPrintingPolicy();
       // A semicolon was missing after this declaration. Diagnose and recover.
       ExpectAndConsume(tok::semi, diag::err_expected_after,
-                       DeclSpec::getSpecifierName(TagType));
+                       DeclSpec::getSpecifierName(TagType, PPol));
       PP.EnterToken(Tok);
       Tok.setKind(tok::semi);
     }
@@ -1414,7 +1418,7 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
     if (DS.getTypeSpecType() != DeclSpec::TST_error) {
       // We have a declaration or reference to an anonymous class.
       Diag(StartLoc, diag::err_anon_type_definition)
-        << DeclSpec::getSpecifierName(TagType);
+        << DeclSpec::getSpecifierName(TagType, Policy);
     }
 
     // If we are parsing a definition and stop at a base-clause, continue on
@@ -1611,11 +1615,12 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
   if (!TypeResult.isInvalid()) {
     Result = DS.SetTypeSpecType(DeclSpec::TST_typename, StartLoc,
                                 NameLoc.isValid() ? NameLoc : StartLoc,
-                                PrevSpec, DiagID, TypeResult.get());
+                                PrevSpec, DiagID, TypeResult.get(), Policy);
   } else if (!TagOrTempResult.isInvalid()) {
     Result = DS.SetTypeSpecType(TagType, StartLoc,
                                 NameLoc.isValid() ? NameLoc : StartLoc,
-                                PrevSpec, DiagID, TagOrTempResult.get(), Owned);
+                                PrevSpec, DiagID, TagOrTempResult.get(), Owned,
+                                Policy);
   } else {
     DS.SetTypeSpecError();
     return;
@@ -1636,8 +1641,9 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
   if (TUK == Sema::TUK_Definition &&
       (TemplateInfo.Kind || !isValidAfterTypeSpecifier(false))) {
     if (Tok.isNot(tok::semi)) {
+      const PrintingPolicy &PPol = Actions.getASTContext().getPrintingPolicy();
       ExpectAndConsume(tok::semi, diag::err_expected_after,
-                       DeclSpec::getSpecifierName(TagType));
+                       DeclSpec::getSpecifierName(TagType, PPol));
       // Push this token back into the preprocessor and change our current token
       // to ';' so that the rest of the code recovers as though there were an
       // ';' after the definition.
@@ -1675,10 +1681,8 @@ void Parser::ParseBaseClause(Decl *ClassDecl) {
 
     // If the next token is a comma, consume it and keep reading
     // base-specifiers.
-    if (Tok.isNot(tok::comma)) break;
-
-    // Consume the comma.
-    ConsumeToken();
+    if (!TryConsumeToken(tok::comma))
+      break;
   }
 
   // Attach the base specifiers
@@ -1704,10 +1708,8 @@ Parser::BaseResult Parser::ParseBaseSpecifier(Decl *ClassDecl) {
   MaybeParseCXX11Attributes(Attributes);
 
   // Parse the 'virtual' keyword.
-  if (Tok.is(tok::kw_virtual))  {
-    ConsumeToken();
+  if (TryConsumeToken(tok::kw_virtual))
     IsVirtual = true;
-  }
 
   CheckMisplacedCXX11Attribute(Attributes, StartLoc);
 
@@ -1744,9 +1746,8 @@ Parser::BaseResult Parser::ParseBaseSpecifier(Decl *ClassDecl) {
   // actually part of the base-specifier-list grammar productions, but we
   // parse it here for convenience.
   SourceLocation EllipsisLoc;
-  if (Tok.is(tok::ellipsis))
-    EllipsisLoc = ConsumeToken();
-  
+  TryConsumeToken(tok::ellipsis, EllipsisLoc);
+
   // Find the complete source range for the base-specifier.
   SourceRange Range(StartLoc, EndLocation);
 
@@ -2098,8 +2099,7 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
     if (!DeclaratorInfo.hasName()) {
       // If so, skip until the semi-colon or a }.
       SkipUntil(tok::r_brace, StopAtSemi | StopBeforeMatch);
-      if (Tok.is(tok::semi))
-        ConsumeToken();
+      TryConsumeToken(tok::semi);
       return;
     }
 
@@ -2205,8 +2205,7 @@ void Parser::ParseCXXClassMemberDeclaration(AccessSpecifier AS,
     //   declarator pure-specifier[opt]
     //   declarator brace-or-equal-initializer[opt]
     //   identifier[opt] ':' constant-expression
-    if (Tok.is(tok::colon)) {
-      ConsumeToken();
+    if (TryConsumeToken(tok::colon)) {
       BitfieldSize = ParseConstantExpression();
       if (BitfieldSize.isInvalid())
         SkipUntil(tok::comma, StopAtSemi | StopBeforeMatch);
@@ -2866,8 +2865,7 @@ Parser::MemInitResult Parser::ParseMemInitializer(Decl *ConstructorDecl) {
     T.consumeClose();
 
     SourceLocation EllipsisLoc;
-    if (Tok.is(tok::ellipsis))
-      EllipsisLoc = ConsumeToken();
+    TryConsumeToken(tok::ellipsis, EllipsisLoc);
 
     return Actions.ActOnMemInitializer(ConstructorDecl, getCurScope(), SS, II,
                                        TemplateTypeTy, DS, IdLoc,
@@ -3022,10 +3020,8 @@ ExceptionSpecificationType Parser::ParseDynamicExceptionSpecification(
       Exceptions.push_back(Res.get());
       Ranges.push_back(Range);
     }
-    
-    if (Tok.is(tok::comma))
-      ConsumeToken();
-    else
+
+    if (!TryConsumeToken(tok::comma))
       break;
   }
 
@@ -3219,10 +3215,8 @@ void Parser::ParseCXX11AttributeSpecifier(ParsedAttributes &attrs,
 
   while (Tok.isNot(tok::r_square)) {
     // attribute not present
-    if (Tok.is(tok::comma)) {
-      ConsumeToken();
+    if (TryConsumeToken(tok::comma))
       continue;
-    }
 
     SourceLocation ScopeLoc, AttrLoc;
     IdentifierInfo *ScopeName = 0, *AttrName = 0;
@@ -3233,9 +3227,7 @@ void Parser::ParseCXX11AttributeSpecifier(ParsedAttributes &attrs,
       break;
 
     // scoped attribute
-    if (Tok.is(tok::coloncolon)) {
-      ConsumeToken();
-
+    if (TryConsumeToken(tok::coloncolon)) {
       ScopeName = AttrName;
       ScopeLoc = AttrLoc;
 
@@ -3259,7 +3251,7 @@ void Parser::ParseCXX11AttributeSpecifier(ParsedAttributes &attrs,
     if (Tok.is(tok::l_paren)) {
       if (ScopeName && ScopeName->getName() == "gnu") {
         ParseGNUAttributeArgs(AttrName, AttrLoc, attrs, endLoc,
-                              ScopeName, ScopeLoc, AttributeList::AS_CXX11);
+                              ScopeName, ScopeLoc, AttributeList::AS_CXX11, 0);
         AttrParsed = true;
       } else {
         if (StandardAttr)
@@ -3278,12 +3270,9 @@ void Parser::ParseCXX11AttributeSpecifier(ParsedAttributes &attrs,
                                AttrLoc),
                    ScopeName, ScopeLoc, 0, 0, AttributeList::AS_CXX11);
 
-    if (Tok.is(tok::ellipsis)) {
-      ConsumeToken();
-
+    if (TryConsumeToken(tok::ellipsis))
       Diag(Tok, diag::err_cxx11_attribute_forbids_ellipsis)
         << AttrName->getName();
-    }
   }
 
   if (ExpectAndConsume(tok::r_square))

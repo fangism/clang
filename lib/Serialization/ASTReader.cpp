@@ -140,7 +140,6 @@ static bool checkTargetOptions(const TargetOptions &TargetOpts,
   CHECK_TARGET_OPT(Triple, "target");
   CHECK_TARGET_OPT(CPU, "target CPU");
   CHECK_TARGET_OPT(ABI, "target ABI");
-  CHECK_TARGET_OPT(CXXABI, "target C++ ABI");
   CHECK_TARGET_OPT(LinkerVersion, "target linker version");
 #undef CHECK_TARGET_OPT
 
@@ -1730,11 +1729,26 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
 #endif
          )) {
       if (Complain) {
-        Error(diag::err_fe_pch_file_modified, Filename, F.FileName);
-        if (Context.getLangOpts().Modules && !Diags.isDiagnosticInFlight()) {
-          Diag(diag::note_module_cache_path)
-            << PP.getHeaderSearchInfo().getModuleCachePath();
+        // Build a list of the PCH imports that got us here (in reverse).
+        SmallVector<ModuleFile *, 4> ImportStack(1, &F);
+        while (ImportStack.back()->ImportedBy.size() > 0)
+          ImportStack.push_back(ImportStack.back()->ImportedBy[0]);
+
+        // The top-level PCH is stale.
+        StringRef TopLevelPCHName(ImportStack.back()->FileName);
+        Error(diag::err_fe_pch_file_modified, Filename, TopLevelPCHName);
+
+        // Print the import stack.
+        if (ImportStack.size() > 1 && !Diags.isDiagnosticInFlight()) {
+          Diag(diag::note_pch_required_by)
+            << Filename << ImportStack[0]->FileName;
+          for (unsigned I = 1; I < ImportStack.size(); ++I)
+            Diag(diag::note_pch_required_by)
+              << ImportStack[I-1]->FileName << ImportStack[I]->FileName;
         }
+
+        if (!Diags.isDiagnosticInFlight())
+          Diag(diag::note_pch_rebuild_required) << TopLevelPCHName;
       }
 
       IsOutOfDate = true;
@@ -4009,7 +4023,6 @@ bool ASTReader::ParseTargetOptions(const RecordData &Record,
   TargetOpts.Triple = ReadString(Record, Idx);
   TargetOpts.CPU = ReadString(Record, Idx);
   TargetOpts.ABI = ReadString(Record, Idx);
-  TargetOpts.CXXABI = ReadString(Record, Idx);
   TargetOpts.LinkerVersion = ReadString(Record, Idx);
   for (unsigned N = Record[Idx++]; N; --N) {
     TargetOpts.FeaturesAsWritten.push_back(ReadString(Record, Idx));

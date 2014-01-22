@@ -1520,7 +1520,7 @@ bool Sema::AttachBaseSpecifiers(CXXRecordDecl *Class, CXXBaseSpecifier **Bases,
           Invalid = true;
         }
         if (RD->hasAttr<WeakAttr>())
-          Class->addAttr(::new (Context) WeakAttr(SourceRange(), Context));
+          Class->addAttr(WeakAttr::CreateImplicit(Context));
       }
     }
   }
@@ -1976,7 +1976,8 @@ Sema::ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS, Declarator &D,
       const char *PrevSpec;
       unsigned DiagID;
       if (D.getMutableDeclSpec().SetStorageClassSpec(
-          *this, DeclSpec::SCS_static, ConstexprLoc, PrevSpec, DiagID)) {
+          *this, DeclSpec::SCS_static, ConstexprLoc, PrevSpec, DiagID,
+          Context.getPrintingPolicy())) {
         assert(DS.getStorageClassSpec() == DeclSpec::SCS_mutable &&
                "This is the only DeclSpec that should fail to be applied");
         B << 1;
@@ -2093,7 +2094,7 @@ Sema::ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS, Declarator &D,
   }
 
   if (VS.isOverrideSpecified())
-    Member->addAttr(new (Context) OverrideAttr(VS.getOverrideLoc(), Context));
+    Member->addAttr(new (Context) OverrideAttr(VS.getOverrideLoc(), Context, 0));
   if (VS.isFinalSpecified())
     Member->addAttr(new (Context) FinalAttr(VS.getFinalLoc(), Context,
                                             VS.isFinalSpelledSealed()));
@@ -2342,13 +2343,24 @@ namespace {
   }
 } // namespace
 
-/// ActOnCXXInClassMemberInitializer - This is invoked after parsing an
-/// in-class initializer for a non-static C++ class member, and after
-/// instantiating an in-class initializer in a class template. Such actions
-/// are deferred until the class is complete.
-void
-Sema::ActOnCXXInClassMemberInitializer(Decl *D, SourceLocation InitLoc,
-                                       Expr *InitExpr) {
+/// \brief Enter a new C++ default initializer scope. After calling this, the
+/// caller must call \ref ActOnFinishCXXInClassMemberInitializer, even if
+/// parsing or instantiating the initializer failed.
+void Sema::ActOnStartCXXInClassMemberInitializer() {
+  // Create a synthetic function scope to represent the call to the constructor
+  // that notionally surrounds a use of this initializer.
+  PushFunctionScope();
+}
+
+/// \brief This is invoked after parsing an in-class initializer for a
+/// non-static C++ class member, and after instantiating an in-class initializer
+/// in a class template. Such actions are deferred until the class is complete.
+void Sema::ActOnFinishCXXInClassMemberInitializer(Decl *D,
+                                                  SourceLocation InitLoc,
+                                                  Expr *InitExpr) {
+  // Pop the notional constructor scope we created earlier.
+  PopFunctionScopeInfo(0, D);
+
   FieldDecl *FD = cast<FieldDecl>(D);
   assert(FD->getInClassInitStyle() != ICIS_NoInit &&
          "must set init style when field is created");
@@ -5310,7 +5322,7 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD, CXXSpecialMember CSM,
     // In Microsoft mode, a user-declared move only causes the deletion of the
     // corresponding copy operation, not both copy operations.
     if (RD->hasUserDeclaredMoveConstructor() &&
-        (!getLangOpts().MicrosoftMode || CSM == CXXCopyConstructor)) {
+        (!getLangOpts().MSVCCompat || CSM == CXXCopyConstructor)) {
       if (!Diagnose) return true;
 
       // Find any user-declared move constructor.
@@ -5323,7 +5335,7 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD, CXXSpecialMember CSM,
       }
       assert(UserDeclaredMove);
     } else if (RD->hasUserDeclaredMoveAssignment() &&
-               (!getLangOpts().MicrosoftMode || CSM == CXXCopyAssignment)) {
+               (!getLangOpts().MSVCCompat || CSM == CXXCopyAssignment)) {
       if (!Diagnose) return true;
 
       // Find any user-declared move assignment operator.
@@ -6077,6 +6089,18 @@ void Sema::ActOnStartDelayedMemberDeclarations(Scope *S, Decl *RecordD) {
 void Sema::ActOnFinishDelayedMemberDeclarations(Scope *S, Decl *RecordD) {
   if (!RecordD) return;
   PopDeclContext();
+}
+
+/// This is used to implement the constant expression evaluation part of the
+/// attribute enable_if extension. There is nothing in standard C++ which would
+/// require reentering parameters.
+void Sema::ActOnReenterCXXMethodParameter(Scope *S, ParmVarDecl *Param) {
+  if (!Param)
+    return;
+
+  S->AddDecl(Param);
+  if (Param->getDeclName())
+    IdResolver.AddDecl(Param);
 }
 
 /// ActOnStartDelayedCXXMethodDeclaration - We have completed
@@ -9349,7 +9373,7 @@ static void diagnoseDeprecatedCopyOperation(Sema &S, CXXMethodDecl *CopyOp,
     UserDeclaredOperation = RD->getDestructor();
   } else if (!isa<CXXConstructorDecl>(CopyOp) &&
              RD->hasUserDeclaredCopyConstructor() &&
-             !S.getLangOpts().MicrosoftMode) {
+             !S.getLangOpts().MSVCCompat) {
     // Find any user-declared copy constructor.
     for (CXXRecordDecl::ctor_iterator I = RD->ctor_begin(),
                                       E = RD->ctor_end(); I != E; ++I) {
@@ -9361,7 +9385,7 @@ static void diagnoseDeprecatedCopyOperation(Sema &S, CXXMethodDecl *CopyOp,
     assert(UserDeclaredOperation);
   } else if (isa<CXXConstructorDecl>(CopyOp) &&
              RD->hasUserDeclaredCopyAssignment() &&
-             !S.getLangOpts().MicrosoftMode) {
+             !S.getLangOpts().MSVCCompat) {
     // Find any user-declared move assignment operator.
     for (CXXRecordDecl::method_iterator I = RD->method_begin(),
                                         E = RD->method_end(); I != E; ++I) {

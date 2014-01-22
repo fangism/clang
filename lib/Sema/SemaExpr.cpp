@@ -1735,7 +1735,7 @@ bool Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
         // Give a code modification hint to insert 'this->'.
         // TODO: fixit for inserting 'Base<T>::' in the other cases.
         // Actually quite difficult!
-        if (getLangOpts().MicrosoftMode)
+        if (getLangOpts().MSVCCompat)
           diagnostic = diag::warn_found_via_dependent_bases_lookup;
         if (isInstance) {
           Diag(R.getNameLoc(), diagnostic) << Name
@@ -1801,7 +1801,7 @@ bool Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
     // function definition declared at class scope then we must set
     // DC to the lexical parent to be able to search into the parent
     // class.
-    if (getLangOpts().MicrosoftMode && isa<FunctionDecl>(DC) &&
+    if (getLangOpts().MSVCCompat && isa<FunctionDecl>(DC) &&
         cast<FunctionDecl>(DC)->getFriendObjectKind() &&
         DC->getLexicalParent()->isRecord())
       DC = DC->getLexicalParent();
@@ -2020,7 +2020,7 @@ ExprResult Sema::ActOnIdExpression(Scope *S,
       // unqualified name lookup.  Any name lookup during template parsing means
       // clang might find something that MSVC doesn't.  For now, we only handle
       // the common case of members of a dependent base class.
-      if (getLangOpts().MicrosoftMode) {
+      if (getLangOpts().MSVCCompat) {
         CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(CurContext);
         if (MD && MD->isInstance() && MD->getParent()->hasAnyDependentBases()) {
           assert(SS.isEmpty() && "qualifiers should be already handled");
@@ -4475,6 +4475,21 @@ Sema::ActOnCallExpr(Scope *S, Expr *Fn, SourceLocation LParenLoc,
     NDecl = cast<DeclRefExpr>(NakedFn)->getDecl();
   else if (isa<MemberExpr>(NakedFn))
     NDecl = cast<MemberExpr>(NakedFn)->getMemberDecl();
+
+  if (FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(NDecl)) {
+    if (FD->hasAttr<EnableIfAttr>()) {
+      if (const EnableIfAttr *Attr = CheckEnableIf(FD, ArgExprs, true)) {
+        Diag(Fn->getLocStart(),
+             isa<CXXMethodDecl>(FD) ?
+                 diag::err_ovl_no_viable_member_function_in_call :
+                 diag::err_ovl_no_viable_function_in_call)
+          << FD << FD->getSourceRange();
+        Diag(FD->getLocation(),
+             diag::note_ovl_candidate_disabled_by_enable_if_attr)
+            << Attr->getCond()->getSourceRange() << Attr->getMessage();
+      }
+    }
+  }
 
   return BuildResolvedCallExpr(Fn, NDecl, LParenLoc, ArgExprs, RParenLoc,
                                ExecConfig, IsExecConfig);
@@ -8842,8 +8857,11 @@ QualType Sema::CheckAddressOfOperand(ExprResult &OrigOp, SourceLocation OpLoc) {
     if (isa<CXXDestructorDecl>(MD))
       Diag(OpLoc, diag::err_typecheck_addrof_dtor) << op->getSourceRange();
 
-    return Context.getMemberPointerType(op->getType(),
-              Context.getTypeDeclType(MD->getParent()).getTypePtr());
+    QualType MPTy = Context.getMemberPointerType(
+        op->getType(), Context.getTypeDeclType(MD->getParent()).getTypePtr());
+    if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+      RequireCompleteType(OpLoc, MPTy, 0);
+    return MPTy;
   } else if (lval != Expr::LV_Valid && lval != Expr::LV_IncompleteVoidType) {
     // C99 6.5.3.2p1
     // The operand must be either an l-value or a function designator
@@ -8891,8 +8909,13 @@ QualType Sema::CheckAddressOfOperand(ExprResult &OrigOp, SourceLocation OpLoc) {
 
           while (cast<RecordDecl>(Ctx)->isAnonymousStructOrUnion())
             Ctx = Ctx->getParent();
-          return Context.getMemberPointerType(op->getType(),
-                Context.getTypeDeclType(cast<RecordDecl>(Ctx)).getTypePtr());
+
+          QualType MPTy = Context.getMemberPointerType(
+              op->getType(),
+              Context.getTypeDeclType(cast<RecordDecl>(Ctx)).getTypePtr());
+          if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+            RequireCompleteType(OpLoc, MPTy, 0);
+          return MPTy;
         }
       }
     } else if (!isa<FunctionDecl>(dcl) && !isa<NonTypeTemplateParmDecl>(dcl))

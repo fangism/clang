@@ -73,7 +73,6 @@ def m_x86_Features_Group  : OptionGroup<"<m x86 features group>">, Group<m_Group
 def m_hexagon_Features_Group  : OptionGroup<"<m hexagon features group>">, Group<m_Group>;
 def m_arm_Features_Group  : OptionGroup<"<m arm features group>">, Group<m_Group>;
 def m_ppc_Features_Group  : OptionGroup<"<m ppc features group>">, Group<m_Group>;
-def opencl_Group          : OptionGroup<"<opencl group>">;
 def u_Group               : OptionGroup<"<u group>">;
 
 def pedantic_Group        : OptionGroup<"<pedantic group>">,
@@ -198,7 +197,7 @@ def ccc_ : Joined<["-"], "ccc-">, Group<internal_Group>, Flags<[Unsupported]>;
 // Standard Options
 
 def _HASH_HASH_HASH : Flag<["-"], "###">, Flags<[DriverOption, CoreOption]>,
-    HelpText<"Print the commands to run for this compilation">;
+    HelpText<"Print (but do not run) the commands to run for this compilation">;
 def _DASH_DASH : Option<["--"], "", KIND_REMAINING_ARGS>,
     Flags<[DriverOption, CoreOption]>;
 def A : JoinedOrSeparate<["-"], "A">, Flags<[RenderJoined]>;
@@ -219,20 +218,26 @@ def I_ : Flag<["-"], "I-">, Group<I_Group>;
 def I : JoinedOrSeparate<["-"], "I">, Group<I_Group>, Flags<[CC1Option]>,
     HelpText<"Add directory to include search path">;
 def L : JoinedOrSeparate<["-"], "L">, Flags<[RenderJoined]>;
-def MD : Flag<["-"], "MD">, Group<M_Group>;
-def MF : JoinedOrSeparate<["-"], "MF">, Group<M_Group>;
+def MD : Flag<["-"], "MD">, Group<M_Group>,
+    HelpText<"Write a depfile containing user and system headers">;
+def MMD : Flag<["-"], "MMD">, Group<M_Group>,
+    HelpText<"Write a depfile containing user headers">;
+def M : Flag<["-"], "M">, Group<M_Group>,
+    HelpText<"Like -MD, but also implies -E and writes to stdout by default">;
+def MM : Flag<["-"], "MM">, Group<M_Group>,
+    HelpText<"Like -MMD, but also implies -E and writes to stdout by default">;
+def MF : JoinedOrSeparate<["-"], "MF">, Group<M_Group>,
+    HelpText<"Write depfile output from -MMD, -MD, -MM, or -M to <file>">,
+    MetaVarName<"<file>">;
 def MG : Flag<["-"], "MG">, Group<M_Group>, Flags<[CC1Option]>,
-    HelpText<"Add missing headers to dependency list">;
-def MMD : Flag<["-"], "MMD">, Group<M_Group>;
-def MM : Flag<["-"], "MM">, Group<M_Group>;
+    HelpText<"Add missing headers to depfile">;
 def MP : Flag<["-"], "MP">, Group<M_Group>, Flags<[CC1Option]>,
     HelpText<"Create phony target for each dependency (other than main file)">;
 def MQ : JoinedOrSeparate<["-"], "MQ">, Group<M_Group>, Flags<[CC1Option]>,
-    HelpText<"Specify target to quote for dependency">;
+    HelpText<"Specify name of main file output to quote in depfile">;
 def MT : JoinedOrSeparate<["-"], "MT">, Group<M_Group>, Flags<[CC1Option]>,
-    HelpText<"Specify target for dependency">;
+    HelpText<"Specify name of main file output in depfile">;
 def Mach : Flag<["-"], "Mach">;
-def M : Flag<["-"], "M">, Group<M_Group>;
 def O0 : Flag<["-"], "O0">, Group<O_Group>, Flags<[CC1Option]>;
 def O4 : Flag<["-"], "O4">, Group<O_Group>, Flags<[CC1Option]>;
 def ObjCXX : Flag<["-"], "ObjC++">, Flags<[DriverOption]>,
@@ -303,8 +308,6 @@ def bind__at__load : Flag<["-"], "bind_at_load">;
 def bundle__loader : Separate<["-"], "bundle_loader">;
 def bundle : Flag<["-"], "bundle">;
 def b : JoinedOrSeparate<["-"], "b">, Flags<[Unsupported]>;
-def cl_kernel_arg_info : Flag<["-"], "cl-kernel-arg-info">, Flags<[CC1Option]>, Group<opencl_Group>,
-HelpText<"OpenCL only. This option allows the compiler to store information about the arguments of a kernel(s)"> ;
 def client__name : JoinedOrSeparate<["-"], "client_name">;
 def combine : Flag<["-", "--"], "combine">, Flags<[DriverOption, Unsupported]>;
 def compatibility__version : JoinedOrSeparate<["-"], "compatibility_version">;
@@ -483,12 +486,6 @@ def fsanitize_EQ : CommaJoined<["-"], "fsanitize=">, Group<f_clang_Group>,
                             "address (memory errors) | thread (race detection) | "
                             "undefined (miscellaneous undefined behavior)">;
 def fno_sanitize_EQ : CommaJoined<["-"], "fno-sanitize=">, Group<f_clang_Group>;
-def fsanitize_address_zero_base_shadow : Flag<["-"], "fsanitize-address-zero-base-shadow">,
-                                         Group<f_clang_Group>, Flags<[CC1Option]>,
-                                         HelpText<"Make AddressSanitizer map shadow memory "
-                                                  "at zero offset">;
-def fno_sanitize_address_zero_base_shadow : Flag<["-"], "fno-sanitize-address-zero-base-shadow">,
-                                            Group<f_clang_Group>;
 def fsanitize_blacklist : Joined<["-"], "fsanitize-blacklist=">,
                           Group<f_clang_Group>, Flags<[CC1Option]>,
                           HelpText<"Path to blacklist file for sanitizers">;
@@ -570,9 +567,9 @@ def fmessage_length_EQ : Joined<["-"], "fmessage-length=">, Group<f_Group>;
 def fms_extensions : Flag<["-"], "fms-extensions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Accept some non-standard constructs supported by the Microsoft compiler">;
 def fms_compatibility : Flag<["-"], "fms-compatibility">, Group<f_Group>, Flags<[CC1Option]>,
-  HelpText<"Enable Microsoft compatibility mode">;
+  HelpText<"Enable full Microsoft Visual C++ compatibility">;
 def fmsc_version : Joined<["-"], "fmsc-version=">, Group<f_Group>, Flags<[CC1Option, CoreOption]>,
-  HelpText<"Version of the Microsoft C/C++ compiler to report in _MSC_VER (0 = don't define it (default))">;
+  HelpText<"Microsoft compiler version number to report in _MSC_VER (0 = don't define it (default))">;
 def fdelayed_template_parsing : Flag<["-"], "fdelayed-template-parsing">, Group<f_Group>,
   HelpText<"Parse templated function definitions at the end of the "
            "translation unit">,  Flags<[CC1Option]>;
@@ -1296,8 +1293,8 @@ def unexported__symbols__list : Separate<["-"], "unexported_symbols_list">;
 def u : JoinedOrSeparate<["-"], "u">, Group<u_Group>;
 def v : Flag<["-"], "v">, Flags<[CC1Option]>,
   HelpText<"Show commands to run and use verbose output">;
-def verify : Flag<["-"], "verify">, Flags<[DriverOption,CC1Option]>,
-  HelpText<"Verify output using a verifier">;
+def verify_debug_info : Flag<["--"], "verify-debug-info">, Flags<[DriverOption]>,
+  HelpText<"Verify the binary representation of debug output">;
 def weak_l : Joined<["-"], "weak-l">, Flags<[LinkerInput]>;
 def weak__framework : Separate<["-"], "weak_framework">, Flags<[LinkerInput]>;
 def weak__library : Separate<["-"], "weak_library">, Flags<[LinkerInput]>;
