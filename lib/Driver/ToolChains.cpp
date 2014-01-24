@@ -560,9 +560,11 @@ void DarwinClang::AddCXXStdlibLibArgs(const ArgList &Args,
   switch (Type) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");
-    // darwin8: now libc++ is staticallly linked to libsupc++.a
-    // instead of libc++abi.dylib
-    CmdArgs.push_back("-lsupc++");
+    // darwin8: now libc++ is statically linked to libsupc++.a
+    // instead of libc++abi.dylib, which appeared in darwin11+
+    if (DarwinVersion[0] < 11) {
+      CmdArgs.push_back("-lsupc++");
+    }
     break;
 
   case ToolChain::CST_Libstdcxx: {
