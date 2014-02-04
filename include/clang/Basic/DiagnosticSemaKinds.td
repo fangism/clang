@@ -447,6 +447,10 @@ def ext_no_declarators : ExtWarn<"declaration does not declare anything">,
 def ext_typedef_without_a_name : ExtWarn<"typedef requires a name">,
   InGroup<MissingDeclarations>;
 def err_typedef_not_identifier : Error<"typedef name must be an identifier">;
+def err_typedef_changes_linkage : Error<"unsupported: typedef changes linkage"
+  " of anonymous type, but linkage was already computed">;
+def note_typedef_changes_linkage : Note<"use a tag name here to establish "
+  "linkage prior to definition">;
 def err_statically_allocated_object : Error<
   "interface type cannot be statically allocated">;
 def err_object_cannot_be_passed_returned_by_value : Error<
@@ -2296,6 +2300,10 @@ def note_function_to_bool_silence : Note<
     "prefix with the address-of operator to silence this warning">;
 def note_function_to_bool_call : Note<
     "suffix with parentheses to turn this into a function call">;
+def warn_impcast_objective_c_literal_to_bool : Warning<
+    "implicit boolean conversion of Objective-C object literal always "
+    "evaluates to true">,
+    InGroup<ObjCLiteralConversion>;
 
 def warn_cast_align : Warning<
   "cast from %0 to %1 increases required alignment from %2 to %3">,
@@ -2347,6 +2355,13 @@ def warn_attribute_protected_visibility :
   InGroup<DiagGroup<"unsupported-visibility">>;
 def err_mismatched_visibility: Error<"visibility does not match previous declaration">;
 def note_previous_attribute : Note<"previous attribute is here">;
+def err_mismatched_ms_inheritance : Error<
+  "inheritance model does not match %select{definition|previous declaration}0">;
+def warn_ignored_ms_inheritance : Warning<
+  "inheritance model ignored on %select{primary template|partial specialization}0">,
+  InGroup<IgnoredAttributes>;
+def note_previous_ms_inheritance : Note<
+  "previous inheritance model specified here">;
 def err_machine_mode : Error<"%select{unknown|unsupported}0 machine mode %1">;
 def err_mode_not_primitive : Error<
   "mode attribute only supported for integer and floating-point types">;
@@ -3571,9 +3586,6 @@ def err_definition_of_explicitly_defaulted_member : Error<
 def err_redefinition_extern_inline : Error<
   "redefinition of a 'extern inline' function %0 is not supported in "
   "%select{C99 mode|C++}1">;
-def warn_cxx98_compat_friend_redefinition : Warning<
-  "friend function %0 would be implicitly redefined in C++98">,
-  InGroup<CXX98Compat>, DefaultIgnore;
 
 def note_deleted_dtor_no_operator_delete : Note<
   "virtual destructor requires an unambiguous, accessible 'operator delete'">;

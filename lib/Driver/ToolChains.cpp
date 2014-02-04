@@ -1010,7 +1010,7 @@ void Darwin::addMinVersionArgs(const llvm::opt::ArgList &Args,
   if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ)) {
     CmdArgs.push_back("-ios_simulator_version_min");
     CmdArgs.push_back(Args.MakeArgString(mmvs1));
-  } else if (isTargetIPhoneOS()) {
+  } else if (isTargetIOSBased()) {
     CmdArgs.push_back("-iphoneos_version_min");
     CmdArgs.push_back(Args.MakeArgString(mmvs1));
   } else {
@@ -1574,9 +1574,9 @@ static bool isMipsNan2008(const ArgList &Args) {
 }
 
 // FIXME: There is the same routine in the Tools.cpp.
-static bool hasMipsN32ABIArg(const ArgList &Args) {
+static bool hasMipsABIArg(const ArgList &Args, const char *Value) {
   Arg *A = Args.getLastArg(options::OPT_mabi_EQ);
-  return A && (A->getValue() == StringRef("n32"));
+  return A && (A->getValue() == StringRef(Value));
 }
 
 static bool hasCrtBeginObj(Twine Path) {
@@ -1589,7 +1589,7 @@ static bool findTargetBiarchSuffix(std::string &Suffix, StringRef Path,
   // FIXME: This routine was only intended to model bi-arch toolchains which
   // use -m32 and -m64 to swap between variants of a target. It shouldn't be
   // doing ABI-based builtin location for MIPS.
-  if (hasMipsN32ABIArg(Args))
+  if (hasMipsABIArg(Args, "n32"))
     Suffix = "/n32";
   else if (TargetArch == llvm::Triple::x86_64 ||
            TargetArch == llvm::Triple::ppc64 ||
@@ -1647,9 +1647,9 @@ void Generic_GCC::GCCInstallationDetector::findMIPSABIDirSuffix(
       Suffix += "/mips16";
   } else {
     if (isMips64r2(Args))
-      Suffix += hasMipsN32ABIArg(Args) ? "/mips64r2" : "/mips64r2/64";
+      Suffix += hasMipsABIArg(Args, "n32") ? "/mips64r2" : "/mips64r2/64";
     else
-      Suffix += hasMipsN32ABIArg(Args) ? "/mips64" : "/mips64/64";
+      Suffix += hasMipsABIArg(Args, "n32") ? "/mips64" : "/mips64/64";
   }
 
   if (TargetArch == llvm::Triple::mipsel ||
@@ -2258,8 +2258,34 @@ NetBSD::NetBSD(const Driver &D, const llvm::Triple& Triple, const ArgList &Args)
     // doesn't work.
     // FIXME: It'd be nicer to test if this directory exists, but I'm not sure
     // what all logic is needed to emulate the '=' prefix here.
-    if (Triple.getArch() == llvm::Triple::x86)
+    switch (Triple.getArch()) {
+    case llvm::Triple::x86:
       getFilePaths().push_back("=/usr/lib/i386");
+      break;
+    case llvm::Triple::arm:
+    case llvm::Triple::thumb:
+      switch (Triple.getEnvironment()) {
+      case llvm::Triple::EABI:
+      case llvm::Triple::EABIHF:
+      case llvm::Triple::GNUEABI:
+      case llvm::Triple::GNUEABIHF:
+        getFilePaths().push_back("=/usr/lib/eabi");
+        break;
+      default:
+        getFilePaths().push_back("=/usr/lib/oabi");
+        break;
+      }
+      break;
+    case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:
+      if (hasMipsABIArg(Args, "o32"))
+        getFilePaths().push_back("=/usr/lib/o32");
+      else if (hasMipsABIArg(Args, "64"))
+        getFilePaths().push_back("=/usr/lib/64");
+      break;
+    default:
+      break;
+    }
 
     getFilePaths().push_back("=/usr/lib");
   }
@@ -2574,7 +2600,7 @@ static StringRef getMultilibDir(const llvm::Triple &Triple,
     // lib32 directory has a special meaning on MIPS targets.
     // It contains N32 ABI binaries. Use this folder if produce
     // code for N32 ABI only.
-    if (hasMipsN32ABIArg(Args))
+    if (hasMipsABIArg(Args, "n32"))
       return "lib32";
     return Triple.isArch32Bit() ? "lib" : "lib64";
   }

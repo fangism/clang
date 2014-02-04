@@ -2777,10 +2777,13 @@ ExprResult Sema::BuildTemplateIdExpr(const CXXScopeSpec &SS,
   assert(!R.isAmbiguous() && "ambiguous lookup when building templateid");
 
   // In C++1y, check variable template ids.
-  if (R.getAsSingle<VarTemplateDecl>()) {
-    return Owned(CheckVarTemplateId(SS, R.getLookupNameInfo(),
-                                    R.getAsSingle<VarTemplateDecl>(),
-                                    TemplateKWLoc, TemplateArgs));
+  bool InstantiationDependent;
+  if (R.getAsSingle<VarTemplateDecl>() &&
+      !TemplateSpecializationType::anyDependentTemplateArguments(
+           *TemplateArgs, InstantiationDependent)) {
+    return CheckVarTemplateId(SS, R.getLookupNameInfo(),
+                              R.getAsSingle<VarTemplateDecl>(),
+                              TemplateKWLoc, TemplateArgs);
   }
 
   // We don't want lookup warnings at this point.
@@ -5453,18 +5456,19 @@ Sema::CheckTemplateDeclScope(Scope *S, TemplateParameterList *TemplateParams) {
          (S->getFlags() & Scope::TemplateParamScope) != 0)
     S = S->getParent();
 
-  // C++ [temp]p2:
-  //   A template-declaration can appear only as a namespace scope or
-  //   class scope declaration.
+  // C++ [temp]p4:
+  //   A template [...] shall not have C linkage.
   DeclContext *Ctx = S->getEntity();
-  if (Ctx && isa<LinkageSpecDecl>(Ctx) &&
-      cast<LinkageSpecDecl>(Ctx)->getLanguage() != LinkageSpecDecl::lang_cxx)
+  if (Ctx && Ctx->isExternCContext())
     return Diag(TemplateParams->getTemplateLoc(), diag::err_template_linkage)
              << TemplateParams->getSourceRange();
 
   while (Ctx && isa<LinkageSpecDecl>(Ctx))
     Ctx = Ctx->getParent();
 
+  // C++ [temp]p2:
+  //   A template-declaration can appear only as a namespace scope or
+  //   class scope declaration.
   if (Ctx) {
     if (Ctx->isFileContext())
       return false;

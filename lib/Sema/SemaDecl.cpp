@@ -1962,6 +1962,9 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D, InheritableAttr *Attr,
   else if (SectionAttr *SA = dyn_cast<SectionAttr>(Attr))
     NewAttr = S.mergeSectionAttr(D, SA->getRange(), SA->getName(),
                                  AttrSpellingListIndex);
+  else if (MSInheritanceAttr *IA = dyn_cast<MSInheritanceAttr>(Attr))
+    NewAttr = S.mergeMSInheritanceAttr(D, IA->getRange(), AttrSpellingListIndex,
+                                       IA->getSemanticSpelling());
   else if (isa<AlignedAttr>(Attr))
     // AlignedAttrs are handled separately, because we need to handle all
     // such attributes on a declaration at the same time.
@@ -8773,7 +8776,13 @@ void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
     }
   }
 
+  // Warn about externally-visible variables being defined without a
+  // prior declaration.  We only want to do this for global
+  // declarations, but we also specifically need to avoid doing it for
+  // class members because the linkage of an anonymous class can
+  // change if it's later given a typedef name.
   if (var->isThisDeclarationADefinition() &&
+      var->getDeclContext()->getRedeclContext()->isFileContext() &&
       var->isExternallyVisible() && var->hasLinkage() &&
       getDiagnostics().getDiagnosticLevel(
                        diag::warn_missing_variable_declarations,
@@ -8910,7 +8919,7 @@ Sema::FinalizeDeclaration(Decl *ThisDecl) {
   const DeclContext *DC = VD->getDeclContext();
   // If there's a #pragma GCC visibility in scope, and this isn't a class
   // member, set the visibility of this variable.
-  if (!DC->isRecord() && VD->isExternallyVisible())
+  if (DC->getRedeclContext()->isFileContext() && VD->isExternallyVisible())
     AddPushedVisibilityAttribute(VD);
 
   if (VD->isFileVarDecl())
@@ -10134,6 +10143,27 @@ TypedefDecl *Sema::ParseTypedefDecl(Scope *S, Declarator &D, QualType T,
     // The type must match the tag exactly;  no qualifiers allowed.
     if (!Context.hasSameType(T, Context.getTagDeclType(tagFromDeclSpec)))
       break;
+
+    // If we've already computed linkage for the anonymous tag, then
+    // adding a typedef name for the anonymous decl can change that
+    // linkage, which might be a serious problem.  Diagnose this as
+    // unsupported and ignore the typedef name.  TODO: we should
+    // pursue this as a language defect and establish a formal rule
+    // for how to handle it.
+    if (tagFromDeclSpec->hasLinkageBeenComputed()) {
+      Diag(D.getIdentifierLoc(), diag::err_typedef_changes_linkage);
+
+      SourceLocation tagLoc = D.getDeclSpec().getTypeSpecTypeLoc();
+      tagLoc = Lexer::getLocForEndOfToken(tagLoc, 0, getSourceManager(),
+                                          getLangOpts());
+
+      llvm::SmallString<40> textToInsert;
+      textToInsert += ' ';
+      textToInsert += D.getIdentifier()->getName();
+      Diag(tagLoc, diag::note_typedef_changes_linkage)
+        << FixItHint::CreateInsertion(tagLoc, textToInsert);
+      break;
+    }
 
     // Otherwise, set this is the anon-decl typedef for the tag.
     tagFromDeclSpec->setTypedefNameForAnonDecl(NewTD);
@@ -12098,8 +12128,14 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
     if (!Completed)
       Record->completeDefinition();
 
-    if (Record->hasAttrs())
+    if (Record->hasAttrs()) {
       CheckAlignasUnderalignment(Record);
+
+      if (MSInheritanceAttr *IA = Record->getAttr<MSInheritanceAttr>())
+        checkMSInheritanceAttrOnDefinition(cast<CXXRecordDecl>(Record),
+                                           IA->getRange(),
+                                           IA->getSemanticSpelling());
+    }
 
     // Check if the structure/union declaration is a type that can have zero
     // size in C. For C this is a language extension, for C++ it may cause

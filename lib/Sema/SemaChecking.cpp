@@ -4136,6 +4136,10 @@ static Expr *EvalAddr(Expr *E, SmallVectorImpl<DeclRefExpr *> &refVars,
   case Stmt::DeclRefExprClass: {
     DeclRefExpr *DR = cast<DeclRefExpr>(E);
 
+    // If we leave the immediate function, the lifetime isn't about to end.
+    if (DR->refersToEnclosingLocal())
+      return 0;
+
     if (VarDecl *V = dyn_cast<VarDecl>(DR->getDecl()))
       // If this is a reference variable, follow through to the expression that
       // it points to.
@@ -4291,6 +4295,10 @@ do {
     // variable's name. If it's not a reference variable we check if it has
     // local storage within the function, and if so, return the expression.
     DeclRefExpr *DR = cast<DeclRefExpr>(E);
+
+    // If we leave the immediate function, the lifetime isn't about to end.
+    if (DR->refersToEnclosingLocal())
+      return 0;
 
     if (VarDecl *V = dyn_cast<VarDecl>(DR->getDecl())) {
       // Check if it refers to itself, e.g. "int& i = i;".
@@ -5358,6 +5366,13 @@ void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
       // prevented by a check in AnalyzeImplicitConversions().
       return DiagnoseImpCast(S, E, T, CC,
                              diag::warn_impcast_string_literal_to_bool);
+    if (isa<ObjCStringLiteral>(E) || isa<ObjCArrayLiteral>(E) ||
+        isa<ObjCDictionaryLiteral>(E) || isa<ObjCBoxedExpr>(E)) {
+      // This covers the literal expressions that evaluate to Objective-C
+      // objects.
+      return DiagnoseImpCast(S, E, T, CC,
+                             diag::warn_impcast_objective_c_literal_to_bool);
+    }
     if (Source->isFunctionType()) {
       // Warn on function to bool. Checks free functions and static member
       // functions. Weakly imported functions are excluded from the check,
