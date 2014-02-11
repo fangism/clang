@@ -99,6 +99,11 @@ class VersionArgument<string name, bit opt = 0> : Argument<name, opt>;
 // be dependent.
 class AlignedArgument<string name, bit opt = 0> : Argument<name, opt>;
 
+// A bool argument with a default value
+class DefaultBoolArgument<string name, bit default> : BoolArgument<name, 1> {
+  bit Default = default;
+}
+
 // An integer argument with a default value
 class DefaultIntArgument<string name, int default> : IntArgument<name, 1> {
   int Default = default;
@@ -1397,10 +1402,33 @@ def UPtr : TypeAttr {
 
 def MSInheritance : InheritableAttr {
   let LangOpts = [MicrosoftExt];
+  let Args = [DefaultBoolArgument<"BestCase", 1>];
   let Spellings = [Keyword<"__single_inheritance">,
                    Keyword<"__multiple_inheritance">,
                    Keyword<"__virtual_inheritance">,
                    Keyword<"__unspecified_inheritance">];
+  let AdditionalMembers = [{
+  static bool hasVBPtrOffsetField(Spelling Inheritance) {
+    return Inheritance == Keyword_unspecified_inheritance;
+  }
+
+  // Only member pointers to functions need a this adjustment, since it can be
+  // combined with the field offset for data pointers.
+  static bool hasNVOffsetField(bool IsMemberFunction, Spelling Inheritance) {
+    return IsMemberFunction && Inheritance >= Keyword_multiple_inheritance;
+  }
+
+  static bool hasVBTableOffsetField(Spelling Inheritance) {
+    return Inheritance >= Keyword_virtual_inheritance;
+  }
+
+  static bool hasOnlyOneField(bool IsMemberFunction,
+                              Spelling Inheritance) {
+    if (IsMemberFunction)
+      return Inheritance <= Keyword_single_inheritance;
+    return Inheritance <= Keyword_multiple_inheritance;
+  }
+  }];
 }
 
 def Unaligned : IgnoredAttr {

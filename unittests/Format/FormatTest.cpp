@@ -416,6 +416,8 @@ TEST_F(FormatTest, RangeBasedForLoops) {
                "     aaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaa, aaaaaaaaaaaaa)) {\n}");
   verifyFormat("for (const aaaaaaaaaaaaaaaaaaaaa &aaaaaaaaa :\n"
                "     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {\n}");
+  verifyFormat("for (aaaaaaaaa aaaaaaaaaaaaaaaaaaaaa :\n"
+               "     aaaaaaaaaaaa.aaaaaaaaaaaa().aaaaaaaaa().a()) {\n}");
 }
 
 TEST_F(FormatTest, FormatsWhileLoop) {
@@ -4219,14 +4221,12 @@ TEST_F(FormatTest, UnderstandsUnaryOperators) {
   verifyFormat("int a = i /* confusing comment */++;");
 }
 
-TEST_F(FormatTest, IndentsRelativeToUnaryOperators) {
+TEST_F(FormatTest, DoesNotIndentRelativeToUnaryOperators) {
   verifyFormat("if (!aaaaaaaaaa( // break\n"
-               "         aaaaa)) {\n"
+               "        aaaaa)) {\n"
                "}");
   verifyFormat("aaaaaaaaaa(!aaaaaaaaaa( // break\n"
-               "                aaaaa));");
-
-  // Only indent relative to unary operators if the expression is nested.
+               "               aaaaa));");
   verifyFormat("*aaa = aaaaaaa( // break\n"
                "    bbbbbb);");
 }
@@ -5070,6 +5070,25 @@ TEST_F(FormatTest, PullTrivialFunctionDefinitionsIntoSingleLine) {
             "    : b(0) {\n"
             "}",
             format("A()\n:b(0)\n{\n}", DoNotMergeNoColumnLimit));
+
+  verifyFormat("#define A          \\\n"
+               "  void f() {       \\\n"
+               "    int i;         \\\n"
+               "  }",
+               getLLVMStyleWithColumns(20));
+  verifyFormat("#define A           \\\n"
+               "  void f() { int i; }",
+               getLLVMStyleWithColumns(21));
+  verifyFormat("#define A            \\\n"
+               "  void f() {         \\\n"
+               "    int i;           \\\n"
+               "  }                  \\\n"
+               "  int j;",
+               getLLVMStyleWithColumns(22));
+  verifyFormat("#define A             \\\n"
+               "  void f() { int i; } \\\n"
+               "  int j;",
+               getLLVMStyleWithColumns(23));
 }
 
 TEST_F(FormatTest, UnderstandContextOfRecordTypeKeywords) {
@@ -5182,6 +5201,17 @@ TEST_F(FormatTest, MergeHandlingInTheFaceOfPreprocessorDirectives) {
                "  // Comment\n"
                "  if (true) continue;\n"
                "}",
+               ShortMergedIf);
+  ShortMergedIf.ColumnLimit = 29;
+  verifyFormat("#define A                   \\\n"
+               "  if (aaaaaaaaaa) return 1; \\\n"
+               "  return 2;",
+               ShortMergedIf);
+  ShortMergedIf.ColumnLimit = 28;
+  verifyFormat("#define A         \\\n"
+               "  if (aaaaaaaaaa) \\\n"
+               "    return 1;     \\\n"
+               "  return 2;",
                ShortMergedIf);
 }
 

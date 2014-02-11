@@ -2873,20 +2873,32 @@ void Sema::CheckAlignasUnderalignment(Decl *D) {
 }
 
 bool Sema::checkMSInheritanceAttrOnDefinition(
-    CXXRecordDecl *RD, SourceRange Range,
+    CXXRecordDecl *RD, SourceRange Range, bool BestCase,
     MSInheritanceAttr::Spelling SemanticSpelling) {
   assert(RD->hasDefinition() && "RD has no definition!");
 
-  if (SemanticSpelling != MSInheritanceAttr::Keyword_unspecified_inheritance &&
-      RD->calculateInheritanceModel() != SemanticSpelling) {
-    Diag(Range.getBegin(), diag::err_mismatched_ms_inheritance)
-        << 0 /*definition*/;
-    Diag(RD->getDefinition()->getLocation(), diag::note_defined_here)
-        << RD->getNameAsString();
-    return true;
+  // We may not have seen base specifiers or any virtual methods yet.  We will
+  // have to wait until the record is defined to catch any mismatches.
+  if (!RD->getDefinition()->isCompleteDefinition())
+    return false;
+
+  // The unspecified model never matches what a definition could need.
+  if (SemanticSpelling == MSInheritanceAttr::Keyword_unspecified_inheritance)
+    return false;
+
+  if (BestCase) {
+    if (RD->calculateInheritanceModel() == SemanticSpelling)
+      return false;
+  } else {
+    if (RD->calculateInheritanceModel() <= SemanticSpelling)
+      return false;
   }
 
-  return false;
+  Diag(Range.getBegin(), diag::err_mismatched_ms_inheritance)
+      << 0 /*definition*/;
+  Diag(RD->getDefinition()->getLocation(), diag::note_defined_here)
+      << RD->getNameAsString();
+  return true;
 }
 
 /// handleModeAttr - This attribute modifies the width of a decl with primitive
@@ -3698,7 +3710,8 @@ static void handleMSInheritanceAttr(Sema &S, Decl *D, const AttributeList &Attr)
     return;
   }
   MSInheritanceAttr *IA = S.mergeMSInheritanceAttr(
-      D, Attr.getRange(), Attr.getAttributeSpellingListIndex(),
+      D, Attr.getRange(), /*BestCase=*/true,
+      Attr.getAttributeSpellingListIndex(),
       (MSInheritanceAttr::Spelling)Attr.getSemanticSpelling());
   if (IA)
     D->addAttr(IA);
@@ -3879,7 +3892,7 @@ static void handleDLLExportAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 }
 
 MSInheritanceAttr *
-Sema::mergeMSInheritanceAttr(Decl *D, SourceRange Range,
+Sema::mergeMSInheritanceAttr(Decl *D, SourceRange Range, bool BestCase,
                              unsigned AttrSpellingListIndex,
                              MSInheritanceAttr::Spelling SemanticSpelling) {
   if (MSInheritanceAttr *IA = D->getAttr<MSInheritanceAttr>()) {
@@ -3893,7 +3906,8 @@ Sema::mergeMSInheritanceAttr(Decl *D, SourceRange Range,
 
   CXXRecordDecl *RD = cast<CXXRecordDecl>(D);
   if (RD->hasDefinition()) {
-    if (checkMSInheritanceAttrOnDefinition(RD, Range, SemanticSpelling)) {
+    if (checkMSInheritanceAttrOnDefinition(RD, Range, BestCase,
+                                           SemanticSpelling)) {
       return 0;
     }
   } else {
@@ -3910,7 +3924,7 @@ Sema::mergeMSInheritanceAttr(Decl *D, SourceRange Range,
   }
 
   return ::new (Context)
-      MSInheritanceAttr(Range, Context, AttrSpellingListIndex);
+      MSInheritanceAttr(Range, Context, BestCase, AttrSpellingListIndex);
 }
 
 /// Handles semantic checking for features that are common to all attributes,

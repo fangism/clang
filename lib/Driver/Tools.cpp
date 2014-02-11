@@ -21,7 +21,6 @@
 #include "clang/Driver/SanitizerArgs.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Util.h"
-#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -1995,6 +1994,21 @@ static bool shouldEnableVectorizerAtOLevel(const ArgList &Args) {
   return false;
 }
 
+/// Add -x lang to \p CmdArgs for \p Input.
+static void addDashXForInput(const ArgList &Args, const InputInfo &Input,
+                             ArgStringList &CmdArgs) {
+  // When using -verify-pch, we don't want to provide the type
+  // 'precompiled-header' if it was inferred from the file extension
+  if (Args.hasArg(options::OPT_verify_pch) && Input.getType() == types::TY_PCH)
+    return;
+
+  CmdArgs.push_back("-x");
+  if (Args.hasArg(options::OPT_rewrite_objc))
+    CmdArgs.push_back(types::getTypeName(types::TY_PP_ObjCXX));
+  else
+    CmdArgs.push_back(types::getTypeName(Input.getType()));
+}
+
 void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                          const InputInfo &Output,
                          const InputInfoList &Inputs,
@@ -2051,6 +2065,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-emit-pch");
     else
       CmdArgs.push_back("-emit-pth");
+  } else if (isa<VerifyPCHJobAction>(JA)) {
+    CmdArgs.push_back("-verify-pch");
   } else {
     assert(isa<CompileJobAction>(JA) && "Invalid action for clang tool.");
 
@@ -2864,9 +2880,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // behavior for now. FIXME: Directly diagnose uses of a string literal as
   // a non-const char* in C, rather than using this crude hack.
   if (!types::isCXX(InputType)) {
-    DiagnosticsEngine::Level DiagLevel = D.getDiags().getDiagnosticLevel(
-        diag::warn_deprecated_string_literal_conversion_c, SourceLocation());
-    if (DiagLevel > DiagnosticsEngine::Ignored)
+    // FIXME: This should behave just like a warning flag, and thus should also
+    // respect -Weverything, -Wno-everything, -Werror=write-strings, and so on.
+    Arg *WriteStrings =
+        Args.getLastArg(options::OPT_Wwrite_strings,
+                        options::OPT_Wno_write_strings, options::OPT_w);
+    if (WriteStrings &&
+        WriteStrings->getOption().matches(options::OPT_Wwrite_strings))
       CmdArgs.push_back("-fconst-strings");
   }
 
@@ -3742,11 +3762,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   for (InputInfoList::const_iterator
          it = Inputs.begin(), ie = Inputs.end(); it != ie; ++it) {
     const InputInfo &II = *it;
-    CmdArgs.push_back("-x");
-    if (Args.hasArg(options::OPT_rewrite_objc))
-      CmdArgs.push_back(types::getTypeName(types::TY_PP_ObjCXX));
-    else
-      CmdArgs.push_back(types::getTypeName(II.getType()));
+
+    addDashXForInput(Args, II, CmdArgs);
+
     if (II.isFilename())
       CmdArgs.push_back(II.getFilename());
     else
@@ -6142,10 +6160,12 @@ void netbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-m");
     switch (getToolChain().getTriple().getEnvironment()) {
     case llvm::Triple::EABI:
-    case llvm::Triple::EABIHF:
     case llvm::Triple::GNUEABI:
-    case llvm::Triple::GNUEABIHF:
       CmdArgs.push_back("armelf_nbsd_eabi");
+      break;
+    case llvm::Triple::EABIHF:
+    case llvm::Triple::GNUEABIHF:
+      CmdArgs.push_back("armelf_nbsd_eabihf");
       break;
     default:
       CmdArgs.push_back("armelf_nbsd");

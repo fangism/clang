@@ -1963,7 +1963,8 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D, InheritableAttr *Attr,
     NewAttr = S.mergeSectionAttr(D, SA->getRange(), SA->getName(),
                                  AttrSpellingListIndex);
   else if (MSInheritanceAttr *IA = dyn_cast<MSInheritanceAttr>(Attr))
-    NewAttr = S.mergeMSInheritanceAttr(D, IA->getRange(), AttrSpellingListIndex,
+    NewAttr = S.mergeMSInheritanceAttr(D, IA->getRange(), IA->getBestCase(),
+                                       AttrSpellingListIndex,
                                        IA->getSemanticSpelling());
   else if (isa<AlignedAttr>(Attr))
     // AlignedAttrs are handled separately, because we need to handle all
@@ -2268,8 +2269,8 @@ static bool haveIncompatibleLanguageLinkages(const T *Old, const T *New) {
 /// merged with.
 ///
 /// Returns true if there was an error, false otherwise.
-bool Sema::MergeFunctionDecl(FunctionDecl *New, Decl *OldD, Scope *S,
-                             bool MergeTypeWithOld) {
+bool Sema::MergeFunctionDecl(FunctionDecl *New, NamedDecl *&OldD,
+                             Scope *S, bool MergeTypeWithOld) {
   // Verify the old decl was also a function.
   FunctionDecl *Old = OldD->getAsFunction();
   if (!Old) {
@@ -2283,18 +2284,34 @@ bool Sema::MergeFunctionDecl(FunctionDecl *New, Decl *OldD, Scope *S,
         return true;
       }
 
-      Diag(New->getLocation(), diag::err_using_decl_conflict_reverse);
-      Diag(Shadow->getTargetDecl()->getLocation(),
-           diag::note_using_decl_target);
-      Diag(Shadow->getUsingDecl()->getLocation(),
-           diag::note_using_decl) << 0;
+      // C++11 [namespace.udecl]p14:
+      //   If a function declaration in namespace scope or block scope has the
+      //   same name and the same parameter-type-list as a function introduced
+      //   by a using-declaration, and the declarations do not declare the same
+      //   function, the program is ill-formed.
+
+      // Check whether the two declarations might declare the same function.
+      Old = dyn_cast<FunctionDecl>(Shadow->getTargetDecl());
+      if (Old &&
+          !Old->getDeclContext()->getRedeclContext()->Equals(
+              New->getDeclContext()->getRedeclContext()) &&
+          !(Old->isExternC() && New->isExternC()))
+        Old = 0;
+
+      if (!Old) {
+        Diag(New->getLocation(), diag::err_using_decl_conflict_reverse);
+        Diag(Shadow->getTargetDecl()->getLocation(),
+             diag::note_using_decl_target);
+        Diag(Shadow->getUsingDecl()->getLocation(), diag::note_using_decl) << 0;
+        return true;
+      }
+      OldD = Old;
+    } else {
+      Diag(New->getLocation(), diag::err_redefinition_different_kind)
+        << New->getDeclName();
+      Diag(OldD->getLocation(), diag::note_previous_definition);
       return true;
     }
-
-    Diag(New->getLocation(), diag::err_redefinition_different_kind)
-      << New->getDeclName();
-    Diag(OldD->getLocation(), diag::note_previous_definition);
-    return true;
   }
 
   // If the old declaration is invalid, just give up here.
@@ -6963,11 +6980,11 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   if (!NewFD->isInvalidDecl() && !NewFD->hasAttr<WarnUnusedResultAttr>() &&
       Ret && Ret->hasAttr<WarnUnusedResultAttr>()) {
     const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(NewFD);
-    // Attach the attribute to the new decl. Don't apply the attribute if it
-    // returns an instance of the class (e.g. assignment operators).
-    if (!MD || MD->getParent() != Ret) {
+    // Attach WarnUnusedResult to functions returning types with that attribute.
+    // Don't apply the attribute to that type's own non-static member functions
+    // (to avoid warning on things like assignment operators)
+    if (!MD || MD->getParent() != Ret)
       NewFD->addAttr(WarnUnusedResultAttr::CreateImplicit(Context));
-    }
   }
 
   if (getLangOpts().OpenCL) {
@@ -12134,9 +12151,9 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
     if (Record->hasAttrs()) {
       CheckAlignasUnderalignment(Record);
 
-      if (MSInheritanceAttr *IA = Record->getAttr<MSInheritanceAttr>())
+      if (const MSInheritanceAttr *IA = Record->getAttr<MSInheritanceAttr>())
         checkMSInheritanceAttrOnDefinition(cast<CXXRecordDecl>(Record),
-                                           IA->getRange(),
+                                           IA->getRange(), IA->getBestCase(),
                                            IA->getSemanticSpelling());
     }
 

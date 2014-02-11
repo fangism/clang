@@ -469,22 +469,28 @@ def err_opencl_half_return : Error<
   "declaring function return value of type %0 is not allowed; did you forget * ?">;
 def warn_enum_value_overflow : Warning<"overflow in enumeration value">;
 def warn_pragma_options_align_reset_failed : Warning<
-  "#pragma options align=reset failed: %0">;
+  "#pragma options align=reset failed: %0">,
+  InGroup<IgnoredPragmas>;
 def err_pragma_options_align_mac68k_target_unsupported : Error<
   "mac68k alignment pragma is not supported on this target">;
 def warn_pragma_pack_invalid_alignment : Warning<
-  "expected #pragma pack parameter to be '1', '2', '4', '8', or '16'">;
+  "expected #pragma pack parameter to be '1', '2', '4', '8', or '16'">,
+  InGroup<IgnoredPragmas>;
 // Follow the MSVC implementation.
 def warn_pragma_pack_show : Warning<"value of #pragma pack(show) == %0">;
 def warn_pragma_pack_pop_identifer_and_alignment : Warning<
   "specifying both a name and alignment to 'pop' is undefined">;
-def warn_pragma_pack_pop_failed : Warning<"#pragma pack(pop, ...) failed: %0">;
-def warn_pragma_ms_struct_failed : Warning<"#pramga ms_struct can not be used with dynamic classes or structures">, InGroup<IgnoredAttributes>;
+def warn_pragma_pack_pop_failed : Warning<"#pragma pack(pop, ...) failed: %0">,
+  InGroup<IgnoredPragmas>;
+def warn_pragma_ms_struct_failed : Warning<"#pramga ms_struct can not be used with dynamic classes or structures">,
+  InGroup<IgnoredPragmas>;
 
 def warn_pragma_unused_undeclared_var : Warning<
-  "undeclared variable %0 used as an argument for '#pragma unused'">;
+  "undeclared variable %0 used as an argument for '#pragma unused'">,
+  InGroup<IgnoredPragmas>;
 def warn_pragma_unused_expected_var_arg : Warning<
-  "only variables can be arguments to '#pragma unused'">;
+  "only variables can be arguments to '#pragma unused'">,
+  InGroup<IgnoredPragmas>;
 def err_pragma_push_visibility_mismatch : Error<
   "#pragma visibility push with no matching #pragma visibility pop">;
 def note_surrounding_namespace_ends_here : Note<
@@ -952,6 +958,8 @@ def err_capture_of_abstract_type : Error<
   "by-copy capture of value of abstract type %0">;
 def err_capture_of_incomplete_type : Error<
   "by-copy capture of variable %0 with incomplete type %1">;
+def err_capture_default_non_local : Error<
+  "non-local lambda expression cannot have a capture-default">;
 
 def err_multiple_final_overriders : Error<
   "virtual function %q0 has more than one final overrider in %1">; 
@@ -3200,9 +3208,13 @@ def err_default_arg_in_partial_spec : Error<
 def err_dependent_non_type_arg_in_partial_spec : Error<
     "non-type template argument depends on a template parameter of the "
     "partial specialization">;
+def note_dependent_non_type_default_arg_in_partial_spec : Note<
+    "template parameter is used in default argument declared here">;
 def err_dependent_typed_non_type_arg_in_partial_spec : Error<
     "non-type template argument specializes a template parameter with "
     "dependent type %0">;
+def note_dependent_typed_non_type_default_arg_in_partial_spec : Note<
+    "template parameter is declared here">;
 def err_partial_spec_args_match_primary_template : Error<
     "%select{class|variable}0 template partial specialization does not "
     "specialize any template argument; to %select{declare|define}1 the "
@@ -4555,8 +4567,6 @@ def warn_deprecated_string_literal_conversion : Warning<
 def ext_deprecated_string_literal_conversion : ExtWarn<
   "ISO C++11 does not allow conversion from string literal to %0">,
   InGroup<CXX11CompatDeprecatedWritableStr>, SFINAEFailure;
-def warn_deprecated_string_literal_conversion_c : Warning<
-  "dummy warning to enable -fconst-strings">, InGroup<DeprecatedWritableStr>, DefaultIgnore;
 def err_realimag_invalid_type : Error<"invalid type %0 to %1 operator">;
 def err_typecheck_sclass_fscope : Error<
   "illegal storage class on file-scoped variable">;
@@ -5249,9 +5259,10 @@ def err_typecheck_deleted_function : Error<
   "conversion function %diff{from $ to $|between types}0,1 "
   "invokes a deleted function">;
   
-def err_expected_class_or_namespace : Error<"expected a class or namespace">;
-def err_expected_class : Error<"%0 is not a class%select{ or namespace|, "
-  "namespace, or scoped enumeration}1">;
+def err_expected_class_or_namespace : Error<"%0 is not a class"
+  "%select{ or namespace|, namespace, or scoped enumeration}1">;
+def note_expected_class_or_namespace_declared_here : Note<
+  "%0 declared here">;
 def err_invalid_declarator_scope : Error<"cannot define or redeclare %0 here "
   "because namespace %1 does not enclose namespace %2">;
 def err_invalid_declarator_global_scope : Error<

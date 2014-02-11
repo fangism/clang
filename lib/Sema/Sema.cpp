@@ -75,7 +75,8 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     Diags(PP.getDiagnostics()), SourceMgr(PP.getSourceManager()),
     CollectStats(false), CodeCompleter(CodeCompleter),
     CurContext(0), OriginalLexicalContext(0),
-    PackContext(0), MSStructPragmaOn(false), VisContext(0),
+    PackContext(0), MSStructPragmaOn(false),
+    MSPointerToMemberRepresentationMethod(PPTMK_BestCase), VisContext(0),
     IsBuildingRecoveryCallExpr(false),
     ExprNeedsCleanups(false), LateTemplateParser(0), OpaqueParser(0),
     IdResolver(pp), StdInitializerList(0), CXXTypeInfoDecl(0), MSVCGuidDecl(0),
@@ -210,7 +211,6 @@ Sema::~Sema() {
     delete I->second;
   if (PackContext) FreePackedContext();
   if (VisContext) FreeVisContext();
-  MSStructPragmaOn = false;
   // Kill all the active scopes.
   for (unsigned I = 1, E = FunctionScopes.size(); I != E; ++I)
     delete FunctionScopes[I];
