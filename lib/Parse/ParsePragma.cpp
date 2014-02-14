@@ -182,13 +182,22 @@ void Parser::HandlePragmaOpenCLExtension() {
 
 void Parser::HandlePragmaMSPointersToMembers() {
   assert(Tok.is(tok::annot_pragma_ms_pointers_to_members));
-  Sema::PragmaMSPointersToMembersKind RepresentationMethod =
-      static_cast<Sema::PragmaMSPointersToMembersKind>(
+  LangOptions::PragmaMSPointersToMembersKind RepresentationMethod =
+      static_cast<LangOptions::PragmaMSPointersToMembersKind>(
           reinterpret_cast<uintptr_t>(Tok.getAnnotationValue()));
   SourceLocation PragmaLoc = ConsumeToken(); // The annotation token.
   Actions.ActOnPragmaMSPointersToMembers(RepresentationMethod, PragmaLoc);
 }
 
+void Parser::HandlePragmaMSVtorDisp() {
+  assert(Tok.is(tok::annot_pragma_ms_vtordisp));
+  uintptr_t Value = reinterpret_cast<uintptr_t>(Tok.getAnnotationValue());
+  Sema::PragmaVtorDispKind Kind =
+      static_cast<Sema::PragmaVtorDispKind>((Value >> 16) & 0xFFFF);
+  MSVtorDispAttr::Mode Mode = MSVtorDispAttr::Mode(Value & 0xFFFF);
+  SourceLocation PragmaLoc = ConsumeToken(); // The annotation token.
+  Actions.ActOnPragmaMSVtorDisp(Kind, PragmaLoc, Mode);
+}
 
 // #pragma GCC visibility comes in two variants:
 //   'push' '(' [visibility] ')'
@@ -291,7 +300,7 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
       } else if (II->isStr("pop")) {
         Kind = Sema::PPK_Pop;
       } else {
-        PP.Diag(Tok.getLocation(), diag::warn_pragma_pack_invalid_action);
+        PP.Diag(Tok.getLocation(), diag::warn_pragma_invalid_action) << "pack";
         return;
       }
       PP.Lex(Tok);
@@ -834,9 +843,9 @@ void PragmaMSPointersToMembers::HandlePragma(Preprocessor &PP,
   }
   PP.Lex(Tok);
 
-  Sema::PragmaMSPointersToMembersKind RepresentationMethod;
+  LangOptions::PragmaMSPointersToMembersKind RepresentationMethod;
   if (Arg->isStr("best_case")) {
-    RepresentationMethod = Sema::PPTMK_BestCase;
+    RepresentationMethod = LangOptions::PPTMK_BestCase;
   } else {
     if (Arg->isStr("full_generality")) {
       if (Tok.is(tok::comma)) {
@@ -854,7 +863,7 @@ void PragmaMSPointersToMembers::HandlePragma(Preprocessor &PP,
         // #pragma pointers_to_members(full_generality) implicitly specifies
         // virtual_inheritance.
         Arg = 0;
-        RepresentationMethod = Sema::PPTMK_FullGeneralityVirtualInheritance;
+        RepresentationMethod = LangOptions::PPTMK_FullGeneralityVirtualInheritance;
       } else {
         PP.Diag(Tok.getLocation(), diag::err_expected_punc)
             << "full_generality";
@@ -864,11 +873,14 @@ void PragmaMSPointersToMembers::HandlePragma(Preprocessor &PP,
 
     if (Arg) {
       if (Arg->isStr("single_inheritance")) {
-        RepresentationMethod = Sema::PPTMK_FullGeneralitySingleInheritance;
+        RepresentationMethod =
+            LangOptions::PPTMK_FullGeneralitySingleInheritance;
       } else if (Arg->isStr("multiple_inheritance")) {
-        RepresentationMethod = Sema::PPTMK_FullGeneralityMultipleInheritance;
+        RepresentationMethod =
+            LangOptions::PPTMK_FullGeneralityMultipleInheritance;
       } else if (Arg->isStr("virtual_inheritance")) {
-        RepresentationMethod = Sema::PPTMK_FullGeneralityVirtualInheritance;
+        RepresentationMethod =
+            LangOptions::PPTMK_FullGeneralityVirtualInheritance;
       } else {
         PP.Diag(Tok.getLocation(),
                 diag::err_pragma_pointers_to_members_unknown_kind)
@@ -897,6 +909,97 @@ void PragmaMSPointersToMembers::HandlePragma(Preprocessor &PP,
   AnnotTok.setLocation(PointersToMembersLoc);
   AnnotTok.setAnnotationValue(
       reinterpret_cast<void *>(static_cast<uintptr_t>(RepresentationMethod)));
+  PP.EnterToken(AnnotTok);
+}
+
+/// \brief Handle '#pragma vtordisp'
+// The grammar for this pragma is as follows:
+//
+// <vtordisp-mode> ::= ('off' | 'on' | '0' | '1' | '2' )
+//
+// #pragma vtordisp '(' ['push' ','] vtordisp-mode ')'
+// #pragma vtordisp '(' 'pop' ')'
+// #pragma vtordisp '(' ')'
+void PragmaMSVtorDisp::HandlePragma(Preprocessor &PP,
+                                    PragmaIntroducerKind Introducer,
+                                    Token &Tok) {
+  SourceLocation VtorDispLoc = Tok.getLocation();
+  PP.Lex(Tok);
+  if (Tok.isNot(tok::l_paren)) {
+    PP.Diag(VtorDispLoc, diag::warn_pragma_expected_lparen) << "vtordisp";
+    return;
+  }
+  PP.Lex(Tok);
+
+  Sema::PragmaVtorDispKind Kind = Sema::PVDK_Set;
+  const IdentifierInfo *II = Tok.getIdentifierInfo();
+  if (II) {
+    if (II->isStr("push")) {
+      // #pragma vtordisp(push, mode)
+      PP.Lex(Tok);
+      if (Tok.isNot(tok::comma)) {
+        PP.Diag(VtorDispLoc, diag::warn_pragma_expected_punc) << "vtordisp";
+        return;
+      }
+      PP.Lex(Tok);
+      Kind = Sema::PVDK_Push;
+      // not push, could be on/off
+    } else if (II->isStr("pop")) {
+      // #pragma vtordisp(pop)
+      PP.Lex(Tok);
+      Kind = Sema::PVDK_Pop;
+    }
+    // not push or pop, could be on/off
+  } else {
+    if (Tok.is(tok::r_paren)) {
+      // #pragma vtordisp()
+      Kind = Sema::PVDK_Reset;
+    }
+  }
+
+
+  uint64_t Value = 0;
+  if (Kind == Sema::PVDK_Push || Kind == Sema::PVDK_Set) {
+    const IdentifierInfo *II = Tok.getIdentifierInfo();
+    if (II && II->isStr("off")) {
+      PP.Lex(Tok);
+      Value = 0;
+    } else if (II && II->isStr("on")) {
+      PP.Lex(Tok);
+      Value = 1;
+    } else if (Tok.is(tok::numeric_constant) &&
+               PP.parseSimpleIntegerLiteral(Tok, Value)) {
+      if (Value > 2) {
+        PP.Diag(Tok.getLocation(), diag::warn_pragma_expected_integer)
+            << 0 << 2 << "vtordisp";
+        return;
+      }
+    } else {
+      PP.Diag(Tok.getLocation(), diag::warn_pragma_invalid_action)
+          << "vtordisp";
+      return;
+    }
+  }
+
+  // Finish the pragma: ')' $
+  if (Tok.isNot(tok::r_paren)) {
+    PP.Diag(VtorDispLoc, diag::warn_pragma_expected_rparen) << "vtordisp";
+    return;
+  }
+  PP.Lex(Tok);
+  if (Tok.isNot(tok::eod)) {
+    PP.Diag(Tok.getLocation(), diag::warn_pragma_extra_tokens_at_eol)
+        << "vtordisp";
+    return;
+  }
+
+  // Enter the annotation.
+  Token AnnotTok;
+  AnnotTok.startToken();
+  AnnotTok.setKind(tok::annot_pragma_ms_vtordisp);
+  AnnotTok.setLocation(VtorDispLoc);
+  AnnotTok.setAnnotationValue(reinterpret_cast<void *>(
+      static_cast<uintptr_t>((Kind << 16) | (Value & 0xFFFF))));
   PP.EnterToken(AnnotTok);
 }
 

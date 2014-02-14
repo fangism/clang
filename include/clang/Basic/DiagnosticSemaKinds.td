@@ -480,7 +480,7 @@ def warn_pragma_pack_invalid_alignment : Warning<
 def warn_pragma_pack_show : Warning<"value of #pragma pack(show) == %0">;
 def warn_pragma_pack_pop_identifer_and_alignment : Warning<
   "specifying both a name and alignment to 'pop' is undefined">;
-def warn_pragma_pack_pop_failed : Warning<"#pragma pack(pop, ...) failed: %0">,
+def warn_pragma_pop_failed : Warning<"#pragma %0(pop, ...) failed: %1">,
   InGroup<IgnoredPragmas>;
 def warn_pragma_ms_struct_failed : Warning<"#pramga ms_struct can not be used with dynamic classes or structures">,
   InGroup<IgnoredPragmas>;
@@ -1982,8 +1982,8 @@ def error_cannot_find_suitable_accessor : Error<
 
 def err_attribute_aligned_not_power_of_two : Error<
   "requested alignment is not a power of 2">;
-def err_attribute_aligned_greater_than_8192 : Error<
-  "requested alignment must be 8192 bytes or smaller">;
+def err_attribute_aligned_too_great : Error<
+  "requested alignment must be %0 bytes or smaller">;
 def warn_redeclaration_without_attribute_prev_attribute_ignored : Warning<
   "%0 redeclared without %1 attribute: previous %1 ignored">;
 def warn_attribute_ignored : Warning<"%0 attribute ignored">,
@@ -3213,8 +3213,6 @@ def note_dependent_non_type_default_arg_in_partial_spec : Note<
 def err_dependent_typed_non_type_arg_in_partial_spec : Error<
     "non-type template argument specializes a template parameter with "
     "dependent type %0">;
-def note_dependent_typed_non_type_default_arg_in_partial_spec : Note<
-    "template parameter is declared here">;
 def err_partial_spec_args_match_primary_template : Error<
     "%select{class|variable}0 template partial specialization does not "
     "specialize any template argument; to %select{declare|define}1 the "

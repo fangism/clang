@@ -364,8 +364,7 @@ def Bounded : IgnoredAttr {
 }
 
 def CarriesDependency : InheritableParamAttr {
-  let Spellings = [GNU<"carries_dependency">, CXX11<"","carries_dependency">,
-                   CXX11<"std","carries_dependency">];
+  let Spellings = [GNU<"carries_dependency">, CXX11<"","carries_dependency">];
   let Subjects = SubjectList<[ParmVar, ObjCMethod, Function], ErrorDiag>;
 }
 
@@ -480,7 +479,7 @@ def C11NoReturn : InheritableAttr {
 }
 
 def CXX11NoReturn : InheritableAttr {
-  let Spellings = [CXX11<"","noreturn">, CXX11<"std","noreturn">];
+  let Spellings = [CXX11<"","noreturn">];
   let Subjects = SubjectList<[Function], ErrorDiag>;
 }
 
@@ -1428,6 +1427,23 @@ def MSInheritance : InheritableAttr {
       return Inheritance <= Keyword_single_inheritance;
     return Inheritance <= Keyword_multiple_inheritance;
   }
+  }];
+}
+
+def MSVtorDisp : InheritableAttr {
+  // This attribute has no spellings as it is only ever created implicitly.
+  let Spellings = [];
+  let Args = [UnsignedArgument<"vdm">];
+  let SemaHandler = 0;
+
+  let AdditionalMembers = [{
+  enum Mode {
+    Never,
+    ForVBaseOverride,
+    ForVFTable
+  };
+
+  Mode getVtorDispMode() const { return Mode(vdm); }
   }];
 }
 
