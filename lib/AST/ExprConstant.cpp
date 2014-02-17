@@ -8029,6 +8029,8 @@ static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
 /// an object can indirectly refer to subobjects which were initialized earlier.
 static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
                             const Expr *E, bool AllowNonLiteralTypes) {
+  if (E->isTypeDependent() || E->isValueDependent())
+    return false;
   if (!AllowNonLiteralTypes && !CheckLiteralType(Info, E, &This))
     return false;
 
