@@ -1364,6 +1364,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
     Args.hasArg(OPT_fencode_extended_block_signature);
   Opts.EmitAllDecls = Args.hasArg(OPT_femit_all_decls);
   Opts.PackStruct = getLastArgIntValue(Args, OPT_fpack_struct_EQ, 0, Diags);
+  Opts.OSXPowerAlign =  Args.hasArg(OPT_malign_power);
+  Opts.OSXNaturalAlign =  Args.hasArg(OPT_malign_natural);
+  Opts.Mac68kAlign =  Args.hasArg(OPT_malign_mac68k);
   Opts.PICLevel = getLastArgIntValue(Args, OPT_pic_level, 0, Diags);
   Opts.PIELevel = getLastArgIntValue(Args, OPT_pie_level, 0, Diags);
   Opts.Static = Args.hasArg(OPT_static_define);

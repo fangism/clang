@@ -74,6 +74,8 @@ def m_hexagon_Features_Group  : OptionGroup<"<m hexagon features group>">, Group
 def m_arm_Features_Group  : OptionGroup<"<m arm features group>">, Group<m_Group>;
 def m_aarch64_Features_Group  : OptionGroup<"<m aarch64 features group>">, Group<m_Group>;
 def m_ppc_Features_Group  : OptionGroup<"<m ppc features group>">, Group<m_Group>;
+def m_osx_ppc_align_Group : OptionGroup<"<m osx ppc alignment group>">, Group<m_Group>;
+//def opencl_Group          : OptionGroup<"<opencl group>">;
 def u_Group               : OptionGroup<"<u group>">;
 
 def pedantic_Group        : OptionGroup<"<pedantic group>">,
@@ -1094,6 +1096,12 @@ def faltivec : Flag<["-"], "faltivec">, Group<f_Group>, Flags<[CC1Option]>,
 def fno_altivec : Flag<["-"], "fno-altivec">, Group<f_Group>, Flags<[CC1Option]>;
 def maltivec : Flag<["-"], "maltivec">, Alias<faltivec>;
 def mno_altivec : Flag<["-"], "mno-altivec">, Alias<fno_altivec>;
+
+def malign_power : Flag<["-"], "malign-power">, Group<m_osx_ppc_align_Group>, Flags<[CC1Option]>,
+  HelpText<"Structures are laid out using the 'power' alignment (OSX ppc only)">;
+def malign_natural : Flag<["-"], "malign-natural">, Group<m_osx_ppc_align_Group>, Flags<[CC1Option]>,
+  HelpText<"Structures are laid out using natural type alignment (OSX ppc only)">;
+def malign_mac68k : Flag<["-"], "malign-mac68k">, Group<m_osx_ppc_align_Group>, Flags<[CC1Option]>;
 
 def mno_warn_nonportable_cfstrings : Flag<["-"], "mno-warn-nonportable-cfstrings">, Group<m_Group>;
 def mno_omit_leaf_frame_pointer : Flag<["-"], "mno-omit-leaf-frame-pointer">, Group<m_Group>;

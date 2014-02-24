@@ -3219,6 +3219,28 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
+  // Deal with OSX PowerPC alignment options.
+  Arg *alignOptArg = Args.getLastArg(options::OPT_malign_power,
+                                     options::OPT_malign_natural,
+                                     options::OPT_malign_mac68k);
+  if (getToolChain().getTriple().isOSDarwin() &&
+      getToolChain().getArch() == llvm::Triple::ppc) {
+    // The default is power alignment.
+    if (! alignOptArg
+        || alignOptArg->getOption().matches(options::OPT_malign_power)) {
+      CmdArgs.push_back("-malign-power");
+    } else
+      if (alignOptArg->getOption().matches(options::OPT_malign_natural)) {
+      CmdArgs.push_back("-malign-natural");
+    } else {
+      CmdArgs.push_back("-malign-mac68k");
+    }
+  } else if (alignOptArg) {
+    // FIXME: Decide if we want to accept the mac68k mode for i386-darwin.
+    D.Diag(diag::err_drv_argument_only_allowed_with)
+           << alignOptArg->getAsString(Args) << "OSX ppc";
+  }
+
   if (Arg *A = Args.getLastArg(options::OPT_mrestrict_it,
                                options::OPT_mno_restrict_it)) {
     if (A->getOption().matches(options::OPT_mrestrict_it)) {

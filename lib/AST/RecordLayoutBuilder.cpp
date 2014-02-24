@@ -571,6 +571,8 @@ protected:
 
   unsigned IsMac68kAlign : 1;
   
+  unsigned IsOSXPowerAlign : 1;
+
   unsigned IsMsStruct : 1;
 
   /// UnfilledBitsInLastUnit - If the last field laid out was a bitfield,
@@ -643,12 +645,12 @@ protected:
                       EmptySubobjectMap *EmptySubobjects)
     : Context(Context), EmptySubobjects(EmptySubobjects), Size(0), 
       Alignment(CharUnits::One()), UnpackedAlignment(CharUnits::One()),
-      ExternalLayout(false), InferAlignment(false), 
-      Packed(false), IsUnion(false), IsMac68kAlign(false), IsMsStruct(false),
-      UnfilledBitsInLastUnit(0), LastBitfieldTypeSize(0),
-      MaxFieldAlignment(CharUnits::Zero()), 
-      DataSize(0), NonVirtualSize(CharUnits::Zero()), 
-      NonVirtualAlignment(CharUnits::One()), 
+      ExternalLayout(false), InferAlignment(false),
+      Packed(false), IsUnion(false), IsMac68kAlign(false),
+      IsOSXPowerAlign(false), IsMsStruct(false), UnfilledBitsInLastUnit(0),
+      LastBitfieldTypeSize(0), MaxFieldAlignment(CharUnits::Zero()),
+      DataSize(0), NonVirtualSize(CharUnits::Zero()),
+      NonVirtualAlignment(CharUnits::One()),
       PrimaryBase(0), PrimaryBaseIsVirtual(false),
       HasOwnVFPtr(false),
       FirstNearlyEmptyVBase(0) { }
@@ -1248,7 +1250,16 @@ void RecordLayoutBuilder::InitializeLayout(const Decl *D) {
     IsMsStruct = RD->isMsStruct(Context);
   }
 
-  Packed = D->hasAttr<PackedAttr>();  
+  Packed = D->hasAttr<PackedAttr>();
+
+  // Note if we use the special power alignment rules (mac68k is dealt with
+  // below).  "Natural" may be explicitly specified, but is just the default
+  // in the absence of any other stated requirement.
+  if (Context.getLangOpts().OSXPowerAlign) {
+    // Some items have different alignments depending on where they appear
+    // in an aggregate.  Yeah, history is fun to deal with.
+    IsOSXPowerAlign = true;
+  }
 
   // Honor the default struct packing maximum alignment flag.
   if (unsigned DefaultMaxFieldAlignment = Context.getLangOpts().PackStruct) {
@@ -1259,7 +1270,7 @@ void RecordLayoutBuilder::InitializeLayout(const Decl *D) {
   // and forces all structures to have 2-byte alignment. The IBM docs on it
   // allude to additional (more complicated) semantics, especially with regard
   // to bit-fields, but gcc appears not to follow that.
-  if (D->hasAttr<AlignMac68kAttr>()) {
+  if (Context.getLangOpts().Mac68kAlign || D->hasAttr<AlignMac68kAttr>()) {
     IsMac68kAlign = true;
     MaxFieldAlignment = CharUnits::fromQuantity(2);
     Alignment = CharUnits::fromQuantity(2);
@@ -1692,15 +1703,17 @@ void RecordLayoutBuilder::LayoutField(const FieldDecl *D) {
   CharUnits FieldSize;
   CharUnits FieldAlign;
 
-  if (D->getType()->isIncompleteArrayType()) {
+  QualType FieldType = D->getType();
+
+  if (FieldType->isIncompleteArrayType()) {
     // This is a flexible array member; we can't directly
     // query getTypeInfo about these, so we figure it out here.
     // Flexible array members don't have any size, but they
     // have to be aligned appropriately for their element type.
     FieldSize = CharUnits::Zero();
-    const ArrayType* ATy = Context.getAsArrayType(D->getType());
+    const ArrayType* ATy = Context.getAsArrayType(FieldType);
     FieldAlign = Context.getTypeAlignInChars(ATy->getElementType());
-  } else if (const ReferenceType *RT = D->getType()->getAs<ReferenceType>()) {
+  } else if (const ReferenceType *RT = FieldType->getAs<ReferenceType>()) {
     unsigned AS = RT->getPointeeType().getAddressSpace();
     FieldSize = 
       Context.toCharUnitsFromBits(Context.getTargetInfo().getPointerWidth(AS));
@@ -1708,7 +1721,7 @@ void RecordLayoutBuilder::LayoutField(const FieldDecl *D) {
       Context.toCharUnitsFromBits(Context.getTargetInfo().getPointerAlign(AS));
   } else {
     std::pair<CharUnits, CharUnits> FieldInfo = 
-      Context.getTypeInfoInChars(D->getType());
+      Context.getTypeInfoInChars(FieldType);
     FieldSize = FieldInfo.first;
     FieldAlign = FieldInfo.second;
 
@@ -1718,12 +1731,25 @@ void RecordLayoutBuilder::LayoutField(const FieldDecl *D) {
       
       // Resolve all typedefs down to their base type and round up the field
       // alignment if necessary.
-      QualType T = Context.getBaseElementType(D->getType());
+      QualType T = Context.getBaseElementType(FieldType);
       if (const BuiltinType *BTy = T->getAs<BuiltinType>()) {
         CharUnits TypeSize = Context.getTypeSizeInChars(BTy);
         if (TypeSize > FieldAlign)
           FieldAlign = TypeSize;
       }
+    }
+  }
+
+  // The 'interesting' alignment rules for OSX/AIX PowerPC here..
+  if (IsOSXPowerAlign && !IsUnion
+      && getSizeInBits() > 0 && !FieldSize.isZero()) {
+    // Vectors and long doubles force aggregates to 16byte alignment.
+    // This happens always and regardless of the position that the vector
+    // or long double occupies in the aggregate.  Other types, with native
+    // alignment > 4 (i.e. double and long long), have their alignment reduced
+    // to 4 unless they happen to be the first item in the aggregate.
+    if (FieldAlign < CharUnits::fromQuantity(16)) {
+      FieldAlign = std::min(FieldAlign, CharUnits::fromQuantity(4));
     }
   }
 
