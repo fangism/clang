@@ -222,7 +222,10 @@ def note_function_suggestion : Note<"did you mean %0?">;
 def err_ellipsis_first_arg : Error<
   "ISO C requires a named argument before '...'">;
 def err_declarator_need_ident : Error<"declarator requires an identifier">;
-def err_bad_language : Error<"unknown linkage language">;
+def err_language_linkage_spec_unknown : Error<"unknown linkage language">;
+def err_language_linkage_spec_not_ascii : Error<
+  "string literal in language linkage specifier cannot have an "
+  "encoding-prefix">;
 def warn_use_out_of_scope_declaration : Warning<
   "use of out-of-scope declaration of %0">;
 def err_inline_non_function : Error<
@@ -2136,7 +2139,7 @@ def warn_thread_attribute_ignored : Warning<
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_argument_not_lockable : Warning<
   "%0 attribute requires arguments whose type is annotated "
-  "with 'lockable' attribute; type here is %1">,
+  "with 'capability' attribute; type here is %1">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_argument_not_class : Warning<
   "%0 attribute requires arguments that are class type or point to"
@@ -2144,7 +2147,7 @@ def warn_thread_attribute_argument_not_class : Warning<
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;  
 def warn_thread_attribute_decl_not_lockable : Warning<
   "%0 attribute can only be applied in a context annotated "
-  "with 'lockable' attribute">,
+  "with 'capability(\"mutex\")' attribute">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_decl_not_pointer : Warning<
   "%0 only applies to pointer types; type here is %1">,
@@ -2496,7 +2499,10 @@ def err_objc_bridged_related_invalid_class_name : Error<
 def err_objc_bridged_related_known_method : Error<
  "%0 must be explicitly converted to %1; use %select{%objcclass2|%objcinstance2}3 "
  "method for this conversion">;
-  
+
+def err_objc_attr_protocol_requires_definition : Error<
+  "attribute %0 can only be applied to @protocol definitions, not forward declarations">;
+
 // Function Parameter Semantic Analysis.
 def err_param_with_void_type : Error<"argument may not have 'void' type">;
 def err_void_only_param : Error<
@@ -2507,8 +2513,6 @@ def err_ident_list_in_fn_declaration : Error<
   "a parameter list without types is only allowed in a function definition">;
 def ext_param_not_declared : Extension<
   "parameter %0 was not declared, defaulting to type 'int'">;
-def err_param_typedef_of_void : Error<
-  "empty parameter list defined with a %select{typedef|type alias}0 of 'void' not allowed%select{ in C++|}0">;
 def err_param_default_argument : Error<
   "C does not support default arguments">;
 def err_param_default_argument_redefinition : Error<
@@ -3784,6 +3788,9 @@ def warn_typecheck_negative_array_new_size : Warning<"array size is negative">,
   InGroup<BadArrayNewLength>;
 def warn_typecheck_function_qualifiers : Warning<
   "qualifier on function type %0 has unspecified behavior">;
+def warn_typecheck_reference_qualifiers : Warning<
+  "'%0' qualifier on reference type %1 has no effect">,
+  InGroup<IgnoredQualifiers>;
 def err_typecheck_invalid_restrict_not_pointer : Error<
   "restrict requires a pointer or reference (%0 is invalid)">;
 def err_typecheck_invalid_restrict_not_pointer_noarg : Error<
@@ -5840,6 +5847,12 @@ def err_invalid_conversion_between_vector_and_integer : Error<
   "invalid conversion between vector type %0 and integer type %1 "
   "of different size">;
 
+def err_opencl_function_pointer_variable : Error<
+  "pointers to functions are not allowed">;
+
+def err_opencl_taking_function_address : Error<
+  "taking address of function is not allowed">;
+
 def err_invalid_conversion_between_vector_and_scalar : Error<
   "invalid conversion between vector type %0 and scalar type %1">;
 
@@ -6213,6 +6226,8 @@ def warn_format_string_is_wide_literal : Warning<
   "format string should not be a wide string">, InGroup<Format>;
 def warn_printf_format_string_contains_null_char : Warning<
   "format string contains '\\0' within the string body">, InGroup<Format>;
+def warn_printf_format_string_not_null_terminated : Warning<
+  "format string is not null-terminated">, InGroup<Format>;
 def warn_printf_asterisk_missing_arg : Warning<
   "'%select{*|.*}0' specified field %select{width|precision}0 is missing a matching 'int' argument">,
   InGroup<Format>;

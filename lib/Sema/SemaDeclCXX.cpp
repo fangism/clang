@@ -4479,15 +4479,6 @@ void Sema::CheckCompletedCXXClass(CXXRecordDecl *Record) {
         }
       }
     }
-
-    if (Record->hasUserDeclaredDestructor()) {
-      // The Microsoft ABI requires that we perform the destructor body
-      // checks (i.e. operator delete() lookup) in any translataion unit, as
-      // any translation unit may need to emit a deleting destructor.
-      if (Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-          !Record->getDestructor()->isDeleted())
-        CheckDestructor(Record->getDestructor());
-    }
   }
 
   // C++11 [dcl.constexpr]p8: A constexpr specifier for a non-static member
@@ -11071,29 +11062,36 @@ FinishedParams:
 
 /// ActOnStartLinkageSpecification - Parsed the beginning of a C++
 /// linkage specification, including the language and (if present)
-/// the '{'. ExternLoc is the location of the 'extern', LangLoc is
-/// the location of the language string literal, which is provided
-/// by Lang/StrSize. LBraceLoc, if valid, provides the location of
+/// the '{'. ExternLoc is the location of the 'extern', Lang is the
+/// language string literal. LBraceLoc, if valid, provides the location of
 /// the '{' brace. Otherwise, this linkage specification does not
 /// have any braces.
 Decl *Sema::ActOnStartLinkageSpecification(Scope *S, SourceLocation ExternLoc,
-                                           SourceLocation LangLoc,
-                                           StringRef Lang,
+                                           Expr *LangStr,
                                            SourceLocation LBraceLoc) {
+  StringLiteral *Lit = cast<StringLiteral>(LangStr);
+  if (!Lit->isAscii()) {
+    Diag(LangStr->getExprLoc(), diag::err_language_linkage_spec_not_ascii)
+      << LangStr->getSourceRange();
+    return 0;
+  }
+
+  StringRef Lang = Lit->getString();
   LinkageSpecDecl::LanguageIDs Language;
-  if (Lang == "\"C\"")
+  if (Lang == "C")
     Language = LinkageSpecDecl::lang_c;
-  else if (Lang == "\"C++\"")
+  else if (Lang == "C++")
     Language = LinkageSpecDecl::lang_cxx;
   else {
-    Diag(LangLoc, diag::err_bad_language);
+    Diag(LangStr->getExprLoc(), diag::err_language_linkage_spec_unknown)
+      << LangStr->getSourceRange();
     return 0;
   }
 
   // FIXME: Add all the various semantics of linkage specifications
 
-  LinkageSpecDecl *D = LinkageSpecDecl::Create(Context, CurContext,
-                                               ExternLoc, LangLoc, Language,
+  LinkageSpecDecl *D = LinkageSpecDecl::Create(Context, CurContext, ExternLoc,
+                                               LangStr->getExprLoc(), Language,
                                                LBraceLoc.isValid());
   CurContext->addDecl(D);
   PushDeclContext(S, D);
@@ -11107,13 +11105,11 @@ Decl *Sema::ActOnStartLinkageSpecification(Scope *S, SourceLocation ExternLoc,
 Decl *Sema::ActOnFinishLinkageSpecification(Scope *S,
                                             Decl *LinkageSpec,
                                             SourceLocation RBraceLoc) {
-  if (LinkageSpec) {
-    if (RBraceLoc.isValid()) {
-      LinkageSpecDecl* LSDecl = cast<LinkageSpecDecl>(LinkageSpec);
-      LSDecl->setRBraceLoc(RBraceLoc);
-    }
-    PopDeclContext();
+  if (RBraceLoc.isValid()) {
+    LinkageSpecDecl* LSDecl = cast<LinkageSpecDecl>(LinkageSpec);
+    LSDecl->setRBraceLoc(RBraceLoc);
   }
+  PopDeclContext();
   return LinkageSpec;
 }
 
@@ -12340,6 +12336,18 @@ void Sema::MarkVTableUsed(SourceLocation Loc, CXXRecordDecl *Class,
       // Otherwise, we can early exit.
       return;
     }
+  } else {
+    // The Microsoft ABI requires that we perform the destructor body
+    // checks (i.e. operator delete() lookup) when the vtable is marked used, as
+    // the deleting destructor is emitted with the vtable, not with the
+    // destructor definition as in the Itanium ABI.
+    // If it has a definition, we do the check at that point instead.
+    if (Context.getTargetInfo().getCXXABI().isMicrosoft() &&
+        Class->hasUserDeclaredDestructor() &&
+        !Class->getDestructor()->isDefined() &&
+        !Class->getDestructor()->isDeleted()) {
+      CheckDestructor(Class->getDestructor());
+    }
   }
 
   // Local classes need to have their virtual members marked
@@ -12744,12 +12752,16 @@ bool Sema::checkThisInStaticMemberFunctionAttributes(CXXMethodDecl *Method) {
       Arg = LR->getArg();
     else if (LocksExcludedAttr *LE = dyn_cast<LocksExcludedAttr>(*A))
       Args = ArrayRef<Expr *>(LE->args_begin(), LE->args_size());
-    else if (ExclusiveLocksRequiredAttr *ELR 
-               = dyn_cast<ExclusiveLocksRequiredAttr>(*A))
-      Args = ArrayRef<Expr *>(ELR->args_begin(), ELR->args_size());
-    else if (SharedLocksRequiredAttr *SLR 
-               = dyn_cast<SharedLocksRequiredAttr>(*A))
-      Args = ArrayRef<Expr *>(SLR->args_begin(), SLR->args_size());
+    else if (RequiresCapabilityAttr *RC
+               = dyn_cast<RequiresCapabilityAttr>(*A))
+      Args = ArrayRef<Expr *>(RC->args_begin(), RC->args_size());
+    else if (AcquireCapabilityAttr *AC = dyn_cast<AcquireCapabilityAttr>(*A))
+      Args = ArrayRef<Expr *>(AC->args_begin(), AC->args_size());
+    else if (TryAcquireCapabilityAttr *AC
+             = dyn_cast<TryAcquireCapabilityAttr>(*A))
+             Args = ArrayRef<Expr *>(AC->args_begin(), AC->args_size());
+    else if (ReleaseCapabilityAttr *RC = dyn_cast<ReleaseCapabilityAttr>(*A))
+      Args = ArrayRef<Expr *>(RC->args_begin(), RC->args_size());
 
     if (Arg && !Finder.TraverseStmt(Arg))
       return true;

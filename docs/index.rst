@@ -9,7 +9,6 @@
    :maxdepth: 1
 
    ReleaseNotes
-   AttributeReference
 
 Using Clang as a Compiler
 =========================
@@ -19,7 +18,9 @@ Using Clang as a Compiler
 
    UsersManual
    LanguageExtensions
+   AttributeReference
    CrossCompilation
+   ThreadSafetyAnalysis
    AddressSanitizer
    ThreadSanitizer
    MemorySanitizer
