@@ -7470,6 +7470,10 @@ public:
   bool DiagnoseConditionalForNull(Expr *LHSExpr, Expr *RHSExpr,
                                   SourceLocation QuestionLoc);
 
+  void DiagnoseAlwaysNonNullPointer(Expr *E,
+                                    Expr::NullPointerConstantKind NullType,
+                                    bool IsEqual, SourceRange Range);
+
   /// type checking for vector binary operators.
   QualType CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
                                SourceLocation Loc, bool IsCompAssign);
@@ -7940,6 +7944,10 @@ private:
                             VariadicCallType CallType,
                             SourceLocation Loc, SourceRange range,
                             llvm::SmallBitVector &CheckedVarArgs);
+
+  void CheckAbsoluteValueFunction(const CallExpr *Call,
+                                  const FunctionDecl *FDecl,
+                                  IdentifierInfo *FnInfo);
 
   void CheckMemaccessArguments(const CallExpr *Call,
                                unsigned BId,

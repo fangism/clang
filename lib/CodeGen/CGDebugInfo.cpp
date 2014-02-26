@@ -52,9 +52,9 @@ CGDebugInfo::~CGDebugInfo() {
          "Region stack mismatch, stack not empty!");
 }
 
-
-SaveAndRestoreLocation::SaveAndRestoreLocation(CodeGenFunction &CGF, CGBuilderTy &B)
-  : DI(CGF.getDebugInfo()), Builder(B) {
+SaveAndRestoreLocation::SaveAndRestoreLocation(CodeGenFunction &CGF,
+                                               CGBuilderTy &B)
+    : DI(CGF.getDebugInfo()), Builder(B) {
   if (DI) {
     SavedLoc = DI->getLocation();
     DI->CurLoc = SourceLocation();
@@ -759,7 +759,7 @@ llvm::DIType CGDebugInfo::CreateType(const FunctionType *Ty,
   EltTys.push_back(getOrCreateType(Ty->getReturnType(), Unit));
 
   // Set up remainder of arguments if there is a prototype.
-  // FIXME: IF NOT, HOW IS THIS REPRESENTED?  llvm-gcc doesn't represent '...'!
+  // otherwise emit it as a variadic function.
   if (isa<FunctionNoProtoType>(Ty))
     EltTys.push_back(DBuilder.createUnspecifiedParameter());
   else if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(Ty)) {
@@ -1475,8 +1475,8 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty) {
       (DebugKind <= CodeGenOptions::LimitedDebugInfo &&
        // Emit only a forward declaration unless the type is required.
        ((!RD->isCompleteDefinitionRequired() && CGM.getLangOpts().CPlusPlus) ||
-        // If the class is dynamic, only emit a declaration. A definition will be
-        // emitted whenever the vtable is emitted.
+        // If the class is dynamic, only emit a declaration. A definition will
+        // be emitted whenever the vtable is emitted.
         (CXXDecl && CXXDecl->hasDefinition() && CXXDecl->isDynamicClass())))) {
     if (!T)
       T = getOrCreateRecordFwdDecl(
@@ -2440,7 +2440,8 @@ llvm::DICompositeType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
     return DBuilder.createSubroutineType(F, EltTypeArray);
   }
 
-  // Variadic function.
+  // Handle variadic function types; they need an additional
+  // unspecified parameter.
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
     if (FD->isVariadic()) {
       SmallVector<llvm::Value *, 16> EltTys;

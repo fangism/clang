@@ -30,6 +30,21 @@ def warn_duplicate_enum_values : Warning<
   "been assigned">, InGroup<DiagGroup<"duplicate-enum">>, DefaultIgnore;
 def note_duplicate_element : Note<"element %0 also has value %1">;
 
+// Absolute value functions
+def warn_unsigned_abs : Warning<
+  "taking the absolute value of unsigned type %0 has no effect">,
+  InGroup<AbsoluteValue>;
+def note_remove_abs : Note<
+  "remove the call to %0 since unsigned values cannot be negative">;
+def warn_abs_too_small : Warning<
+  "absolute value function %0 given an argument of type %1 but has parameter "
+  "of type %2 which may cause truncation of value">, InGroup<AbsoluteValue>;
+def warn_wrong_absolute_value_type : Warning<
+  "using %select{integer|floating point|complex}1 absolute value function %0 "
+  "when argument is of %select{integer|floating point|complex}2 type">,
+  InGroup<AbsoluteValue>;
+def note_replace_abs_function : Note<"use function '%0' instead">;
+
 def warn_infinite_recursive_function : Warning<
   "all paths through this function will call itself">,
   InGroup<InfiniteRecursion>, DefaultIgnore;
@@ -2040,6 +2055,8 @@ def err_attribute_selectany_non_extern_data : Error<
 def warn_attribute_invalid_on_definition : Warning<
   "'%0' attribute cannot be specified on a definition">,
   InGroup<IgnoredAttributes>;
+def err_attribute_dllimport_data_definition : Error<
+  "definition of dllimport data">;
 def err_attribute_weakref_not_static : Error<
   "weakref declaration must have internal linkage">;
 def err_attribute_weakref_not_global_context : Error<
@@ -2307,12 +2324,19 @@ def warn_impcast_null_pointer_to_integer : Warning<
 def warn_impcast_floating_point_to_bool : Warning<
     "implicit conversion turns floating-point number into bool: %0 to %1">,
     InGroup<ImplicitConversionFloatingPointToBool>;
-def warn_impcast_function_to_bool : Warning<
-    "address of function %q0 will always evaluate to 'true'">,
+
+def warn_impcast_pointer_to_bool : Warning<
+    "address of%select{| function| array}0 '%1' will always evaluate to "
+    "'true'">,
     InGroup<BoolConversion>;
-def note_function_to_bool_silence : Note<
+def warn_null_pointer_compare : Warning<
+    "comparison of %select{address of|function|array}0 '%1' %select{not |}2"
+    "equal to a null pointer is always %select{true|false}2">,
+    InGroup<TautologicalPointerCompare>;
+
+def note_function_warning_silence : Note<
     "prefix with the address-of operator to silence this warning">;
-def note_function_to_bool_call : Note<
+def note_function_to_function_call : Note<
     "suffix with parentheses to turn this into a function call">;
 def warn_impcast_objective_c_literal_to_bool : Warning<
     "implicit boolean conversion of Objective-C object literal always "
