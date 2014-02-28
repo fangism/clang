@@ -38,7 +38,7 @@ CHECK-NEXT: FieldOffsets: [0, 128]
 CHECK-LABEL: struct _Dc definition
 CHECK-NEXT: D 'long double'
 CHECK-NEXT: c 'char'
-CHECK: LLVMType:%struct._Dc = type { ppc_fp128, i8 }
+CHECK: LLVMType:%struct._Dc = type { ppc_fp128, i8, [15 x i8] }
 **/
 
 struct _cScD {
