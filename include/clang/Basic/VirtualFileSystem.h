@@ -29,7 +29,6 @@ namespace vfs {
 /// \brief The result of a \p status operation.
 class Status {
   std::string Name;
-  std::string ExternalName;
   llvm::sys::fs::UniqueID UID;
   llvm::sys::TimeValue MTime;
   uint32_t User;
@@ -46,16 +45,9 @@ public:
          uint64_t Size, llvm::sys::fs::file_type Type,
          llvm::sys::fs::perms Perms);
 
-  /// \brief Returns the name this status was looked up by.
+  /// \brief Returns the name that should be used for this file or directory.
   StringRef getName() const { return Name; }
-
-  /// \brief Returns the name to use outside the compiler.
-  ///
-  /// For example, in diagnostics or debug info we should use this name.
-  StringRef getExternalName() const { return ExternalName; }
-
   void setName(StringRef N) { Name = N; }
-  void setExternalName(StringRef N) { ExternalName = N; }
 
   /// @name Status interface from llvm::sys::fs
   /// @{
@@ -98,6 +90,8 @@ public:
                                      bool RequiresNullTerminator = true) = 0;
   /// \brief Closes the file.
   virtual llvm::error_code close() = 0;
+  /// \brief Sets the name to use for this file.
+  virtual void setName(StringRef Name) = 0;
 };
 
 /// \brief The virtual file system interface.

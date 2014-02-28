@@ -7111,6 +7111,12 @@ public:
                                           Stmt *AStmt,
                                           SourceLocation StartLoc,
                                           SourceLocation EndLoc);
+  /// \brief Called on well-formed '\#pragma omp simd' after parsing
+  /// of the associated statement.
+  StmtResult ActOnOpenMPSimdDirective(ArrayRef<OMPClause *> Clauses,
+                                      Stmt *AStmt,
+                                      SourceLocation StartLoc,
+                                      SourceLocation EndLoc);
 
   OMPClause *ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind,
                                          Expr *Expr,
@@ -7242,6 +7248,9 @@ public:
   /// Check to see if the given expression is a valid argument to a variadic
   /// function, issuing a diagnostic if not.
   void checkVariadicArgument(const Expr *E, VariadicCallType CT);
+
+  /// Check to see if a given expression could have '.c_str()' called on it.
+  bool hasCStrMethod(const Expr *E);
 
   /// GatherArgumentsForCall - Collector argument expressions for various
   /// form of call prototypes.

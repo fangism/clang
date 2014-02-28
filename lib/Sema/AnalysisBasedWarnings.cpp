@@ -901,6 +901,7 @@ namespace {
       while (!BlockQueue.empty()) {
         const CFGBlock *P = BlockQueue.front();
         BlockQueue.pop_front();
+        if (!P) continue;
 
         const Stmt *Term = P->getTerminator();
         if (Term && isa<SwitchStmt>(Term))

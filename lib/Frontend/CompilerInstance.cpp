@@ -104,6 +104,13 @@ void CompilerInstance::setASTConsumer(ASTConsumer *Value) {
 void CompilerInstance::setCodeCompletionConsumer(CodeCompleteConsumer *Value) {
   CompletionConsumer.reset(Value);
 }
+ 
+IntrusiveRefCntPtr<ASTReader> CompilerInstance::getModuleManager() const {
+  return ModuleManager;
+}
+void CompilerInstance::setModuleManager(IntrusiveRefCntPtr<ASTReader> Reader) {
+  ModuleManager = Reader;
+}
 
 // Diagnostics
 static void SetUpDiagnosticLog(DiagnosticOptions *DiagOpts,
@@ -301,16 +308,16 @@ void CompilerInstance::createPCHExternalASTSource(StringRef Path,
                                                   bool DisablePCHValidation,
                                                 bool AllowPCHWithCompilerErrors,
                                                  void *DeserializationListener){
-  OwningPtr<ExternalASTSource> Source;
+  IntrusiveRefCntPtr<ExternalASTSource> Source;
   bool Preamble = getPreprocessorOpts().PrecompiledPreambleBytes.first != 0;
-  Source.reset(createPCHExternalASTSource(Path, getHeaderSearchOpts().Sysroot,
+  Source = createPCHExternalASTSource(Path, getHeaderSearchOpts().Sysroot,
                                           DisablePCHValidation,
                                           AllowPCHWithCompilerErrors,
                                           getPreprocessor(), getASTContext(),
                                           DeserializationListener,
                                           Preamble,
-                                       getFrontendOpts().UseGlobalModuleIndex));
-  ModuleManager = static_cast<ASTReader*>(Source.get());
+                                       getFrontendOpts().UseGlobalModuleIndex);
+  ModuleManager = static_cast<ASTReader*>(Source.getPtr());
   getASTContext().setExternalSource(Source);
 }
 
@@ -879,7 +886,7 @@ static void compileModule(CompilerInstance &ImportingInstance,
 
   // Note that this module is part of the module build stack, so that we
   // can detect cycles in the module graph.
-  Instance.createFileManager(); // FIXME: Adopt file manager from importer?
+  Instance.setFileManager(&ImportingInstance.getFileManager());
   Instance.createSourceManager(Instance.getFileManager());
   SourceManager &SourceMgr = Instance.getSourceManager();
   SourceMgr.setModuleBuildStack(
@@ -1176,9 +1183,7 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
         getASTContext().setASTMutationListener(
           getASTConsumer().GetASTMutationListener());
       }
-      OwningPtr<ExternalASTSource> Source;
-      Source.reset(ModuleManager);
-      getASTContext().setExternalSource(Source);
+      getASTContext().setExternalSource(ModuleManager);
       if (hasSema())
         ModuleManager->InitializeSema(getSema());
       if (hasASTConsumer())

@@ -1502,6 +1502,10 @@ void RecordLayoutBuilder::LayoutBitField(const FieldDecl *D) {
   // __attribute__((packed))) always uses the next available bit
   // offset.
 
+  // In an ms_struct struct, the alignment of a fundamental type is
+  // always equal to its size.  This is necessary in order to mimic
+  // the i386 alignment rules on targets which might not fully align
+  // all types (e.g. Darwin PPC32, where alignof(long long) == 4).
 
   // First, some simple bookkeeping to perform for ms_struct structs.
   if (IsMsStruct) {
@@ -3066,6 +3070,16 @@ static void PrintIndentNoOffset(raw_ostream &OS, unsigned IndentLevel) {
   OS.indent(IndentLevel * 2);
 }
 
+namespace {
+struct BaseOffsetComparator {
+  const ASTRecordLayout &RL;
+  BaseOffsetComparator(const ASTRecordLayout &RL) : RL(RL) {}
+  bool operator()(const CXXRecordDecl *L, const CXXRecordDecl *R) const {
+    return RL.getBaseClassOffset(L) < RL.getBaseClassOffset(R);
+  }
+};
+}
+
 static void DumpCXXRecordLayout(raw_ostream &OS,
                                 const CXXRecordDecl *RD, const ASTContext &C,
                                 CharUnits Offset,
@@ -3098,19 +3112,27 @@ static void DumpCXXRecordLayout(raw_ostream &OS,
     OS << '(' << *RD << " vftable pointer)\n";
   }
 
-  // Dump (non-virtual) bases
+  // Collect nvbases.
+  SmallVector<const CXXRecordDecl *, 4> Bases;
   for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
-         E = RD->bases_end(); I != E; ++I) {
+                                                E = RD->bases_end();
+       I != E; ++I) {
     assert(!I->getType()->isDependentType() &&
            "Cannot layout class with dependent bases.");
-    if (I->isVirtual())
-      continue;
+    if (!I->isVirtual())
+      Bases.push_back(I->getType()->getAsCXXRecordDecl());
+  }
 
-    const CXXRecordDecl *Base =
-      cast<CXXRecordDecl>(I->getType()->getAs<RecordType>()->getDecl());
+  // Sort nvbases by offset.
+  BaseOffsetComparator Cmp(Layout);
+  std::stable_sort(Bases.begin(), Bases.end(), Cmp);
 
+  // Dump (non-virtual) bases
+  for (SmallVectorImpl<const CXXRecordDecl *>::iterator I = Bases.begin(),
+                                                        E = Bases.end();
+       I != E; ++I) {
+    const CXXRecordDecl *Base = *I;
     CharUnits BaseOffset = Offset + Layout.getBaseClassOffset(Base);
-
     DumpCXXRecordLayout(OS, Base, C, BaseOffset, IndentLevel,
                         Base == PrimaryBase ? "(primary base)" : "(base)",
                         /*IncludeVirtualBases=*/false);

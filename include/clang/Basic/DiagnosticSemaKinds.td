@@ -500,8 +500,10 @@ def warn_pragma_pack_pop_identifer_and_alignment : Warning<
   "specifying both a name and alignment to 'pop' is undefined">;
 def warn_pragma_pop_failed : Warning<"#pragma %0(pop, ...) failed: %1">,
   InGroup<IgnoredPragmas>;
-def warn_pragma_ms_struct_failed : Warning<"#pramga ms_struct can not be used with dynamic classes or structures">,
-  InGroup<IgnoredPragmas>;
+def warn_cxx_ms_struct :
+  Warning<"ms_struct may not produce MSVC-compatible layouts for classes "
+          "with base classes or virtual functions">,
+  DefaultError, InGroup<IncompatibleMSStruct>;
 
 def warn_pragma_unused_undeclared_var : Warning<
   "undeclared variable %0 used as an argument for '#pragma unused'">,
@@ -5723,6 +5725,11 @@ def warn_cxx98_compat_pass_non_pod_arg_to_vararg : Warning<
   "passing object of trivial but non-POD type %0 through variadic"
   " %select{function|block|method|constructor}1 is incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
+def warn_pass_class_arg_to_vararg : Warning<
+  "passing object of class type %0 through variadic "
+  "%select{function|block|method|constructor}1"
+  "%select{|; did you mean to call '%3'?}2">,
+  InGroup<ClassVarargs>, DefaultIgnore;
 def err_cannot_pass_to_vararg : Error<
   "cannot pass %select{expression of type %1|initializer list}0 to variadic "
   "%select{function|block|method|constructor}2">;
@@ -6835,24 +6842,26 @@ def err_omp_private_incomplete_type : Error<
   "a private variable with incomplete type %0">;
 def err_omp_firstprivate_incomplete_type : Error<
   "a firstprivate variable with incomplete type %0">;
-def err_omp_unexpected_clause_value : Error <
+def err_omp_unexpected_clause_value : Error<
   "expected %0 in OpenMP clause '%1'">;
-def err_omp_expected_var_name : Error <
+def err_omp_expected_var_name : Error<
   "expected variable name">;
-def err_omp_required_method : Error <
+def err_omp_required_method : Error<
   "%0 variable must have an accessible, unambiguous %select{default constructor|copy constructor|copy assignment operator|'%2'|destructor}1">;
 def err_omp_clause_ref_type_arg : Error<
   "arguments of OpenMP clause '%0' cannot be of reference type %1">;
 def err_omp_threadprivate_incomplete_type : Error<
   "threadprivate variable with incomplete type %0">;
-def err_omp_no_dsa_for_variable : Error <
+def err_omp_no_dsa_for_variable : Error<
   "variable %0 must have explicitly specified data sharing attributes">;
 def err_omp_wrong_dsa : Error<
   "%0 variable cannot be %1">;
-def note_omp_explicit_dsa : Note <
+def note_omp_explicit_dsa : Note<
   "defined as %0">;
-def note_omp_predetermined_dsa : Note <
+def note_omp_predetermined_dsa : Note<
   "predetermined as %0">;
+def err_omp_not_for : Error<
+  "statement after '#pragma omp %0' must be a for loop">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {

@@ -175,6 +175,7 @@ def InfiniteRecursion : DiagGroup<"infinite-recursion">;
 def GNUImaginaryConstant : DiagGroup<"gnu-imaginary-constant">;
 def IgnoredQualifiers : DiagGroup<"ignored-qualifiers">;
 def : DiagGroup<"import">;
+def IncompatibleMSStruct : DiagGroup<"incompatible-ms-struct">;
 def IncompatiblePointerTypesDiscardsQualifiers 
   : DiagGroup<"incompatible-pointer-types-discards-qualifiers">;
 def IncompatiblePointerTypes
@@ -218,6 +219,7 @@ def NullDereference : DiagGroup<"null-dereference">;
 def InitializerOverrides : DiagGroup<"initializer-overrides">;
 def NonNull : DiagGroup<"nonnull">;
 def NonPODVarargs : DiagGroup<"non-pod-varargs">;
+def ClassVarargs : DiagGroup<"class-varargs", [NonPODVarargs]>;
 def : DiagGroup<"nonportable-cfstrings">;
 def NonVirtualDtor : DiagGroup<"non-virtual-dtor">;
 def OveralignedType : DiagGroup<"over-aligned">;
@@ -635,3 +637,4 @@ def SourceUsesOpenMP : DiagGroup<"source-uses-openmp">;
 def BackendInlineAsm : DiagGroup<"inline-asm">;
 def BackendFrameLargerThan : DiagGroup<"frame-larger-than">;
 def BackendPlugin : DiagGroup<"backend-plugin">;
+def RemarkBackendPlugin : DiagGroup<"remark-backend-plugin">;
