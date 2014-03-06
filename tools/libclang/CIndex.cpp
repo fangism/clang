@@ -314,7 +314,7 @@ bool CursorVisitor::visitDeclsFromFileRegion(FileID File,
     if (Outer.isInvalid())
       return false;
 
-    llvm::tie(File, Offset) = SM.getDecomposedExpansionLoc(Outer);
+    std::tie(File, Offset) = SM.getDecomposedExpansionLoc(Outer);
     Length = 0;
     Unit->findFileRegionDecls(File, Offset, Length, Decls);
   }
@@ -951,19 +951,6 @@ static void addRangedDeclsInContainer(DeclIt *DI_current, DeclIt DE_current,
   }
 }
 
-namespace {
-  struct ContainerDeclsSort {
-    SourceManager &SM;
-    ContainerDeclsSort(SourceManager &sm) : SM(sm) {}
-    bool operator()(Decl *A, Decl *B) {
-      SourceLocation L_A = A->getLocStart();
-      SourceLocation L_B = B->getLocStart();
-      assert(L_A.isValid() && L_B.isValid());
-      return SM.isBeforeInTranslationUnit(L_A, L_B);
-    }
-  };
-}
-
 bool CursorVisitor::VisitObjCContainerDecl(ObjCContainerDecl *D) {
   // FIXME: Eventually convert back to just 'VisitDeclContext()'.  Essentially
   // an @implementation can lexically contain Decls that are not properly
@@ -1006,7 +993,12 @@ bool CursorVisitor::VisitObjCContainerDecl(ObjCContainerDecl *D) {
 
   // Now sort the Decls so that they appear in lexical order.
   std::sort(DeclsInContainer.begin(), DeclsInContainer.end(),
-            ContainerDeclsSort(SM));
+            [&SM](Decl *A, Decl *B) {
+    SourceLocation L_A = A->getLocStart();
+    SourceLocation L_B = B->getLocStart();
+    assert(L_A.isValid() && L_B.isValid());
+    return SM.isBeforeInTranslationUnit(L_A, L_B);
+  });
 
   // Now visit the decls.
   for (SmallVectorImpl<Decl*>::iterator I = DeclsInContainer.begin(),
@@ -1942,6 +1934,10 @@ public:
 
 void OMPClauseEnqueue::VisitOMPIfClause(const OMPIfClause *C) {
   Visitor->AddStmt(C->getCondition());
+}
+
+void OMPClauseEnqueue::VisitOMPNumThreadsClause(const OMPNumThreadsClause *C) {
+  Visitor->AddStmt(C->getNumThreads());
 }
 
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
@@ -3406,6 +3402,22 @@ CXString clang_getCursorSpelling(CXCursor C) {
   }
 
   if (clang_isExpression(C.kind)) {
+    const Expr *E = getCursorExpr(C);
+
+    if (C.kind == CXCursor_ObjCStringLiteral ||
+        C.kind == CXCursor_StringLiteral) {
+      const StringLiteral *SLit;
+      if (const ObjCStringLiteral *OSL = dyn_cast<ObjCStringLiteral>(E)) {
+        SLit = OSL->getString();
+      } else {
+        SLit = cast<StringLiteral>(E);
+      }
+      SmallString<256> Buf;
+      llvm::raw_svector_ostream OS(Buf);
+      SLit->outputString(OS);
+      return cxstring::createDup(OS.str());
+    }
+
     const Decl *D = getDeclFromExpr(getCursorExpr(C));
     if (D)
       return getDeclSpelling(D);

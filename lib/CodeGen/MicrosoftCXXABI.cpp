@@ -898,7 +898,7 @@ llvm::GlobalVariable *MicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
   VFTableIdTy ID(RD, VPtrOffset);
   VFTablesMapTy::iterator I;
   bool Inserted;
-  llvm::tie(I, Inserted) = VFTablesMap.insert(
+  std::tie(I, Inserted) = VFTablesMap.insert(
       std::make_pair(ID, static_cast<llvm::GlobalVariable *>(0)));
   if (!Inserted)
     return I->second;
@@ -995,7 +995,8 @@ MicrosoftCXXABI::enumerateVBTables(const CXXRecordDecl *RD) {
   // easier than caching each vbtable individually.
   llvm::DenseMap<const CXXRecordDecl*, VBTableGlobals>::iterator Entry;
   bool Added;
-  llvm::tie(Entry, Added) = VBTablesMap.insert(std::make_pair(RD, VBTableGlobals()));
+  std::tie(Entry, Added) =
+      VBTablesMap.insert(std::make_pair(RD, VBTableGlobals()));
   VBTableGlobals &VBGlobals = Entry->second;
   if (!Added)
     return VBGlobals;
@@ -1290,7 +1291,7 @@ void MicrosoftCXXABI::EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
   if (D.isExternallyVisible()) {
     // Externally visible variables have to be numbered in Sema to properly
     // handle unreachable VarDecls.
-    BitIndex = getContext().getManglingNumber(&D);
+    BitIndex = getContext().getStaticLocalNumber(&D);
     assert(BitIndex > 0);
     BitIndex--;
   } else {

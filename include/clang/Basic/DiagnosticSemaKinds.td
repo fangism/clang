@@ -2153,6 +2153,9 @@ def note_overridden_method : Note<
   "overridden method is here">;
 
 // Thread Safety Attributes
+def warn_invalid_capability_name : Warning<
+  "invalid capability name '%0'; capability name must be 'mutex' or 'role'">,
+  InGroup<ThreadSafetyAttributes>, DefaultIgnore;
 def warn_thread_attribute_ignored : Warning<
   "ignoring %0 attribute because its argument is invalid">,
   InGroup<ThreadSafetyAttributes>, DefaultIgnore;
@@ -3771,10 +3774,11 @@ def warn_ivars_in_interface : Warning<
 def ext_enum_value_not_int : Extension<
   "ISO C restricts enumerator values to range of 'int' (%0 is too "
   "%select{small|large}1)">;
-def warn_enum_too_large : Warning<
-  "enumeration values exceed range of largest integer">;
-def warn_enumerator_too_large : Warning<
-  "enumerator value %0 is not representable in the largest integer type">;
+def ext_enum_too_large : ExtWarn<
+  "enumeration values exceed range of largest integer">, InGroup<EnumTooLarge>;
+def ext_enumerator_increment_too_large : ExtWarn<
+  "incremented enumerator value %0 is not representable in the "
+  "largest integer type">, InGroup<EnumTooLarge>;
   
 def warn_illegal_constant_array_size : Extension<
   "size of static array must be an integer constant expression">;
@@ -6862,6 +6866,20 @@ def note_omp_predetermined_dsa : Note<
   "predetermined as %0">;
 def err_omp_not_for : Error<
   "statement after '#pragma omp %0' must be a for loop">;
+def err_omp_negative_expression_in_clause : Error<
+  "argument to '%0' clause must be a positive integer value">;
+def err_omp_not_integral : Error<
+  "expression must have integral or unscoped enumeration "
+  "type, not %0">;
+def err_omp_incomplete_type : Error<
+  "expression has incomplete class type %0">;
+def err_omp_explicit_conversion : Error<
+  "expression requires explicit conversion from %0 to %1">;
+def note_omp_conversion_here : Note<
+  "conversion to %select{integral|enumeration}0 type %1 declared here">;
+def err_omp_ambiguous_conversion : Error<
+  "ambiguous conversion from type %0 to an integral or unscoped "
+  "enumeration type">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {
@@ -6903,6 +6921,14 @@ def err_module_private_declaration : Error<
   "declaration of %0 must be imported from module '%1' before it is required">;
 def err_module_private_definition : Error<
   "definition of %0 must be imported from module '%1' before it is required">;
+def err_module_import_in_extern_c : Error<
+  "import of C++ module '%0' appears within extern \"C\" language linkage "
+  "specification">;
+def note_module_import_in_extern_c : Note<
+  "extern \"C\" language linkage specification begins here">;
+def err_module_import_not_at_top_level : Error<
+  "import of module '%0' appears within %1">;
+def note_module_import_not_at_top_level : Note<"%0 begins here">;
 }
 
 let CategoryName = "Documentation Issue" in {

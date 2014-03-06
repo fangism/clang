@@ -18,9 +18,6 @@
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/SourceLocation.h"
-#if !LLVM_HAS_STRONG_ENUMS
-#include "clang/Basic/TokenKinds.h"
-#endif
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
@@ -38,11 +35,9 @@ namespace clang {
   class Preprocessor;
   class DiagnosticErrorTrap;
   class StoredDiagnostic;
-#if LLVM_HAS_STRONG_ENUMS
   namespace tok {
   enum TokenKind : unsigned short;
   }
-#endif
 
 /// \brief Annotates a diagnostic with some code that should be
 /// inserted, removed, or replaced to fix the problem.
@@ -1020,7 +1015,8 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB, int I) {
   return DB;
 }
 
-inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,bool I) {
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                           bool I) {
   DB.AddTaggedVal(I, DiagnosticsEngine::ak_sint);
   return DB;
 }
@@ -1057,10 +1053,17 @@ operator<<(const DiagnosticBuilder &DB, T *DC) {
                   DiagnosticsEngine::ak_declcontext);
   return DB;
 }
-  
+
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
                                            const SourceRange &R) {
   DB.AddSourceRange(CharSourceRange::getTokenRange(R));
+  return DB;
+}
+
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                           ArrayRef<SourceRange> Ranges) {
+  for (const SourceRange &R: Ranges)
+    DB.AddSourceRange(CharSourceRange::getTokenRange(R));
   return DB;
 }
 
@@ -1069,7 +1072,7 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
   DB.AddSourceRange(R);
   return DB;
 }
-  
+
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
                                            const FixItHint &Hint) {
   if (!Hint.isNull())
@@ -1078,7 +1081,7 @@ inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
 }
 
 inline DiagnosticBuilder DiagnosticsEngine::Report(SourceLocation Loc,
-                                            unsigned DiagID){
+                                                   unsigned DiagID) {
   assert(CurDiagID == ~0U && "Multiple diagnostics in flight at once!");
   CurDiagLoc = Loc;
   CurDiagID = DiagID;

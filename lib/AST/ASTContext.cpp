@@ -1617,7 +1617,7 @@ ASTContext::getTypeInfoImpl(const Type *T) const {
   }
   case Type::MemberPointer: {
     const MemberPointerType *MPT = cast<MemberPointerType>(T);
-    llvm::tie(Width, Align) = ABI->getMemberPointerWidthAndAlign(MPT);
+    std::tie(Width, Align) = ABI->getMemberPointerWidthAndAlign(MPT);
     break;
   }
   case Type::Complex: {
@@ -8051,6 +8051,17 @@ unsigned ASTContext::getManglingNumber(const NamedDecl *ND) const {
   llvm::DenseMap<const NamedDecl *, unsigned>::const_iterator I =
     MangleNumbers.find(ND);
   return I != MangleNumbers.end() ? I->second : 1;
+}
+
+void ASTContext::setStaticLocalNumber(const VarDecl *VD, unsigned Number) {
+  if (Number > 1)
+    StaticLocalNumbers[VD] = Number;
+}
+
+unsigned ASTContext::getStaticLocalNumber(const VarDecl *VD) const {
+  llvm::DenseMap<const VarDecl *, unsigned>::const_iterator I =
+      StaticLocalNumbers.find(VD);
+  return I != StaticLocalNumbers.end() ? I->second : 1;
 }
 
 MangleNumberingContext &

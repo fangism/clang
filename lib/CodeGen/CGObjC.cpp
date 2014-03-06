@@ -22,9 +22,9 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
-#include "llvm/Support/CallSite.h"
 using namespace clang;
 using namespace CodeGen;
 
@@ -502,9 +502,14 @@ static llvm::Value *emitARCRetainLoadOfScalar(CodeGenFunction &CGF,
 /// its pointer, name, and types registered in the class struture.
 void CodeGenFunction::GenerateObjCMethod(const ObjCMethodDecl *OMD) {
   StartObjCMethod(OMD, OMD->getClassInterface(), OMD->getLocStart());
+  PGO.assignRegionCounters(OMD, CurFn);
   assert(isa<CompoundStmt>(OMD->getBody()));
+  RegionCounter Cnt = getPGORegionCounter(OMD->getBody());
+  Cnt.beginRegion(Builder);
   EmitCompoundStmtWithoutScope(*cast<CompoundStmt>(OMD->getBody()));
   FinishFunction(OMD->getBodyRBrace());
+  PGO.emitWriteoutFunction();
+  PGO.destroyRegionCounters();
 }
 
 /// emitStructGetterCall - Call the runtime function to load a property
@@ -619,8 +624,8 @@ PropertyImplStrategy::PropertyImplStrategy(CodeGenModule &CGM,
   // Evaluate the ivar's size and alignment.
   ObjCIvarDecl *ivar = propImpl->getPropertyIvarDecl();
   QualType ivarType = ivar->getType();
-  llvm::tie(IvarSize, IvarAlignment)
-    = CGM.getContext().getTypeInfoInChars(ivarType);
+  std::tie(IvarSize, IvarAlignment) =
+      CGM.getContext().getTypeInfoInChars(ivarType);
 
   // If we have a copy property, we always have to use getProperty/setProperty.
   // TODO: we could actually use setProperty and an expression for non-atomics.

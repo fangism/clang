@@ -235,6 +235,9 @@ public:
 
   const Token &getCurToken() const { return Tok; }
   Scope *getCurScope() const { return Actions.getCurScope(); }
+  void incrementMSLocalManglingNumber() const {
+    return Actions.incrementMSLocalManglingNumber();
+  }
 
   Decl  *getObjCDeclContext() const { return Actions.getObjCDeclContext(); }
 
@@ -272,6 +275,10 @@ public:
   /// ParseTopLevelDecl - Parse one top-level declaration. Returns true if
   /// the EOF was encountered.
   bool ParseTopLevelDecl(DeclGroupPtrTy &Result);
+  bool ParseTopLevelDecl() {
+    DeclGroupPtrTy Result;
+    return ParseTopLevelDecl(Result);
+  }
 
   /// ConsumeToken - Consume the current 'peek token' and lex the next one.
   /// This does not work with special tokens: string literals, code completion
@@ -733,14 +740,18 @@ public:
   public:
     // ParseScope - Construct a new object to manage a scope in the
     // parser Self where the new Scope is created with the flags
-    // ScopeFlags, but only when ManageScope is true (the default). If
-    // ManageScope is false, this object does nothing.
-    ParseScope(Parser *Self, unsigned ScopeFlags, bool ManageScope = true)
+    // ScopeFlags, but only when we aren't about to enter a compound statement.
+    ParseScope(Parser *Self, unsigned ScopeFlags, bool EnteredScope = true,
+               bool BeforeCompoundStmt = false)
       : Self(Self) {
-      if (ManageScope)
+      if (EnteredScope && !BeforeCompoundStmt)
         Self->EnterScope(ScopeFlags);
-      else
+      else {
+        if (BeforeCompoundStmt)
+          Self->incrementMSLocalManglingNumber();
+
         this->Self = 0;
+      }
     }
 
     // Exit - Exit the scope associated with this object now, rather
@@ -1793,7 +1804,7 @@ private:
   /// \brief Starting with a scope specifier, identifier, or
   /// template-id that refers to the current class, determine whether
   /// this is a constructor declarator.
-  bool isConstructorDeclarator();
+  bool isConstructorDeclarator(bool Unqualified);
 
   /// \brief Specifies the context in which type-id/expression
   /// disambiguation will occur.

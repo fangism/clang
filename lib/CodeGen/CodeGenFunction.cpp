@@ -589,16 +589,6 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
   if (CGM.getCodeGenOpts().InstrumentForProfiling)
     EmitMCountInstrumentation();
 
-  PGO.assignRegionCounters(GD);
-  if (CGM.getPGOData() && D) {
-    // Turn on InlineHint attribute for hot functions.
-    if (CGM.getPGOData()->isHotFunction(CGM.getMangledName(GD)))
-      Fn->addFnAttr(llvm::Attribute::InlineHint);
-    // Turn on Cold attribute for cold functions.
-    else if (CGM.getPGOData()->isColdFunction(CGM.getMangledName(GD)))
-      Fn->addFnAttr(llvm::Attribute::Cold);
-  }
-
   if (RetTy->isVoidType()) {
     // Void type; nothing to return.
     ReturnValue = 0;
@@ -771,6 +761,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   StartFunction(GD, ResTy, Fn, FnInfo, Args, BodyRange.getBegin());
 
   // Generate the body of the function.
+  PGO.assignRegionCounters(GD.getDecl(), CurFn);
   if (isa<CXXDestructorDecl>(FD))
     EmitDestructorBody(Args);
   else if (isa<CXXConstructorDecl>(FD))
@@ -831,7 +822,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   if (!CurFn->doesNotThrow())
     TryMarkNoThrow(CurFn);
 
-  PGO.emitWriteoutFunction(CurGD);
+  PGO.emitWriteoutFunction();
   PGO.destroyRegionCounters();
 }
 
@@ -1186,7 +1177,7 @@ CodeGenFunction::EmitNullInitialization(llvm::Value *DestPtr, QualType Ty) {
                                           getContext().getAsArrayType(Ty))) {
       QualType eltType;
       llvm::Value *numElts;
-      llvm::tie(numElts, eltType) = getVLASize(vlaType);
+      std::tie(numElts, eltType) = getVLASize(vlaType);
 
       SizeVal = numElts;
       CharUnits eltSize = getContext().getTypeSizeInChars(eltType);

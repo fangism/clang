@@ -3777,7 +3777,7 @@ static unsigned changeAbsFunction(unsigned AbsKind,
   llvm_unreachable("Unable to convert function");
 }
 
-unsigned getAbsoluteValueFunctionKind(const FunctionDecl *FDecl) {
+static unsigned getAbsoluteValueFunctionKind(const FunctionDecl *FDecl) {
   const IdentifierInfo *FnInfo = FDecl->getIdentifier();
   if (!FnInfo)
     return 0;
@@ -3817,6 +3817,7 @@ static void emitReplacement(Sema &S, SourceLocation Loc, SourceRange Range,
   // Look up absolute value function in TU scope.
   DeclarationName DN(&S.Context.Idents.get(AbsName));
   LookupResult R(S, DN, Loc, Sema::LookupAnyName);
+  R.suppressDiagnostics();
   S.LookupName(R, S.TUScope);
 
   // Skip notes if multiple results found in lookup.

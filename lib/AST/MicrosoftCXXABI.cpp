@@ -28,15 +28,15 @@ namespace {
 /// \brief Numbers things which need to correspond across multiple TUs.
 /// Typically these are things like static locals, lambdas, or blocks.
 class MicrosoftNumberingContext : public MangleNumberingContext {
-  unsigned NumStaticLocals;
-
 public:
-  MicrosoftNumberingContext() : NumStaticLocals(0) { }
+  virtual unsigned getManglingNumber(const VarDecl *VD,
+                                     unsigned MSLocalManglingNumber) {
+    return MSLocalManglingNumber;
+  }
 
-  /// Static locals are numbered by source order.
-  virtual unsigned getManglingNumber(const VarDecl *VD) {
-    assert(VD->isStaticLocal());
-    return ++NumStaticLocals;
+  virtual unsigned getManglingNumber(const TagDecl *TD,
+                                     unsigned MSLocalManglingNumber) {
+    return MSLocalManglingNumber;
   }
 };
 
@@ -169,7 +169,7 @@ std::pair<uint64_t, unsigned> MicrosoftCXXABI::getMemberPointerWidthAndAlign(
   assert(Target.getTriple().getArch() == llvm::Triple::x86 ||
          Target.getTriple().getArch() == llvm::Triple::x86_64);
   unsigned Ptrs, Ints;
-  llvm::tie(Ptrs, Ints) = getMSMemberPointerSlots(MPT);
+  std::tie(Ptrs, Ints) = getMSMemberPointerSlots(MPT);
   // The nominal struct is laid out with pointers followed by ints and aligned
   // to a pointer width if any are present and an int width otherwise.
   unsigned PtrSize = Target.getPointerWidth(0);

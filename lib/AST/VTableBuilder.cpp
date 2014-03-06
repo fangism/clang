@@ -1907,21 +1907,6 @@ void ItaniumVTableBuilder::LayoutVTablesForVirtualBases(
   }
 }
 
-struct ItaniumThunkInfoComparator {
-  bool operator() (const ThunkInfo &LHS, const ThunkInfo &RHS) {
-    assert(LHS.Method == 0);
-    assert(RHS.Method == 0);
-
-    if (LHS.This != RHS.This)
-      return LHS.This < RHS.This;
-
-    if (LHS.Return != RHS.Return)
-      return LHS.Return < RHS.Return;
-
-    return false;
-  }
-};
-
 /// dumpLayout - Dump the vtable layout.
 void ItaniumVTableBuilder::dumpLayout(raw_ostream &Out) {
   // FIXME: write more tests that actually use the dumpLayout output to prevent
@@ -2169,7 +2154,10 @@ void ItaniumVTableBuilder::dumpLayout(raw_ostream &Out) {
 
       ThunkInfoVectorTy ThunksVector = Thunks[MD];
       std::sort(ThunksVector.begin(), ThunksVector.end(),
-                ItaniumThunkInfoComparator());
+                [](const ThunkInfo &LHS, const ThunkInfo &RHS) {
+        assert(LHS.Method == 0 && RHS.Method == 0);
+        return std::tie(LHS.This, LHS.Return) < std::tie(RHS.This, RHS.Return);
+      });
 
       Out << "Thunks for '" << MethodName << "' (" << ThunksVector.size();
       Out << (ThunksVector.size() == 1 ? " entry" : " entries") << ").\n";
@@ -2256,17 +2244,6 @@ void ItaniumVTableBuilder::dumpLayout(raw_ostream &Out) {
 
   Out << '\n';
 }
-
-struct VTableThunksComparator {
-  bool operator()(const VTableLayout::VTableThunkTy &LHS,
-                  const VTableLayout::VTableThunkTy &RHS) {
-    if (LHS.first == RHS.first) {
-      assert(LHS.second == RHS.second &&
-             "Different thunks should have unique indices!");
-    }
-    return LHS.first < RHS.first;
-  }
-};
 }
 
 VTableLayout::VTableLayout(uint64_t NumVTableComponents,
@@ -2287,7 +2264,12 @@ VTableLayout::VTableLayout(uint64_t NumVTableComponents,
             this->VTableThunks.get());
   std::sort(this->VTableThunks.get(),
             this->VTableThunks.get() + NumVTableThunks,
-            VTableThunksComparator());
+            [](const VTableLayout::VTableThunkTy &LHS,
+               const VTableLayout::VTableThunkTy &RHS) {
+    assert((LHS.first != RHS.first || LHS.second == RHS.second) &&
+           "Different thunks should have unique indices!");
+    return LHS.first < RHS.first;
+  });
 }
 
 VTableLayout::~VTableLayout() { }
@@ -2529,11 +2511,8 @@ private:
   }
 
   /// ComputeThisOffset - Returns the 'this' argument offset for the given
-  /// method in the given subobject, relative to the beginning of the
-  /// MostDerivedClass.
-  CharUnits ComputeThisOffset(const CXXMethodDecl *MD,
-                              BaseSubobject Base,
-                              FinalOverriders::OverriderInfo Overrider);
+  /// method, relative to the beginning of the MostDerivedClass.
+  CharUnits ComputeThisOffset(FinalOverriders::OverriderInfo Overrider);
 
   void CalculateVtordispAdjustment(FinalOverriders::OverriderInfo Overrider,
                                    CharUnits ThisOffset, ThisAdjustment &TA);
@@ -2704,14 +2683,13 @@ static bool BaseInSet(const CXXBaseSpecifier *Specifier,
 }
 
 CharUnits
-VFTableBuilder::ComputeThisOffset(const CXXMethodDecl *MD,
-                                  BaseSubobject Base,
-                                  FinalOverriders::OverriderInfo Overrider) {
+VFTableBuilder::ComputeThisOffset(FinalOverriders::OverriderInfo Overrider) {
   InitialOverriddenDefinitionCollector Collector;
-  visitAllOverriddenMethods(MD, Collector);
+  visitAllOverriddenMethods(Overrider.Method, Collector);
 
   CXXBasePaths Paths;
-  Base.getBase()->lookupInBases(BaseInSet, &Collector.Bases, Paths);
+  Overrider.Method->getParent()->lookupInBases(BaseInSet, &Collector.Bases,
+                                               Paths);
 
   // This will hold the smallest this offset among overridees of MD.
   // This implies that an offset of a non-virtual base will dominate an offset
@@ -2723,7 +2701,7 @@ VFTableBuilder::ComputeThisOffset(const CXXMethodDecl *MD,
   for (CXXBasePaths::paths_iterator I = Paths.begin(), E = Paths.end();
        I != E; ++I) {
     const CXXBasePath &Path = (*I);
-    CharUnits ThisOffset = Base.getBaseOffset();
+    CharUnits ThisOffset = Overrider.Offset;
     CharUnits LastVBaseOffset;
 
     // For each path from the overrider to the parents of the overridden methods,
@@ -2754,16 +2732,16 @@ VFTableBuilder::ComputeThisOffset(const CXXMethodDecl *MD,
       }
     }
 
-    if (isa<CXXDestructorDecl>(MD)) {
+    if (isa<CXXDestructorDecl>(Overrider.Method)) {
       if (LastVBaseOffset.isZero()) {
         // If a "Base" class has at least one non-virtual base with a virtual
         // destructor, the "Base" virtual destructor will take the address
         // of the "Base" subobject as the "this" argument.
-        return Base.getBaseOffset();
+        ThisOffset = Overrider.Offset;
       } else {
         // A virtual destructor of a virtual base takes the address of the
         // virtual base subobject as the "this" argument.
-        return LastVBaseOffset;
+        ThisOffset = LastVBaseOffset;
       }
     }
 
@@ -2838,7 +2816,7 @@ static void GroupNewVirtualOverloads(
 
     VisitedGroupIndicesTy::iterator J;
     bool Inserted;
-    llvm::tie(J, Inserted) = VisitedGroupIndices.insert(
+    std::tie(J, Inserted) = VisitedGroupIndices.insert(
         std::make_pair(MD->getDeclName(), Groups.size()));
     if (Inserted)
       Groups.push_back(MethodGroup());
@@ -2938,7 +2916,7 @@ void VFTableBuilder::AddMethods(BaseSubobject Base, unsigned BaseDepth,
       MethodInfo &OverriddenMethodInfo = OverriddenMDIterator->second;
 
       // Create a this-adjusting thunk if needed.
-      CharUnits TI = ComputeThisOffset(MD, Base, Overrider);
+      CharUnits TI = ComputeThisOffset(Overrider);
       if (TI != WhichVFPtr.FullOffsetInMDC) {
         ThisAdjustmentOffset.NonVirtual =
             (TI - WhichVFPtr.FullOffsetInMDC).getQuantity();
@@ -3047,22 +3025,6 @@ static void PrintBasePath(const VPtrInfo::BasePath &Path, raw_ostream &Out) {
   }
 }
 
-namespace {
-struct MicrosoftThunkInfoStableSortComparator {
-  bool operator() (const ThunkInfo &LHS, const ThunkInfo &RHS) {
-    if (LHS.This != RHS.This)
-      return LHS.This < RHS.This;
-
-    if (LHS.Return != RHS.Return)
-      return LHS.Return < RHS.Return;
-
-    // Keep different thunks with the same adjustments in the order they
-    // were put into the vector.
-    return false;
-  }
-};
-}
-
 static void dumpMicrosoftThunkAdjustment(const ThunkInfo &TI, raw_ostream &Out,
                                          bool ContinueFirstLine) {
   const ReturnAdjustment &R = TI.Return;
@@ -3105,7 +3067,8 @@ void VFTableBuilder::dumpLayout(raw_ostream &Out) {
   PrintBasePath(WhichVFPtr.PathToBaseWithVPtr, Out);
   Out << "'";
   MostDerivedClass->printQualifiedName(Out);
-  Out << "' (" << Components.size() << " entries).\n";
+  Out << "' (" << Components.size()
+      << (Components.size() == 1 ? " entry" : " entries") << ").\n";
 
   for (unsigned I = 0, E = Components.size(); I != E; ++I) {
     Out << llvm::format("%4d | ", I);
@@ -3197,7 +3160,11 @@ void VFTableBuilder::dumpLayout(raw_ostream &Out) {
 
       ThunkInfoVectorTy ThunksVector = Thunks[MD];
       std::stable_sort(ThunksVector.begin(), ThunksVector.end(),
-                       MicrosoftThunkInfoStableSortComparator());
+                       [](const ThunkInfo &LHS, const ThunkInfo &RHS) {
+        // Keep different thunks with the same adjustments in the order they
+        // were put into the vector.
+        return std::tie(LHS.This, LHS.Return) < std::tie(RHS.This, RHS.Return);
+      });
 
       Out << "Thunks for '" << MethodName << "' (" << ThunksVector.size();
       Out << (ThunksVector.size() == 1 ? " entry" : " entries") << ").\n";
@@ -3373,6 +3340,7 @@ static bool rebucketPaths(VPtrInfoVector &Paths) {
 }
 
 MicrosoftVTableContext::~MicrosoftVTableContext() {
+  llvm::DeleteContainerSeconds(VFPtrLocations);
   llvm::DeleteContainerSeconds(VFTableLayouts);
   llvm::DeleteContainerSeconds(VBaseInfo);
 }
@@ -3445,7 +3413,8 @@ void MicrosoftVTableContext::dumpMethodLocations(
     Out << "VFTable indices for ";
     Out << "'";
     RD->printQualifiedName(Out);
-    Out << "' (" << IndicesMap.size() << " entries).\n";
+    Out << "' (" << IndicesMap.size()
+        << (IndicesMap.size() == 1 ? " entry" : " entries") << ").\n";
 
     CharUnits LastVFPtrOffset = CharUnits::fromQuantity(-1);
     uint64_t LastVBIndex = 0;

@@ -763,38 +763,6 @@ static InputKind getSourceInputKindFromOptions(const LangOptions &LangOpts) {
   return LangOpts.CPlusPlus? IK_CXX : IK_C;
 }
 
-namespace {
-  struct CompileModuleMapData {
-    CompilerInstance &Instance;
-    GenerateModuleAction &CreateModuleAction;
-  };
-}
-
-/// \brief Helper function that executes the module-generating action under
-/// a crash recovery context.
-static void doCompileMapModule(void *UserData) {
-  CompileModuleMapData &Data
-    = *reinterpret_cast<CompileModuleMapData *>(UserData);
-  Data.Instance.ExecuteAction(Data.CreateModuleAction);
-}
-
-namespace {
-  /// \brief Function object that checks with the given macro definition should
-  /// be removed, because it is one of the ignored macros.
-  class RemoveIgnoredMacro {
-    const HeaderSearchOptions &HSOpts;
-
-  public:
-    explicit RemoveIgnoredMacro(const HeaderSearchOptions &HSOpts)
-      : HSOpts(HSOpts) { }
-
-    bool operator()(const std::pair<std::string, bool> &def) const {
-      StringRef MacroDef = def.first;
-      return HSOpts.ModulesIgnoreMacros.count(MacroDef.split('=').first) > 0;
-    }
-  };
-}
-
 /// \brief Compile a module file for the given module, using the options 
 /// provided by the importing compiler instance.
 static void compileModule(CompilerInstance &ImportingInstance,
@@ -839,10 +807,13 @@ static void compileModule(CompilerInstance &ImportingInstance,
   // Remove any macro definitions that are explicitly ignored by the module.
   // They aren't supposed to affect how the module is built anyway.
   const HeaderSearchOptions &HSOpts = Invocation->getHeaderSearchOpts();
-  PPOpts.Macros.erase(std::remove_if(PPOpts.Macros.begin(), PPOpts.Macros.end(),
-                                     RemoveIgnoredMacro(HSOpts)),
-                      PPOpts.Macros.end());
-
+  PPOpts.Macros.erase(
+      std::remove_if(PPOpts.Macros.begin(), PPOpts.Macros.end(),
+                     [&HSOpts](const std::pair<std::string, bool> &def) {
+        StringRef MacroDef = def.first;
+        return HSOpts.ModulesIgnoreMacros.count(MacroDef.split('=').first) > 0;
+      }),
+      PPOpts.Macros.end());
 
   // Note the name of the module we're building.
   Invocation->getLangOpts()->CurrentModule = Module->getTopLevelModuleName();
@@ -922,10 +893,9 @@ static void compileModule(CompilerInstance &ImportingInstance,
   // thread so that we get a stack large enough.
   const unsigned ThreadStackSize = 8 << 20;
   llvm::CrashRecoveryContext CRC;
-  CompileModuleMapData Data = { Instance, CreateModuleAction };
-  CRC.RunSafelyOnThread(&doCompileMapModule, &Data, ThreadStackSize);
+  CRC.RunSafelyOnThread([&]() { Instance.ExecuteAction(CreateModuleAction); },
+                        ThreadStackSize);
 
-  
   // Delete the temporary module map file.
   // FIXME: Even though we're executing under crash protection, it would still
   // be nice to do this with RemoveFileOnSignal when we can. However, that

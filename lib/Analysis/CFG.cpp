@@ -1308,7 +1308,7 @@ CFGBuilder::VisitLogicalOperator(BinaryOperator *B,
   do {
     if (BinaryOperator *B_RHS = dyn_cast<BinaryOperator>(RHS))
       if (B_RHS->isLogicalOp()) {
-        llvm::tie(RHSBlock, ExitBlock) =
+        std::tie(RHSBlock, ExitBlock) =
           VisitLogicalOperator(B_RHS, Term, TrueBlock, FalseBlock);
         break;
       }
@@ -1634,8 +1634,8 @@ CFGBlock *CFGBuilder::VisitConditionalOperator(AbstractConditionalOperator *C,
 
   // See if this is a known constant.
   const TryResult& KnownVal = tryEvaluateBool(C->getCond());
-  addSuccessor(Block, KnownVal.isFalse() ? NULL : LHSBlock);
-  addSuccessor(Block, KnownVal.isTrue() ? NULL : RHSBlock);
+  addSuccessor(Block, LHSBlock, !KnownVal.isFalse());
+  addSuccessor(Block, RHSBlock, !KnownVal.isTrue());
   Block->setTerminator(C);
   Expr *condExpr = C->getCond();
 
@@ -2094,7 +2094,7 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
     if (BinaryOperator *Cond =
             dyn_cast_or_null<BinaryOperator>(C ? C->IgnoreParens() : 0))
       if (Cond->isLogicalOp()) {
-        llvm::tie(EntryConditionBlock, ExitConditionBlock) =
+        std::tie(EntryConditionBlock, ExitConditionBlock) =
           VisitLogicalOperator(Cond, F, BodyBlock, LoopSuccessor);
         break;
       }
@@ -2410,9 +2410,8 @@ CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
     // more optimal CFG representation.
     if (BinaryOperator *Cond = dyn_cast<BinaryOperator>(C->IgnoreParens()))
       if (Cond->isLogicalOp()) {
-        llvm::tie(EntryConditionBlock, ExitConditionBlock) =
-          VisitLogicalOperator(Cond, W, BodyBlock,
-                               LoopSuccessor);
+        std::tie(EntryConditionBlock, ExitConditionBlock) =
+            VisitLogicalOperator(Cond, W, BodyBlock, LoopSuccessor);
         break;
       }
 
@@ -3409,7 +3408,7 @@ CFGBlock *CFGBuilder::VisitConditionalOperatorForTemporaryDtors(
   const TryResult &KnownVal = tryEvaluateBool(E->getCond());
 
   if (LHSBlock) {
-    addSuccessor(Block, KnownVal.isFalse() ? NULL : LHSBlock);
+    addSuccessor(Block, LHSBlock, !KnownVal.isFalse());
   } else if (KnownVal.isFalse()) {
     addSuccessor(Block, NULL);
   } else {
@@ -3419,7 +3418,8 @@ CFGBlock *CFGBuilder::VisitConditionalOperatorForTemporaryDtors(
 
   if (!RHSBlock)
     RHSBlock = ConfluenceBlock;
-  addSuccessor(Block, KnownVal.isTrue() ? NULL : RHSBlock);
+
+  addSuccessor(Block, RHSBlock, !KnownVal.isTrue());
 
   return Block;
 }
@@ -3519,10 +3519,10 @@ CFGBlock::AdjacentBlock::AdjacentBlock(CFGBlock *B, CFGBlock *AlternateBlock)
 void CFGBlock::addSuccessor(AdjacentBlock Succ,
                             BumpVectorContext &C) {
   if (CFGBlock *B = Succ.getReachableBlock())
-    B->Preds.push_back(CFGBlock::AdjacentBlock(this, Succ.isReachable()), C);
+    B->Preds.push_back(AdjacentBlock(this, Succ.isReachable()), C);
 
   if (CFGBlock *UnreachableB = Succ.getPossiblyUnreachableBlock())
-    UnreachableB->Preds.push_back(CFGBlock::AdjacentBlock(this, false), C);
+    UnreachableB->Preds.push_back(AdjacentBlock(this, false), C);
 
   Succs.push_back(Succ, C);
 }

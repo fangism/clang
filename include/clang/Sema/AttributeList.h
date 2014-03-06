@@ -493,7 +493,7 @@ public:
   unsigned getMaxArgs() const;
   bool diagnoseAppertainsTo(class Sema &S, const Decl *D) const;
   bool diagnoseLangOpts(class Sema &S) const;
-  bool existsInTarget(llvm::Triple T) const;
+  bool existsInTarget(const llvm::Triple &T) const;
   bool isKnownToGCC() const;
 
   /// \brief If the parsed attribute has a semantic equivalent, and it would
@@ -705,10 +705,7 @@ public:
     : pool(factory), list(0) {
   }
 
-  ParsedAttributes(ParsedAttributes &attrs)
-    : pool(attrs.pool), list(attrs.list) {
-    attrs.list = 0;
-  }
+  ParsedAttributes(const ParsedAttributes &) LLVM_DELETED_FUNCTION;
 
   AttributePool &getPool() const { return pool; }
 

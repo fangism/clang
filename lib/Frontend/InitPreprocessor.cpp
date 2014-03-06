@@ -602,9 +602,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   DefineType("__CHAR16_TYPE__", TI.getChar16Type(), Builder);
   DefineType("__CHAR32_TYPE__", TI.getChar32Type(), Builder);
 
-  Builder.defineMacro("__ALIGNOF_MAX_ALIGN_T__",
-                      Twine(TI.getSuitableAlign() / TI.getCharWidth()));
-
   DefineFloatMacros(Builder, "FLT", &TI.getFloatFormat(), "F");
   DefineFloatMacros(Builder, "DBL", &TI.getDoubleFormat(), "");
   DefineFloatMacros(Builder, "LDBL", &TI.getLongDoubleFormat(), "L");
@@ -723,12 +720,12 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
 
   // OpenMP definition
   if (LangOpts.OpenMP) {
-    // OpenMP 2.2: 
+    // OpenMP 2.2:
     //   In implementations that support a preprocessor, the _OPENMP
     //   macro name is defined to have the decimal value yyyymm where
     //   yyyy and mm are the year and the month designations of the
     //   version of the OpenMP API that the implementation support.
-    Builder.defineMacro("_OPENMP", "201107");
+    Builder.defineMacro("_OPENMP", "201307");
   }
 
   // Get other target #defines.
