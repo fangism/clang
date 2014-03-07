@@ -35,29 +35,6 @@ public:
     return Out;
   }
 
-#if 0
-  template <class T>
-  Matcher<T> constructMatcher(StringRef MatcherName, Diagnostics *Error) {
-    return Registry::constructMatcher(MatcherName, SourceRange(), Args(), Error)
-        .template getTypedMatcher<T>();
-  }
-
-  template <class T>
-  Matcher<T> constructMatcher(StringRef MatcherName, const VariantValue &Arg1,
-                              Diagnostics *Error) {
-    return Registry::constructMatcher(MatcherName, SourceRange(), Args(Arg1),
-                                      Error).template getTypedMatcher<T>();
-  }
-
-  template <class T>
-  Matcher<T> constructMatcher(StringRef MatcherName, const VariantValue &Arg1,
-                              const VariantValue &Arg2, Diagnostics *Error) {
-    return Registry::constructMatcher(MatcherName, SourceRange(),
-                                      Args(Arg1, Arg2), Error)
-        .template getTypedMatcher<T>();
-  }
-#endif
-
   llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName,
                                                 Diagnostics *Error = 0) {
     Diagnostics DummyError;
