@@ -97,10 +97,10 @@ struct ArgTypeTraits<StringRef> : public ArgTypeTraits<std::string> {
 
 template <class T> struct ArgTypeTraits<ast_matchers::internal::Matcher<T> > {
   static bool is(const VariantValue &Value) {
-    return Value.isMatcher() && Value.getMatcher().template hasTypedMatcher<T>();
+    return Value.isMatcher() && Value.getMatcher().hasTypedMatcher<T>();
   }
   static ast_matchers::internal::Matcher<T> get(const VariantValue &Value) {
-    return Value.getMatcher().template getTypedMatcher<T>();
+    return Value.getMatcher().getTypedMatcher<T>();
   }
   static ArgKind getKind() {
     return ArgKind(ast_type_traits::ASTNodeKind::getFromNodeKind<T>());
