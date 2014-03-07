@@ -147,7 +147,7 @@ public:
     OCL_Autoreleasing
   };
 
-  enum MaskEnum {
+  enum {
     /// The maximum supported address space number.
     /// 24 bits should be enough for anyone.
     MaxAddressSpace = 0xffffffu,
