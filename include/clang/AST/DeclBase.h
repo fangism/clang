@@ -1658,9 +1658,6 @@ private:
   void buildLookupImpl(DeclContext *DCtx);
   void makeDeclVisibleInContextWithFlags(NamedDecl *D, bool Internal,
                                          bool Rediscoverable);
-#if !__GNUC_PREREQ(4, 2)
-public:		// gcc-4.0 accessibility bug workaround
-#endif
   void makeDeclVisibleInContextImpl(NamedDecl *D, bool Internal);
 };
 
