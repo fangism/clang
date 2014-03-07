@@ -8311,7 +8311,7 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
 
   TypeSourceInfo *OldCallOpTSI = E->getCallOperator()->getTypeSourceInfo();
   FunctionProtoTypeLoc OldCallOpFPTL = 
-      OldCallOpTSI->getTypeLoc().template getAs<FunctionProtoTypeLoc>();
+      OldCallOpTSI->getTypeLoc().getAs<FunctionProtoTypeLoc>();
   TypeSourceInfo *NewCallOpTSI = 0;
   
   const bool CallOpWasAlreadyTransformed = 
@@ -8340,7 +8340,7 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
   SmallVector<ParmVarDecl *, 4> Params;  
   {
     FunctionProtoTypeLoc NewCallOpFPTL = 
-        NewCallOpTSI->getTypeLoc().template castAs<FunctionProtoTypeLoc>();
+        NewCallOpTSI->getTypeLoc().castAs<FunctionProtoTypeLoc>();
     ParmVarDecl **NewParamDeclArray = NewCallOpFPTL.getParmArray();
     const unsigned NewNumArgs = NewCallOpFPTL.getNumParams();
 
