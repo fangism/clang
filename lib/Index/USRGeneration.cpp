@@ -22,7 +22,7 @@ using namespace clang::index;
 // USR generation.
 //===----------------------------------------------------------------------===//
 
-// namespace {
+namespace {
 class USRGenerator : public ConstDeclVisitor<USRGenerator> {
   SmallVectorImpl<char> &Buf;
   llvm::raw_svector_ostream Out;
@@ -134,7 +134,7 @@ public:
   bool EmitDeclName(const NamedDecl *D);
 };
 
-// } // end anonymous namespace
+} // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // Generating USRs from ASTS.
@@ -777,7 +777,6 @@ void USRGenerator::VisitTemplateArgument(const TemplateArgument &Arg) {
 //===----------------------------------------------------------------------===//
 // USR generation functions.
 //===----------------------------------------------------------------------===//
-namespace clang {
 
 void clang::index::generateUSRForObjCClass(StringRef Cls, raw_ostream &OS) {
   OS << "objc(cs)" << Cls;
@@ -816,5 +815,3 @@ bool clang::index::generateUSRForDecl(const Decl *D,
   UG.Visit(D);
   return UG.ignoreResults();
 }
-
-}	// end namespace clang
