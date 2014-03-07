@@ -295,16 +295,10 @@ private:
   FileManager &FileMgr;
   DiagnosticsEngine &Diags;
 
-#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
-public:	// workaround to grant access to classes nested within ASTDeclReader
-#endif
   /// \brief The semantic analysis object that will be processing the
   /// AST files and the translation unit that uses it.
   Sema *SemaObj;
 
-#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
-private:
-#endif
   /// \brief The preprocessor that will be loading the source file.
   Preprocessor &PP;
 
@@ -873,9 +867,6 @@ private:
   /// since the last time the declaration chains were linked.
   llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
   
-#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
-public:	// workaround to grant access to classes nested within ASTDeclReader
-#endif
   /// \brief The list of redeclaration chains that still need to be 
   /// reconstructed.
   ///
@@ -887,9 +878,6 @@ public:	// workaround to grant access to classes nested within ASTDeclReader
   /// \brief Keeps track of the elements added to PendingDeclChains.
   llvm::SmallSet<serialization::DeclID, 16> PendingDeclChainsKnown;
 
-#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
-private:
-#endif
   /// \brief The Decl IDs for the Sema/Lexical DeclContext of a Decl that has
   /// been loaded but its DeclContext was not set yet.
   struct PendingDeclContextInfo {
