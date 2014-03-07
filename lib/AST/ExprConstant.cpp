@@ -2148,7 +2148,7 @@ findSubobject(EvalInfo &Info, const Expr *E, const CompleteObject &Obj,
         assert(I == N - 1 && "extracting subobject of character?");
         assert(!O->hasLValuePath() || O->getLValuePath().empty());
         if (handler.AccessKind != AK_Read)
-          expandStringLiteral(Info, O->getLValueBase().template get<const Expr *>(),
+          expandStringLiteral(Info, O->getLValueBase().get<const Expr *>(),
                               *O);
         else
           return handler.foundString(*O, ObjType, Index);
