@@ -97,7 +97,7 @@ class TypeLocBuilder {
     TyLocType Loc = TypeLoc(T, 0).castAs<TyLocType>();
     size_t LocalSize = Loc.getLocalDataSize();
     unsigned LocalAlign = Loc.getLocalDataAlignment();
-    return pushImpl(T, LocalSize, LocalAlign).template castAs<TyLocType>();
+    return pushImpl(T, LocalSize, LocalAlign).castAs<TyLocType>();
   }
 
   /// Creates a TypeSourceInfo for the given type.
