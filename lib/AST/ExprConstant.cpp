@@ -4216,8 +4216,7 @@ public:
     if (E->isArrow()) {
       if (!EvaluatePointer(E->getBase(), Result, this->Info))
         return false;
-      BaseTy = E->getBase()->getType()->template castAs<PointerType>()
-		->getPointeeType();
+      BaseTy = E->getBase()->getType()->castAs<PointerType>()->getPointeeType();
     } else if (E->getBase()->isRValue()) {
       assert(E->getBase()->getType()->isRecordType());
       if (!EvaluateTemporary(E->getBase(), Result, this->Info))
