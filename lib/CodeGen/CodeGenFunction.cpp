@@ -158,7 +158,7 @@ void CodeGenFunction::EmitReturnBlock() {
   // cleans up functions which started with a unified return block.
   if (ReturnBlock.getBlock()->hasOneUse()) {
     llvm::BranchInst *BI =
-      dyn_cast<llvm::BranchInst>(*ReturnBlock.getBlock()->use_begin());
+      dyn_cast<llvm::BranchInst>(*ReturnBlock.getBlock()->user_begin());
     if (BI && BI->isUnconditional() &&
         BI->getSuccessor(0) == ReturnBlock.getBlock()) {
       // Reset insertion point, including debug location, and delete the
@@ -521,8 +521,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
   // attribute to all function that are not marked AlwaysInline.
   if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
     if (!CGM.getCodeGenOpts().NoInline) {
-      for (FunctionDecl::redecl_iterator RI = FD->redecls_begin(),
-             RE = FD->redecls_end(); RI != RE; ++RI)
+      for (auto RI : FD->redecls())
         if (RI->isInlineSpecified()) {
           Fn->addFnAttr(llvm::Attribute::InlineHint);
           break;
