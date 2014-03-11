@@ -2495,6 +2495,12 @@ bool ASTReader::ReadASTBlock(ModuleFile &F) {
         DeclContext *TU = Context.getTranslationUnitDecl();
         F.DeclContextInfos[TU].NameLookupTableData = Table;
         TU->setHasExternalVisibleStorage(true);
+      } else if (Decl *D = DeclsLoaded[ID - NUM_PREDEF_DECL_IDS]) {
+        auto *DC = cast<DeclContext>(D);
+        DC->getPrimaryContext()->setHasExternalVisibleStorage(true);
+        auto *&LookupTable = F.DeclContextInfos[DC].NameLookupTableData;
+        delete LookupTable;
+        LookupTable = Table;
       } else
         PendingVisibleUpdates[ID].push_back(std::make_pair(Table, &F));
       break;

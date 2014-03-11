@@ -759,6 +759,7 @@ bool UnwrappedLineParser::tryToParseLambda() {
   // solution.
   if (!Line->Tokens.empty() &&
       (Line->Tokens.back().Tok->isOneOf(tok::identifier, tok::kw_operator) ||
+       Line->Tokens.back().Tok->closesScope() ||
        Line->Tokens.back().Tok->isSimpleTypeSpecifier())) {
     nextToken();
     return false;
@@ -784,7 +785,10 @@ bool UnwrappedLineParser::tryToParseLambda() {
     case tok::identifier:
     case tok::coloncolon:
     case tok::kw_mutable:
+      nextToken();
+      break;
     case tok::arrow:
+      FormatTok->Type = TT_TrailingReturnArrow;
       nextToken();
       break;
     default:

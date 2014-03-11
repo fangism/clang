@@ -2485,6 +2485,8 @@ def warn_objc_requires_super_protocol : Warning<
   InGroup<DiagGroup<"requires-super-attribute">>;
 def note_protocol_decl : Note<
   "protocol is declared here">;
+def note_protocol_decl_undefined : Note<
+  "protocol %0 has no definition">;
 
 // objc_designated_initializer attribute diagnostics.
 def warn_objc_designated_init_missing_super_call : Warning<
@@ -5689,7 +5691,10 @@ def err_atomic_op_needs_atomic_int_or_ptr : Error<
 def err_atomic_op_bitwise_needs_atomic_int : Error<
   "address argument to bitwise atomic operation must be a pointer to "
   "%select{|atomic }0integer (%1 invalid)">;
-  
+def warn_atomic_op_has_invalid_memory_order : Warning<
+  "memory order argument to atomic operation is invalid">,
+  InGroup<DiagGroup<"atomic-memory-ordering">>;
+
 def err_atomic_load_store_uses_lib : Error<
   "atomic %select{load|store}0 requires runtime support that is not "
   "available for this target">;
@@ -5813,7 +5818,7 @@ def warn_unused_volatile : Warning<
   InGroup<DiagGroup<"unused-volatile-lvalue">>;
 
 def warn_unused_comparison : Warning<
-  "%select{equality|inequality}0 comparison result unused">,
+  "%select{%select{|in}1equality|relational}0 comparison result unused">,
   InGroup<UnusedComparison>;
 def note_inequality_comparison_to_or_assign : Note<
   "use '|=' to turn this inequality comparison into an or-assignment">;
@@ -6425,7 +6430,7 @@ def err_default_not_in_switch : Error<
   "'default' statement not in switch statement">;
 def err_case_not_in_switch : Error<"'case' statement not in switch statement">;
 def warn_bool_switch_condition : Warning<
-  "switch condition has boolean value">;
+  "switch condition has boolean value">, InGroup<SwitchBool>;
 def warn_case_value_overflow : Warning<
   "overflow converting case value to switch condition type (%0 to %1)">,
   InGroup<Switch>;

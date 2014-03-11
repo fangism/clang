@@ -114,25 +114,38 @@ void Sema::ActOnForEachDeclStmt(DeclGroupPtrTy dg) {
   }
 }
 
-/// \brief Diagnose unused '==' and '!=' as likely typos for '=' or '|='.
+/// \brief Diagnose unused comparisons, both builtin and overloaded operators.
+/// For '==' and '!=', suggest fixits for '=' or '|='.
 ///
 /// Adding a cast to void (or other expression wrappers) will prevent the
 /// warning from firing.
 static bool DiagnoseUnusedComparison(Sema &S, const Expr *E) {
   SourceLocation Loc;
-  bool IsNotEqual, CanAssign;
+  bool IsNotEqual, CanAssign, IsRelational;
 
   if (const BinaryOperator *Op = dyn_cast<BinaryOperator>(E)) {
-    if (Op->getOpcode() != BO_EQ && Op->getOpcode() != BO_NE)
+    if (!Op->isComparisonOp())
       return false;
 
+    IsRelational = Op->isRelationalOp();
     Loc = Op->getOperatorLoc();
     IsNotEqual = Op->getOpcode() == BO_NE;
     CanAssign = Op->getLHS()->IgnoreParenImpCasts()->isLValue();
   } else if (const CXXOperatorCallExpr *Op = dyn_cast<CXXOperatorCallExpr>(E)) {
-    if (Op->getOperator() != OO_EqualEqual &&
-        Op->getOperator() != OO_ExclaimEqual)
+    switch (Op->getOperator()) {
+    default:
       return false;
+    case OO_EqualEqual:
+    case OO_ExclaimEqual:
+      IsRelational = false;
+      break;
+    case OO_Less:
+    case OO_Greater:
+    case OO_GreaterEqual:
+    case OO_LessEqual:
+      IsRelational = true;
+      break;
+    }
 
     Loc = Op->getOperatorLoc();
     IsNotEqual = Op->getOperator() == OO_ExclaimEqual;
@@ -148,11 +161,11 @@ static bool DiagnoseUnusedComparison(Sema &S, const Expr *E) {
     return false;
 
   S.Diag(Loc, diag::warn_unused_comparison)
-    << (unsigned)IsNotEqual << E->getSourceRange();
+    << (unsigned)IsRelational << (unsigned)IsNotEqual << E->getSourceRange();
 
   // If the LHS is a plausible entity to assign to, provide a fixit hint to
   // correct common typos.
-  if (CanAssign) {
+  if (!IsRelational && CanAssign) {
     if (IsNotEqual)
       S.Diag(Loc, diag::note_inequality_comparison_to_or_assign)
         << FixItHint::CreateReplacement(Loc, "|=");
@@ -3349,8 +3362,7 @@ void Sema::ActOnCapturedRegionError() {
   RecordDecl *Record = RSI->TheRecordDecl;
   Record->setInvalidDecl();
 
-  SmallVector<Decl*, 4> Fields;
-  llvm::copy(Record->fields(), std::back_inserter(Fields));
+  SmallVector<Decl*, 4> Fields(Record->fields());
   ActOnFields(/*Scope=*/0, Record->getLocation(), Record, Fields,
               SourceLocation(), SourceLocation(), /*AttributeList=*/0);
 

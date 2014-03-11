@@ -186,15 +186,22 @@ class HeaderSearch {
   /// included, indexed by the FileEntry's UID.
   std::vector<HeaderFileInfo> FileInfo;
 
-  /// \brief Keeps track of each lookup performed by LookupFile.
-  ///
-  /// The first part of the value is the starting index in SearchDirs
-  /// that the cached search was performed from.  If there is a hit and
-  /// this value doesn't match the current query, the cache has to be
-  /// ignored.  The second value is the entry in SearchDirs that satisfied
-  /// the query.
-  llvm::StringMap<std::pair<unsigned, unsigned>, llvm::BumpPtrAllocator>
-    LookupFileCache;
+  /// Keeps track of each lookup performed by LookupFile.
+  struct LookupFileCacheInfo {
+    /// Starting index in SearchDirs that the cached search was performed from.
+    /// If there is a hit and this value doesn't match the current query, the
+    /// cache has to be ignored.
+    unsigned StartIdx;
+    /// The entry in SearchDirs that satisfied the query.
+    unsigned HitIdx;
+    /// This is non-null if the original filename was mapped to a framework
+    /// include via a headermap.
+    const char *MappedName;
+
+    /// Default constructor -- Initialize all members with zero.
+    LookupFileCacheInfo(): StartIdx(0), HitIdx(0), MappedName(nullptr) {}
+  };
+  llvm::StringMap<LookupFileCacheInfo, llvm::BumpPtrAllocator> LookupFileCache;
 
   /// \brief Collection mapping a framework or subframework
   /// name like "Carbon" to the Carbon.framework directory.
