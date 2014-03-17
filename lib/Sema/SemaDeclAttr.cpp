@@ -3554,7 +3554,11 @@ static void handleObjCBridgeRelatedAttr(Sema &S, Scope *Sc, Decl *D,
 
 static void handleObjCDesignatedInitializer(Sema &S, Decl *D,
                                             const AttributeList &Attr) {
-  ObjCInterfaceDecl *IFace = cast<ObjCInterfaceDecl>(D->getDeclContext());
+  ObjCInterfaceDecl *IFace;
+  if (ObjCCategoryDecl *CatDecl = dyn_cast<ObjCCategoryDecl>(D->getDeclContext()))
+    IFace = CatDecl->getClassInterface();
+  else
+    IFace = cast<ObjCInterfaceDecl>(D->getDeclContext());
   IFace->setHasDesignatedInitializers();
   D->addAttr(::new (S.Context)
                   ObjCDesignatedInitializerAttr(Attr.getRange(), S.Context,
@@ -4607,10 +4611,8 @@ NamedDecl * Sema::DeclClonePragmaWeak(NamedDecl *ND, IdentifierInfo *II,
     QualType FDTy = FD->getType();
     if (const FunctionProtoType *FT = FDTy->getAs<FunctionProtoType>()) {
       SmallVector<ParmVarDecl*, 16> Params;
-      for (FunctionProtoType::param_type_iterator AI = FT->param_type_begin(),
-                                                  AE = FT->param_type_end();
-           AI != AE; ++AI) {
-        ParmVarDecl *Param = BuildParmVarDeclForTypedef(NewFD, Loc, *AI);
+      for (const auto &AI : FT->param_types()) {
+        ParmVarDecl *Param = BuildParmVarDeclForTypedef(NewFD, Loc, AI);
         Param->setScopeInfo(0, Params.size());
         Params.push_back(Param);
       }

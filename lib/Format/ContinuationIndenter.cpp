@@ -227,8 +227,8 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
                                State.NextToken->WhitespaceRange.getEnd()) -
                            SourceMgr.getSpellingColumnNumber(
                                State.NextToken->WhitespaceRange.getBegin());
-    State.Column += WhitespaceLength + State.NextToken->ColumnWidth;
-    State.NextToken = State.NextToken->Next;
+    State.Column += WhitespaceLength;
+    moveStateToNextToken(State, DryRun, /*NewLine=*/false);
     return 0;
   }
 
@@ -349,7 +349,6 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
 
   Penalty += State.NextToken->SplitPenalty;
 
-
   // Breaking before the first "<<" is generally not desirable if the LHS is
   // short. Also always add the penalty if the LHS is split over mutliple lines
   // to avoid unncessary line breaks that just work around this penalty.
@@ -427,8 +426,9 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
   } else if (NextNonComment->Type == TT_StartOfName ||
              Previous.isOneOf(tok::coloncolon, tok::equal)) {
     State.Column = ContinuationIndent;
-  } else if (PreviousNonComment &&
-             PreviousNonComment->Type == TT_ObjCMethodExpr) {
+  } else if (PreviousNonComment && PreviousNonComment->is(tok::colon) &&
+             (PreviousNonComment->Type == TT_ObjCMethodExpr ||
+              PreviousNonComment->Type == TT_DictLiteral)) {
     State.Column = ContinuationIndent;
     // FIXME: This is hacky, find a better way. The problem is that in an ObjC
     // method expression, the block should be aligned to the line starting it,

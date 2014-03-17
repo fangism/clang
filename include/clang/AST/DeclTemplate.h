@@ -846,7 +846,11 @@ public:
   }
 
   typedef SpecIterator<FunctionTemplateSpecializationInfo> spec_iterator;
+  typedef llvm::iterator_range<spec_iterator> spec_range;
 
+  spec_range specializations() const {
+    return spec_range(spec_begin(), spec_end());
+  }
   spec_iterator spec_begin() const {
     return makeSpecIterator(getSpecializations(), false);
   }
@@ -1970,6 +1974,11 @@ public:
   QualType getInjectedClassNameSpecialization();
 
   typedef SpecIterator<ClassTemplateSpecializationDecl> spec_iterator;
+  typedef llvm::iterator_range<spec_iterator> spec_range;
+
+  spec_range specializations() const {
+    return spec_range(spec_begin(), spec_end());
+  }
 
   spec_iterator spec_begin() const {
     return makeSpecIterator(getSpecializations(), false);
@@ -1977,17 +1986,6 @@ public:
 
   spec_iterator spec_end() const {
     return makeSpecIterator(getSpecializations(), true);
-  }
-
-  typedef SpecIterator<ClassTemplatePartialSpecializationDecl>
-          partial_spec_iterator;
-
-  partial_spec_iterator partial_spec_begin() {
-    return makeSpecIterator(getPartialSpecializations(), false);
-  }
-
-  partial_spec_iterator partial_spec_end() {
-    return makeSpecIterator(getPartialSpecializations(), true);
   }
 
   // Implement isa/cast/dyncast support
@@ -2778,6 +2776,11 @@ public:
       VarTemplatePartialSpecializationDecl *D);
 
   typedef SpecIterator<VarTemplateSpecializationDecl> spec_iterator;
+  typedef llvm::iterator_range<spec_iterator> spec_range;
+
+  spec_range specializations() const {
+    return spec_range(spec_begin(), spec_end());
+  }
 
   spec_iterator spec_begin() const {
     return makeSpecIterator(getSpecializations(), false);
@@ -2785,17 +2788,6 @@ public:
 
   spec_iterator spec_end() const {
     return makeSpecIterator(getSpecializations(), true);
-  }
-
-  typedef SpecIterator<VarTemplatePartialSpecializationDecl>
-  partial_spec_iterator;
-
-  partial_spec_iterator partial_spec_begin() {
-    return makeSpecIterator(getPartialSpecializations(), false);
-  }
-
-  partial_spec_iterator partial_spec_end() {
-    return makeSpecIterator(getPartialSpecializations(), true);
   }
 
   // Implement isa/cast/dyncast support

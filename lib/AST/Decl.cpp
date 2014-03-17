@@ -1613,8 +1613,10 @@ VarDecl::VarDecl(Kind DK, DeclContext *DC, SourceLocation StartLoc,
                  SourceLocation IdLoc, IdentifierInfo *Id, QualType T,
                  TypeSourceInfo *TInfo, StorageClass SC)
     : DeclaratorDecl(DK, DC, IdLoc, Id, T, TInfo, StartLoc), Init() {
-  assert(sizeof(VarDeclBitfields) <= sizeof(unsigned));
-  assert(sizeof(ParmVarDeclBitfields) <= sizeof(unsigned));
+  static_assert(sizeof(VarDeclBitfields) <= sizeof(unsigned),
+                "VarDeclBitfields too large!");
+  static_assert(sizeof(ParmVarDeclBitfields) <= sizeof(unsigned),
+                "ParmVarDeclBitfields too large!");
   AllBits = 0;
   VarDeclBits.SClass = SC;
   // Everything else is implicitly initialized to false.
@@ -3452,10 +3454,9 @@ void BlockDecl::setCaptures(ASTContext &Context,
 }
 
 bool BlockDecl::capturesVariable(const VarDecl *variable) const {
-  for (capture_const_iterator
-         i = capture_begin(), e = capture_end(); i != e; ++i)
+  for (const auto &I : captures())
     // Only auto vars can be captured, so no redeclaration worries.
-    if (i->getVariable() == variable)
+    if (I.getVariable() == variable)
       return true;
 
   return false;

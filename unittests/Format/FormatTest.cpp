@@ -2024,6 +2024,10 @@ TEST_F(FormatTest, DoesntRemoveUnknownTokens) {
   verifyFormat("#define A ''qqq");
   verifyFormat("#define A `qqq");
   verifyFormat("f(\"aaaa, bbbb, \"\\\"ccccc\\\"\");");
+  EXPECT_EQ("const char *c = STRINGIFY(\n"
+            "\\na : b);",
+            format("const char * c = STRINGIFY(\n"
+                   "\\na : b);"));
 }
 
 TEST_F(FormatTest, IndentsPPDirectiveInReducedSpace) {
@@ -6007,6 +6011,11 @@ TEST_F(FormatTest, ObjCDictLiterals) {
       "  NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee : "
       "regularFont,\n"
       "};");
+  verifyFormat(
+      "@{\n"
+      "  NSFontAttributeNameeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee :\n"
+      "      reeeeeeeeeeeeeeeeeeeeeeeegularFont,\n"
+      "};");
 
   // We should try to be robust in case someone forgets the "@".
   verifyFormat(
@@ -8058,6 +8067,14 @@ TEST_F(FormatTest, FormatsBlocks) {
                "        // ...\n"
                "        int i;\n"
                "    }];");
+
+  verifyFormat("f(^{\n"
+               "    @autoreleasepool {\n"
+               "      if (a) {\n"
+               "        g();\n"
+               "      }\n"
+               "    }\n"
+               "});");
 }
 
 TEST_F(FormatTest, SupportsCRLF) {
