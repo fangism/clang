@@ -379,8 +379,13 @@ void Sema::ActOnStartOfObjCMethodDef(Scope *FnBodyScope, Decl *D) {
       ObjCImplDecl *ImplDeclOfMethodDecl = 0;
       if (ObjCInterfaceDecl *OID = dyn_cast<ObjCInterfaceDecl>(ContDeclOfMethodDecl))
         ImplDeclOfMethodDecl = OID->getImplementation();
-      else if (ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(ContDeclOfMethodDecl))
-        ImplDeclOfMethodDecl = CD->getImplementation();
+      else if (ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(ContDeclOfMethodDecl)) {
+        if (CD->IsClassExtension()) {
+          if (ObjCInterfaceDecl *OID = CD->getClassInterface())
+            ImplDeclOfMethodDecl = OID->getImplementation();
+        } else
+            ImplDeclOfMethodDecl = CD->getImplementation();
+      }
       // No need to issue deprecated warning if deprecated mehod in class/category
       // is being implemented in its own implementation (no overriding is involved).
       if (!ImplDeclOfMethodDecl || ImplDeclOfMethodDecl != ImplDeclOfMethodDef)
@@ -838,7 +843,9 @@ void Sema::DiagnoseClassExtensionDupMethods(ObjCCategoryDecl *CAT,
     return;
   for (const auto *Method : CAT->methods()) {
     const ObjCMethodDecl *&PrevMethod = MethodMap[Method->getSelector()];
-    if (PrevMethod && !MatchTwoMethodDeclarations(Method, PrevMethod)) {
+    if (PrevMethod &&
+        (PrevMethod->isInstanceMethod() == Method->isInstanceMethod()) &&
+        !MatchTwoMethodDeclarations(Method, PrevMethod)) {
       Diag(Method->getLocation(), diag::err_duplicate_method_decl)
             << Method->getDeclName();
       Diag(PrevMethod->getLocation(), diag::note_previous_declaration);
