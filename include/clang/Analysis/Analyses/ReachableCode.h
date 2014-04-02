@@ -39,8 +39,9 @@ namespace reachable_code {
 
 /// Classifications of unreachable code.
 enum UnreachableKind {
-  UK_TrivialReturn,
+  UK_Return,
   UK_Break,
+  UK_Loop_Increment,
   UK_Other
 };
 
@@ -49,7 +50,9 @@ class Callback {
 public:
   virtual ~Callback() {}
   virtual void HandleUnreachable(UnreachableKind UK,
-                                 SourceLocation L, SourceRange R1,
+                                 SourceLocation L,
+                                 SourceRange ConditionVal,
+                                 SourceRange R1,
                                  SourceRange R2) = 0;
 };
 

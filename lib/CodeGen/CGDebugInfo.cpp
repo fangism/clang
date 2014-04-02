@@ -228,34 +228,20 @@ StringRef CGDebugInfo::getSelectorName(Selector S) {
 /// getClassName - Get class name including template argument list.
 StringRef
 CGDebugInfo::getClassName(const RecordDecl *RD) {
-  const ClassTemplateSpecializationDecl *Spec
-    = dyn_cast<ClassTemplateSpecializationDecl>(RD);
-  if (!Spec)
+  // quick optimization to avoid having to intern strings that are already
+  // stored reliably elsewhere
+  if (!isa<ClassTemplateSpecializationDecl>(RD))
     return RD->getName();
 
-  const TemplateArgument *Args;
-  unsigned NumArgs;
-  if (TypeSourceInfo *TAW = Spec->getTypeAsWritten()) {
-    const TemplateSpecializationType *TST =
-      cast<TemplateSpecializationType>(TAW->getType());
-    Args = TST->getArgs();
-    NumArgs = TST->getNumArgs();
-  } else {
-    const TemplateArgumentList &TemplateArgs = Spec->getTemplateArgs();
-    Args = TemplateArgs.data();
-    NumArgs = TemplateArgs.size();
-  }
-  StringRef Name = RD->getIdentifier()->getName();
-  PrintingPolicy Policy(CGM.getLangOpts());
-  SmallString<128> TemplateArgList;
+  SmallString<128> Name;
   {
-    llvm::raw_svector_ostream OS(TemplateArgList);
-    TemplateSpecializationType::PrintTemplateArgumentList(OS, Args, NumArgs,
-                                                          Policy);
+    llvm::raw_svector_ostream OS(Name);
+    RD->getNameForDiagnostic(OS, CGM.getContext().getPrintingPolicy(),
+                             /*Qualified*/ false);
   }
 
   // Copy this name on the side and use its reference.
-  return internString(Name, TemplateArgList);
+  return internString(Name);
 }
 
 /// getOrCreateFile - Get the file debug info descriptor for the input location.
@@ -1252,7 +1238,7 @@ CollectTemplateParams(const TemplateParameterList *TPList,
         V = CGM.GetAddrOfFunction(FD);
       // Member data pointers have special handling too to compute the fixed
       // offset within the object.
-      if (isa<FieldDecl>(D)) {
+      if (isa<FieldDecl>(D) || isa<IndirectFieldDecl>(D)) {
         // These five lines (& possibly the above member function pointer
         // handling) might be able to be refactored to use similar code in
         // CodeGenModule::getMemberPointerConstant
@@ -2361,7 +2347,7 @@ llvm::DIType CGDebugInfo::CreateMemberType(llvm::DIFile Unit, QualType FType,
   return Ty;
 }
 
-llvm::DIDescriptor CGDebugInfo::getDeclarationOrDefinition(const Decl *D) {
+llvm::DIScope CGDebugInfo::getDeclarationOrDefinition(const Decl *D) {
   // We only need a declaration (not a definition) of the type - so use whatever
   // we would otherwise do to get a type for a pointee. (forward declarations in
   // limited debug info, full definitions (if the type definition is available)
@@ -2379,9 +2365,9 @@ llvm::DIDescriptor CGDebugInfo::getDeclarationOrDefinition(const Decl *D) {
   llvm::DenseMap<const Decl *, llvm::WeakVH>::iterator I =
       DeclCache.find(D->getCanonicalDecl());
   if (I == DeclCache.end())
-    return llvm::DIDescriptor();
+    return llvm::DIScope();
   llvm::Value *V = I->second;
-  return llvm::DIDescriptor(dyn_cast_or_null<llvm::MDNode>(V));
+  return llvm::DIScope(dyn_cast_or_null<llvm::MDNode>(V));
 }
 
 /// getFunctionDeclaration - Return debug info descriptor to describe method
@@ -2497,13 +2483,24 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   FnBeginRegionCount.push_back(LexicalBlockStack.size());
 
   const Decl *D = GD.getDecl();
-  // Function may lack declaration in source code if it is created by Clang
-  // CodeGen (examples: _GLOBAL__I_a, __cxx_global_array_dtor, thunk).
+
+  // Use the location of the start of the function to determine where
+  // the function definition is located. By default use the location
+  // of the declaration as the location for the subprogram. A function
+  // may lack a declaration in the source code if it is created by code
+  // gen. (examples: _GLOBAL__I_a, __cxx_global_array_dtor, thunk).
   bool HasDecl = (D != 0);
-  // Use the location of the declaration.
   SourceLocation Loc;
-  if (HasDecl)
+  if (HasDecl) {
     Loc = D->getLocation();
+
+    // If this is a function specialization then use the pattern body
+    // as the location for the function.
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+      if (const FunctionDecl *SpecDecl = FD->getTemplateInstantiationPattern())
+        if (SpecDecl->hasBody(SpecDecl))
+          Loc = SpecDecl->getLocation();
+  }
 
   unsigned Flags = 0;
   llvm::DIFile Unit = getOrCreateFile(Loc);
@@ -2567,6 +2564,11 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   if (!HasDecl || D->isImplicit())
     Flags |= llvm::DIDescriptor::FlagArtificial;
 
+  // FIXME: The function declaration we're constructing here is mostly reusing
+  // declarations from CXXMethodDecl and not constructing new ones for arbitrary
+  // FunctionDecls. When/if we fix this we can have FDContext be TheCU/null for
+  // all subprograms instead of the actual context since subprogram definitions
+  // are emitted as CU level entities by the backend.
   llvm::DISubprogram SP =
       DBuilder.createFunction(FDContext, Name, LinkageName, Unit, LineNo,
                               getOrCreateFunctionType(D, FnType, Unit),
@@ -2577,9 +2579,10 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   if (HasDecl)
     DeclCache.insert(std::make_pair(D->getCanonicalDecl(), llvm::WeakVH(SP)));
 
-  // Push function on region stack.
+  // Push the function onto the lexical block stack.
   llvm::MDNode *SPN = SP;
   LexicalBlockStack.push_back(SPN);
+
   if (HasDecl)
     RegionMap[D] = llvm::WeakVH(SP);
 }
@@ -3253,7 +3256,7 @@ void CGDebugInfo::EmitUsingDecl(const UsingDecl &UD) {
   // Emitting one decl is sufficient - debuggers can detect that this is an
   // overloaded name & provide lookup for all the overloads.
   const UsingShadowDecl &USD = **UD.shadow_begin();
-  if (llvm::DIDescriptor Target =
+  if (llvm::DIScope Target =
           getDeclarationOrDefinition(USD.getUnderlyingDecl()))
     DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(USD.getDeclContext())), Target,

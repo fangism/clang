@@ -174,6 +174,51 @@ TEST_F(FormatTest, RemovesEmptyLines) {
                    "\n"
                    "};"));
 
+  // Don't remove empty lines at the start of namespaces.
+  EXPECT_EQ("namespace N {\n"
+            "\n"
+            "int i;\n"
+            "}",
+            format("namespace N {\n"
+                   "\n"
+                   "int    i;\n"
+                   "}",
+                   getGoogleStyle()));
+
+  // Remove empty lines at the beginning and end of blocks.
+  EXPECT_EQ("void f() {\n"
+            "\n"
+            "  if (a) {\n"
+            "\n"
+            "    f();\n"
+            "  }\n"
+            "}",
+            format("void f() {\n"
+                   "\n"
+                   "  if (a) {\n"
+                   "\n"
+                   "    f();\n"
+                   "\n"
+                   "  }\n"
+                   "\n"
+                   "}",
+                   getLLVMStyle()));
+  EXPECT_EQ("void f() {\n"
+            "  if (a) {\n"
+            "    f();\n"
+            "  }\n"
+            "}",
+            format("void f() {\n"
+                   "\n"
+                   "  if (a) {\n"
+                   "\n"
+                   "    f();\n"
+                   "\n"
+                   "  }\n"
+                   "\n"
+                   "}",
+                   getGoogleStyle()));
+
   // Don't remove empty lines in more complex control statements.
   EXPECT_EQ("void f() {\n"
             "  if (a) {\n"
@@ -418,6 +463,15 @@ TEST_F(FormatTest, RangeBasedForLoops) {
                "     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {\n}");
   verifyFormat("for (aaaaaaaaa aaaaaaaaaaaaaaaaaaaaa :\n"
                "     aaaaaaaaaaaa.aaaaaaaaaaaa().aaaaaaaaa().a()) {\n}");
+}
+
+TEST_F(FormatTest, ForEachLoops) {
+  verifyFormat("void f() {\n"
+               "  foreach (Item *item, itemlist) {}\n"
+               "  Q_FOREACH (Item *item, itemlist) {}\n"
+               "  BOOST_FOREACH (Item *item, itemlist) {}\n"
+               "  UNKNOWN_FORACH(Item * item, itemlist) {}\n"
+               "}");
 }
 
 TEST_F(FormatTest, FormatsWhileLoop) {
@@ -777,6 +831,32 @@ TEST_F(FormatTest, UnderstandsSingleLineComments) {
                    "otherLine();"));
 }
 
+TEST_F(FormatTest, KeepsParameterWithTrailingCommentsOnTheirOwnLine) {
+  EXPECT_EQ("SomeFunction(a,\n"
+            "             b, // comment\n"
+            "             c);",
+            format("SomeFunction(a,\n"
+                   "          b, // comment\n"
+                   "      c);"));
+  EXPECT_EQ("SomeFunction(a, b,\n"
+            "             // comment\n"
+            "             c);",
+            format("SomeFunction(a,\n"
+                   "          b,\n"
+                  "  // comment\n"
+                   "      c);"));
+  EXPECT_EQ("SomeFunction(a, b, // comment (unclear relation)\n"
+            "             c);",
+            format("SomeFunction(a, b, // comment (unclear relation)\n"
+                   "      c);"));
+  EXPECT_EQ("SomeFunction(a, // comment\n"
+            "             b,\n"
+            "             c); // comment",
+            format("SomeFunction(a,     // comment\n"
+                   "          b,\n"
+                   "      c); // comment"));
+}
+
 TEST_F(FormatTest, CanFormatCommentsLocally) {
   EXPECT_EQ("int a;    // comment\n"
             "int    b; // comment",
@@ -875,6 +955,11 @@ TEST_F(FormatTest, UnderstandsBlockComments) {
                "         /* parameter 3 */ aaaaaa,\n"
                "         /* parameter 4 */ aaaaaa);",
                NoBinPacking);
+
+  // Aligning block comments in macros.
+  verifyGoogleFormat("#define A        \\\n"
+                     "  int i;   /*a*/ \\\n"
+                     "  int jjj; /*b*/");
 }
 
 TEST_F(FormatTest, AlignsBlockComments) {
@@ -4456,6 +4541,22 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   FormatStyle PointerLeft = getLLVMStyle();
   PointerLeft.PointerBindsToType = true;
   verifyFormat("delete *x;", PointerLeft);
+  verifyFormat("STATIC_ASSERT((a & b) == 0);");
+  verifyFormat("STATIC_ASSERT(0 == (a & b));");
+  verifyFormat("template <bool a, bool b> "
+               "typename t::if<x && y>::type f() {};");
+  verifyFormat("template <int *y> f() {};");
+  verifyFormat("vector<int *> v;");
+  verifyFormat("vector<int *const> v;");
+  verifyFormat("vector<int *const **const *> v;");
+  verifyFormat("vector<int *volatile> v;");
+  verifyFormat("vector<a * b> v;");
+  verifyFormat("foo<b && false>();");
+  verifyFormat("foo<b & 1>();");
+
+  // FIXME: We cannot handle this case yet; we might be able to figure out that
+  // foo<x> d > v; doesn't make sense.
+  verifyFormat("foo<a < b && c> d > v;");
 }
 
 TEST_F(FormatTest, UnderstandsAttributes) {
@@ -4875,6 +4976,9 @@ TEST_F(FormatTest, LayoutBraceInitializersInReturnStatement) {
 
 TEST_F(FormatTest, LayoutCxx11ConstructorBraceInitializers) {
   verifyFormat("vector<int> x{1, 2, 3, 4};");
+  verifyFormat("vector<int> x{\n"
+               "    1, 2, 3, 4,\n"
+               "};");
   verifyFormat("vector<T> x{{}, {}, {}, {}};");
   verifyFormat("f({1, 2});");
   verifyFormat("auto v = Foo{-1};");
@@ -5010,8 +5114,9 @@ TEST_F(FormatTest, FormatsBracedListsInColumnLayout) {
                getLLVMStyleWithColumns(43));
 
   // Trailing commas.
-  verifyFormat("vector<int> x = {1, 1, 1, 1,\n"
-               "                 1, 1, 1, 1, };",
+  verifyFormat("vector<int> x = {\n"
+               "    1, 1, 1, 1, 1, 1, 1, 1,\n"
+               "};",
                getLLVMStyleWithColumns(39));
   verifyFormat("vector<int> x = {1, 1, 1, 1,\n"
                "                 1, 1, 1, 1, //\n"
@@ -6002,10 +6107,12 @@ TEST_F(FormatTest, ObjCDictLiterals) {
   verifyFormat("@{}");
   verifyFormat("@{@\"one\" : @1}");
   verifyFormat("return @{@\"one\" : @1;");
-  verifyFormat("@{@\"one\" : @1, }");
+  verifyFormat("@{@\"one\" : @1}");
 
   verifyFormat("@{@\"one\" : @{@2 : @1}}");
-  verifyFormat("@{@\"one\" : @{@2 : @1}, }");
+  verifyFormat("@{\n"
+               "  @\"one\" : @{@2 : @1},\n"
+               "}");
 
   verifyFormat("@{1 > 2 ? @\"one\" : @\"two\" : 1 > 2 ? @1 : @2}");
   verifyFormat("[self setDict:@{}");
@@ -6465,11 +6572,10 @@ TEST_F(FormatTest, CountsCharactersInMultilineRawStringLiterals) {
                    getGoogleStyleWithColumns(20)));
   EXPECT_EQ("fffffffffff(R\"x(\n"
             "multiline raw string literal xxxxxxxxxxxxxx\n"
-            ")x\" +\n"
-            "            bbbbbb);",
+            ")x\" + bbbbbb);",
             format("fffffffffff(R\"x(\n"
                    "multiline raw string literal xxxxxxxxxxxxxx\n"
-                   ")x\" + bbbbbb);",
+                   ")x\" +   bbbbbb);",
                    getGoogleStyleWithColumns(20)));
   EXPECT_EQ("fffffffffff(\n"
             "    R\"x(\n"
@@ -7432,6 +7538,7 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE_BOOL(ConstructorInitializerAllOnOneLineOrOnePerLine);
   CHECK_PARSE_BOOL(DerivePointerBinding);
   CHECK_PARSE_BOOL(IndentCaseLabels);
+  CHECK_PARSE_BOOL(KeepEmptyLinesAtTheStartOfBlocks);
   CHECK_PARSE_BOOL(ObjCSpaceAfterProperty);
   CHECK_PARSE_BOOL(ObjCSpaceBeforeProtocolList);
   CHECK_PARSE_BOOL(PointerBindsToType);
@@ -7509,6 +7616,16 @@ TEST_F(FormatTest, ParsesConfiguration) {
               FormatStyle::NI_Inner);
   CHECK_PARSE("NamespaceIndentation: All", NamespaceIndentation,
               FormatStyle::NI_All);
+
+  Style.ForEachMacros.clear();
+  std::vector<std::string> BoostForeach;
+  BoostForeach.push_back("BOOST_FOREACH");
+  CHECK_PARSE("ForEachMacros: [BOOST_FOREACH]", ForEachMacros, BoostForeach);
+  std::vector<std::string> BoostAndQForeach;
+  BoostAndQForeach.push_back("BOOST_FOREACH");
+  BoostAndQForeach.push_back("Q_FOREACH");
+  CHECK_PARSE("ForEachMacros: [BOOST_FOREACH, Q_FOREACH]", ForEachMacros,
+              BoostAndQForeach);
 }
 
 TEST_F(FormatTest, ParsesConfigurationWithLanguages) {
@@ -8032,6 +8149,10 @@ TEST_F(FormatTest, FormatsLambdas) {
 TEST_F(FormatTest, FormatsBlocks) {
   verifyFormat("int (^Block)(int, int);");
   verifyFormat("int (^Block1)(int, int) = ^(int i, int j)");
+  verifyFormat("void (^block)(int) = ^(id test) { int i; };");
+  verifyFormat("void (^block)(int) = ^(int test) { int i; };");
+  verifyFormat("void (^block)(int) = ^id(int test) { int i; };");
+  verifyFormat("void (^block)(int) = ^int(int test) { int i; };");
 
   verifyFormat("foo(^{ bar(); });");
   verifyFormat("foo(a, ^{ bar(); });");
@@ -8085,6 +8206,10 @@ TEST_F(FormatTest, FormatsBlocks) {
                "        int i;\n"
                "    }\n"
                "    secondBlock:^(Bar *b) {\n"
+               "        // ...\n"
+               "        int i;\n"
+               "    }\n"
+               "    thirdBlock:^Foo(Bar *b) {\n"
                "        // ...\n"
                "        int i;\n"
                "    }];");

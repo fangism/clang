@@ -422,6 +422,7 @@ static __inline__
 __int64 _InterlockedExchange64(__int64 volatile *_Target, __int64 _Value);
 static __inline__
 __int64 _InterlockedExchangeAdd64(__int64 volatile *_Addend, __int64 _Value);
+static __inline__
 void *_InterlockedExchangePointer(void *volatile *_Target, void *_Value);
 static __inline__
 __int64 _InterlockedIncrement64(__int64 volatile *_Addend);
@@ -795,6 +796,11 @@ _InterlockedExchange64(__int64 volatile *_Target, __int64 _Value) {
   __atomic_exchange(_Target, &_Value, &_Value, 0);
   return _Value;
 }
+static __inline__ void *__attribute__((__always_inline__, __nodebug__))
+_InterlockedExchangePointer(void *volatile *_Target, void *_Value) {
+  __atomic_exchange(_Target, &_Value, &_Value, 0);
+  return _Value;
+}
 #endif
 /*----------------------------------------------------------------------------*\
 |* Interlocked Compare Exchange
@@ -968,12 +974,6 @@ static __inline__ unsigned __int64 __cdecl __attribute__((__always_inline__, __n
 _xgetbv(unsigned int __xcr_no) {
   unsigned int __eax, __edx;
   __asm__ ("xgetbv" : "=a" (__eax), "=d" (__edx) : "c" (__xcr_no));
-  return ((unsigned __int64)__edx << 32) | __eax;
-}
-static __inline__ unsigned __int64 __attribute__((__always_inline__, __nodebug__))
-__rdtsc(void) {
-  unsigned int __eax, __edx;
-  __asm__ ("rdtsc" : "=a" (__eax), "=d" (__edx));
   return ((unsigned __int64)__edx << 32) | __eax;
 }
 static __inline__ void __attribute__((__always_inline__, __nodebug__))

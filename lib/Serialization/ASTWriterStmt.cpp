@@ -1684,6 +1684,11 @@ void OMPClauseWriter::VisitOMPNumThreadsClause(OMPNumThreadsClause *C) {
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
 }
 
+void OMPClauseWriter::VisitOMPSafelenClause(OMPSafelenClause *C) {
+  Writer->Writer.AddStmt(C->getSafelen());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+}
+
 void OMPClauseWriter::VisitOMPDefaultClause(OMPDefaultClause *C) {
   Record.push_back(C->getDefaultKind());
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
@@ -1709,6 +1714,15 @@ void OMPClauseWriter::VisitOMPSharedClause(OMPSharedClause *C) {
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
   for (auto *I : C->varlists())
     Writer->Writer.AddStmt(I);
+}
+
+void OMPClauseWriter::VisitOMPCopyinClause(OMPCopyinClause *C) {
+  Record.push_back(C->varlist_size());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+  for (OMPCopyinClause::varlist_iterator I = C->varlist_begin(),
+                                         E = C->varlist_end();
+       I != E; ++I)
+    Writer->Writer.AddStmt(*I);
 }
 
 //===----------------------------------------------------------------------===//

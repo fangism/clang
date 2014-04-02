@@ -1932,6 +1932,10 @@ void OMPClauseEnqueue::VisitOMPNumThreadsClause(const OMPNumThreadsClause *C) {
   Visitor->AddStmt(C->getNumThreads());
 }
 
+void OMPClauseEnqueue::VisitOMPSafelenClause(const OMPSafelenClause *C) {
+  Visitor->AddStmt(C->getSafelen());
+}
+
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
 template<typename T>
@@ -1948,6 +1952,9 @@ void OMPClauseEnqueue::VisitOMPFirstprivateClause(
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPSharedClause(const OMPSharedClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPCopyinClause(const OMPCopyinClause *C) {
   VisitOMPClauseList(C);
 }
 }

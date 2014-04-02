@@ -1303,12 +1303,12 @@ void NamedDecl::printQualifiedName(raw_ostream &OS,
                                                             P);
     } else if (const NamespaceDecl *ND = dyn_cast<NamespaceDecl>(*I)) {
       if (ND->isAnonymousNamespace())
-        OS << "<anonymous namespace>";
+        OS << "(anonymous namespace)";
       else
         OS << *ND;
     } else if (const RecordDecl *RD = dyn_cast<RecordDecl>(*I)) {
       if (!RD->getIdentifier())
-        OS << "<anonymous " << RD->getKindName() << '>';
+        OS << "(anonymous " << RD->getKindName() << ')';
       else
         OS << *RD;
     } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(*I)) {
@@ -1341,7 +1341,7 @@ void NamedDecl::printQualifiedName(raw_ostream &OS,
   if (getDeclName())
     OS << *this;
   else
-    OS << "<anonymous>";
+    OS << "(anonymous)";
 }
 
 void NamedDecl::getNameForDiagnostic(raw_ostream &OS,
@@ -2534,35 +2534,15 @@ void FunctionDecl::setDeclsInPrototypeScope(ArrayRef<NamedDecl *> NewDecls) {
 /// getMinRequiredArguments - Returns the minimum number of arguments
 /// needed to call this function. This may be fewer than the number of
 /// function parameters, if some of the parameters have default
-/// arguments (in C++) or the last parameter is a parameter pack.
+/// arguments (in C++) or are parameter packs (C++11).
 unsigned FunctionDecl::getMinRequiredArguments() const {
   if (!getASTContext().getLangOpts().CPlusPlus)
     return getNumParams();
-  
-  unsigned NumRequiredArgs = getNumParams();  
-  
-  // If the last parameter is a parameter pack, we don't need an argument for 
-  // it.
-  if (NumRequiredArgs > 0 &&
-      getParamDecl(NumRequiredArgs - 1)->isParameterPack())
-    --NumRequiredArgs;
-      
-  // If this parameter has a default argument, we don't need an argument for
-  // it.
-  while (NumRequiredArgs > 0 &&
-         getParamDecl(NumRequiredArgs-1)->hasDefaultArg())
-    --NumRequiredArgs;
 
-  // We might have parameter packs before the end. These can't be deduced,
-  // but they can still handle multiple arguments.
-  unsigned ArgIdx = NumRequiredArgs;
-  while (ArgIdx > 0) {
-    if (getParamDecl(ArgIdx - 1)->isParameterPack())
-      NumRequiredArgs = ArgIdx;
-    
-    --ArgIdx;
-  }
-  
+  unsigned NumRequiredArgs = 0;
+  for (auto *Param : params())
+    if (!Param->isParameterPack() && !Param->hasDefaultArg())
+      ++NumRequiredArgs;
   return NumRequiredArgs;
 }
 

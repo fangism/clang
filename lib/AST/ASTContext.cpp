@@ -63,6 +63,13 @@ enum FloatingRank {
 RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
   if (!CommentsLoaded && ExternalSource) {
     ExternalSource->ReadComments();
+
+#ifndef NDEBUG
+    ArrayRef<RawComment *> RawComments = Comments.getComments();
+    assert(std::is_sorted(RawComments.begin(), RawComments.end(),
+                          BeforeThanCompare<RawComment>(SourceMgr)));
+#endif
+
     CommentsLoaded = true;
   }
 
@@ -138,11 +145,23 @@ RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
     DeclLoc = D->getLocStart();
   else {
     DeclLoc = D->getLocation();
-    // If location of the typedef name is in a macro, it is because being
-    // declared via a macro. Try using declaration's starting location
-    // as the "declaration location".
-    if (DeclLoc.isMacroID() && isa<TypedefDecl>(D))
-      DeclLoc = D->getLocStart();
+    if (DeclLoc.isMacroID()) {
+      if (isa<TypedefDecl>(D)) {
+        // If location of the typedef name is in a macro, it is because being
+        // declared via a macro. Try using declaration's starting location as
+        // the "declaration location".
+        DeclLoc = D->getLocStart();
+      } else if (const TagDecl *TD = dyn_cast<TagDecl>(D)) {
+        // If location of the tag decl is inside a macro, but the spelling of
+        // the tag name comes from a macro argument, it looks like a special
+        // macro like NS_ENUM is being used to define the tag decl.  In that
+        // case, adjust the source location to the expansion loc so that we can
+        // attach the comment to the tag decl.
+        if (SourceMgr.isMacroArgExpansion(DeclLoc) &&
+            TD->isCompleteDefinition())
+          DeclLoc = SourceMgr.getExpansionLoc(DeclLoc);
+      }
+    }
   }
 
   // If the declaration doesn't map directly to a location in a file, we
@@ -659,6 +678,7 @@ CXXABI *ASTContext::createCXXABI(const TargetInfo &T) {
   switch (T.getCXXABI().getKind()) {
   case TargetCXXABI::GenericARM:
   case TargetCXXABI::iOS:
+  case TargetCXXABI::iOS64:
     return CreateARMCXXABI(*this);
   case TargetCXXABI::GenericAArch64: // Same as Itanium at this level
   case TargetCXXABI::GenericItanium:
@@ -7889,6 +7909,7 @@ MangleContext *ASTContext::createMangleContext() {
   case TargetCXXABI::GenericItanium:
   case TargetCXXABI::GenericARM:
   case TargetCXXABI::iOS:
+  case TargetCXXABI::iOS64:
     return ItaniumMangleContext::create(*this, getDiagnostics());
   case TargetCXXABI::Microsoft:
     return MicrosoftMangleContext::create(*this, getDiagnostics());

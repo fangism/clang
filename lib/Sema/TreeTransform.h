@@ -1323,6 +1323,16 @@ public:
                                                  LParenLoc, EndLoc);
   }
 
+  /// \brief Build a new OpenMP 'safelen' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPSafelenClause(Expr *Len, SourceLocation StartLoc,
+                                     SourceLocation LParenLoc,
+                                     SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPSafelenClause(Len, StartLoc, LParenLoc, EndLoc);
+  }
+
   /// \brief Build a new OpenMP 'default' clause.
   ///
   /// By default, performs semantic analysis to build the new statement.
@@ -1369,6 +1379,18 @@ public:
                                     SourceLocation LParenLoc,
                                     SourceLocation EndLoc) {
     return getSema().ActOnOpenMPSharedClause(VarList, StartLoc, LParenLoc,
+                                             EndLoc);
+  }
+
+  /// \brief Build a new OpenMP 'copyin' clause.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPCopyinClause(ArrayRef<Expr *> VarList,
+                                    SourceLocation StartLoc,
+                                    SourceLocation LParenLoc,
+                                    SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPCopyinClause(VarList, StartLoc, LParenLoc,
                                              EndLoc);
   }
 
@@ -6340,6 +6362,16 @@ TreeTransform<Derived>::TransformOMPNumThreadsClause(OMPNumThreadsClause *C) {
                                                  C->getLocEnd());
 }
 
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPSafelenClause(OMPSafelenClause *C) {
+  ExprResult E = getDerived().TransformExpr(C->getSafelen());
+  if (E.isInvalid())
+    return 0;
+  return getDerived().RebuildOMPSafelenClause(
+      E.take(), C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
+}
+
 template<typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPDefaultClause(OMPDefaultClause *C) {
@@ -6397,6 +6429,25 @@ TreeTransform<Derived>::TransformOMPSharedClause(OMPSharedClause *C) {
     Vars.push_back(EVar.take());
   }
   return getDerived().RebuildOMPSharedClause(Vars,
+                                             C->getLocStart(),
+                                             C->getLParenLoc(),
+                                             C->getLocEnd());
+}
+
+template<typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPCopyinClause(OMPCopyinClause *C) {
+  llvm::SmallVector<Expr *, 16> Vars;
+  Vars.reserve(C->varlist_size());
+  for (OMPCopyinClause::varlist_iterator I = C->varlist_begin(),
+                                         E = C->varlist_end();
+       I != E; ++I) {
+    ExprResult EVar = getDerived().TransformExpr(cast<Expr>(*I));
+    if (EVar.isInvalid())
+      return 0;
+    Vars.push_back(EVar.take());
+  }
+  return getDerived().RebuildOMPCopyinClause(Vars,
                                              C->getLocStart(),
                                              C->getLParenLoc(),
                                              C->getLocEnd());

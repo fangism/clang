@@ -142,6 +142,7 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
     break;
   case Builtin::BI__builtin_stdarg_start:
   case Builtin::BI__builtin_va_start:
+  case Builtin::BI__va_start:
     if (SemaBuiltinVAStart(TheCall))
       return ExprError();
     break;
@@ -302,8 +303,14 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   if (BuiltinID >= Builtin::FirstTSBuiltin) {
     switch (Context.getTargetInfo().getTriple().getArch()) {
       case llvm::Triple::arm:
+      case llvm::Triple::armeb:
       case llvm::Triple::thumb:
+      case llvm::Triple::thumbeb:
         if (CheckARMBuiltinFunctionCall(BuiltinID, TheCall))
+          return ExprError();
+        break;
+      case llvm::Triple::arm64:
+        if (CheckARM64BuiltinFunctionCall(BuiltinID, TheCall))
           return ExprError();
         break;
       case llvm::Triple::aarch64:
@@ -366,7 +373,7 @@ static unsigned RFT(unsigned t, bool shift = false, bool ForceQuad = false) {
 /// the vector type specified by the NeonTypeFlags.  This is used to check
 /// the pointer arguments for Neon load/store intrinsics.
 static QualType getNeonEltType(NeonTypeFlags Flags, ASTContext &Context,
-                               bool IsAArch64) {
+                               bool IsPolyUnsigned, bool IsInt64Long) {
   switch (Flags.getEltType()) {
   case NeonTypeFlags::Int8:
     return Flags.isUnsigned() ? Context.UnsignedCharTy : Context.SignedCharTy;
@@ -375,15 +382,15 @@ static QualType getNeonEltType(NeonTypeFlags Flags, ASTContext &Context,
   case NeonTypeFlags::Int32:
     return Flags.isUnsigned() ? Context.UnsignedIntTy : Context.IntTy;
   case NeonTypeFlags::Int64:
-    if (IsAArch64)
+    if (IsInt64Long)
       return Flags.isUnsigned() ? Context.UnsignedLongTy : Context.LongTy;
     else
       return Flags.isUnsigned() ? Context.UnsignedLongLongTy
                                 : Context.LongLongTy;
   case NeonTypeFlags::Poly8:
-    return IsAArch64 ? Context.UnsignedCharTy : Context.SignedCharTy;
+    return IsPolyUnsigned ? Context.UnsignedCharTy : Context.SignedCharTy;
   case NeonTypeFlags::Poly16:
-    return IsAArch64 ? Context.UnsignedShortTy : Context.ShortTy;
+    return IsPolyUnsigned ? Context.UnsignedShortTy : Context.ShortTy;
   case NeonTypeFlags::Poly64:
     return Context.UnsignedLongTy;
   case NeonTypeFlags::Poly128:
@@ -431,9 +438,13 @@ bool Sema::CheckNeonBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
     ExprResult RHS = DefaultFunctionArrayLvalueConversion(Arg);
     QualType RHSTy = RHS.get()->getType();
 
-    bool IsAArch64 =
-        Context.getTargetInfo().getTriple().getArch() == llvm::Triple::aarch64;
-    QualType EltTy = getNeonEltType(NeonTypeFlags(TV), Context, IsAArch64);
+    llvm::Triple::ArchType Arch = Context.getTargetInfo().getTriple().getArch();
+    bool IsPolyUnsigned =
+        Arch == llvm::Triple::aarch64 || Arch == llvm::Triple::arm64;
+    bool IsInt64Long =
+        Context.getTargetInfo().getInt64Type() == TargetInfo::SignedLong;
+    QualType EltTy =
+        getNeonEltType(NeonTypeFlags(TV), Context, IsPolyUnsigned, IsInt64Long);
     if (HasConstPtr)
       EltTy = EltTy.withConst();
     QualType LHSTy = Context.getPointerType(EltTy);
@@ -484,11 +495,15 @@ bool Sema::CheckAArch64BuiltinFunctionCall(unsigned BuiltinID,
   return false;
 }
 
-bool Sema::CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall) {
+bool Sema::CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall,
+                                        unsigned MaxWidth) {
   assert((BuiltinID == ARM::BI__builtin_arm_ldrex ||
-          BuiltinID == ARM::BI__builtin_arm_strex) &&
+          BuiltinID == ARM::BI__builtin_arm_strex ||
+          BuiltinID == ARM64::BI__builtin_arm_ldrex ||
+          BuiltinID == ARM64::BI__builtin_arm_strex) &&
          "unexpected ARM builtin");
-  bool IsLdrex = BuiltinID == ARM::BI__builtin_arm_ldrex;
+  bool IsLdrex = BuiltinID == ARM::BI__builtin_arm_ldrex ||
+                 BuiltinID == ARM64::BI__builtin_arm_ldrex;
 
   DeclRefExpr *DRE =cast<DeclRefExpr>(TheCall->getCallee()->IgnoreParenCasts());
 
@@ -549,7 +564,8 @@ bool Sema::CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall) {
   }
 
   // But ARM doesn't have instructions to deal with 128-bit versions.
-  if (Context.getTypeSize(ValType) > 64) {
+  if (Context.getTypeSize(ValType) > MaxWidth) {
+    assert(MaxWidth == 64 && "Diagnostic unexpectedly inaccurate");
     Diag(DRE->getLocStart(), diag::err_atomic_exclusive_builtin_pointer_size)
       << PointerArg->getType() << PointerArg->getSourceRange();
     return true;
@@ -595,7 +611,7 @@ bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
 
   if (BuiltinID == ARM::BI__builtin_arm_ldrex ||
       BuiltinID == ARM::BI__builtin_arm_strex) {
-    return CheckARMBuiltinExclusiveCall(BuiltinID, TheCall);
+    return CheckARMBuiltinExclusiveCall(BuiltinID, TheCall, 64);
   }
 
   if (CheckNeonBuiltinFunctionCall(BuiltinID, TheCall))
@@ -630,6 +646,21 @@ bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
       << l << u+l << TheCall->getArg(i)->getSourceRange();
 
   // FIXME: VFP Intrinsics should error if VFP not present.
+  return false;
+}
+
+bool Sema::CheckARM64BuiltinFunctionCall(unsigned BuiltinID,
+                                         CallExpr *TheCall) {
+  llvm::APSInt Result;
+
+  if (BuiltinID == ARM64::BI__builtin_arm_ldrex ||
+      BuiltinID == ARM64::BI__builtin_arm_strex) {
+    return CheckARMBuiltinExclusiveCall(BuiltinID, TheCall, 128);
+  }
+
+  if (CheckNeonBuiltinFunctionCall(BuiltinID, TheCall))
+    return true;
+
   return false;
 }
 
@@ -2426,9 +2457,6 @@ protected:
   void EmitFormatDiagnostic(PartialDiagnostic PDiag, SourceLocation StringLoc,
                             bool IsStringLocation, Range StringRange,
                             ArrayRef<FixItHint> Fixit = None);
-
-  void CheckPositionalAndNonpositionalArgs(
-      const analyze_format_string::FormatSpecifier *FS);
 };
 }
 
@@ -3518,8 +3546,9 @@ bool CheckScanfHandler::HandleScanfSpecifier(
   const analyze_format_string::ArgType &AT = FS.getArgType(S.Context);
   if (AT.isValid() && !AT.matchesType(S.Context, Ex->getType())) {
     ScanfSpecifier fixedFS = FS;
-    bool success = fixedFS.fixType(Ex->getType(), S.getLangOpts(),
-                                   S.Context);
+    bool success = fixedFS.fixType(Ex->getType(),
+                                   Ex->IgnoreImpCasts()->getType(),
+                                   S.getLangOpts(), S.Context);
 
     if (success) {
       // Get the fix string from the fixed format specifier.
