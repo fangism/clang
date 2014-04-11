@@ -1982,6 +1982,10 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = new toolchains::XCore(*this, Target, Args);
         break;
       }
+      if (Target.isOSBinFormatELF()) {
+        TC = new toolchains::Generic_ELF(*this, Target, Args);
+        break;
+      }
       TC = new toolchains::Generic_GCC(*this, Target, Args);
       break;
     }
@@ -2055,4 +2059,8 @@ std::pair<unsigned, unsigned> Driver::getIncludeExcludeOptionFlagMasks() const {
   }
 
   return std::make_pair(IncludedFlagsBitmask, ExcludedFlagsBitmask);
+}
+
+bool clang::driver::isOptimizationLevelFast(const llvm::opt::ArgList &Args) {
+  return Args.hasFlag(options::OPT_Ofast, options::OPT_O_Group, false);
 }
