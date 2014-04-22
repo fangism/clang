@@ -117,6 +117,38 @@ static void CheckUnreachable(Sema &S, AnalysisDeclContext &AC) {
   reachable_code::FindUnreachableCode(AC, S.getPreprocessor(), UC);
 }
 
+/// \brief Warn on logical operator errors in CFGBuilder
+class LogicalErrorHandler : public CFGCallback {
+  Sema &S;
+
+public:
+  LogicalErrorHandler(Sema &S) : CFGCallback(), S(S) {}
+
+  static bool HasMacroID(const Expr *E) {
+    if (E->getExprLoc().isMacroID())
+      return true;
+
+    // Recurse to children.
+    for (ConstStmtRange SubStmts = E->children(); SubStmts; ++SubStmts)
+      if (*SubStmts)
+        if (const Expr *SubExpr = dyn_cast<Expr>(*SubStmts))
+          if (HasMacroID(SubExpr))
+            return true;
+
+    return false;
+  }
+
+  void compareAlwaysTrue(const BinaryOperator *B, bool isAlwaysTrue) {
+    if (HasMacroID(B))
+      return;
+
+    SourceRange DiagRange = B->getSourceRange();
+    S.Diag(B->getExprLoc(), diag::warn_tautological_overlap_comparison)
+        << DiagRange << isAlwaysTrue;
+  }
+};
+
+
 //===----------------------------------------------------------------------===//
 // Check for infinite self-recursion in functions
 //===----------------------------------------------------------------------===//
@@ -413,8 +445,7 @@ struct CheckFallThroughDiagnostics {
       diag::err_noreturn_block_has_return_expr;
     D.diag_AlwaysFallThrough_ReturnsNonVoid =
       diag::err_falloff_nonvoid_block;
-    D.diag_NeverFallThroughOrReturn =
-      diag::warn_suggest_noreturn_block;
+    D.diag_NeverFallThroughOrReturn = 0;
     D.funMode = Block;
     return D;
   }
@@ -449,10 +480,7 @@ struct CheckFallThroughDiagnostics {
     }
 
     // For blocks / lambdas.
-    return ReturnsVoid && !HasNoReturn
-            && ((funMode == Lambda) ||
-                D.getDiagnosticLevel(diag::warn_suggest_noreturn_block, FuncLoc)
-                  == DiagnosticsEngine::Ignored);
+    return ReturnsVoid && !HasNoReturn;
   }
 };
 
@@ -1810,6 +1838,13 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
       .setAlwaysAdd(Stmt::AttributedStmtClass);
   }
 
+  // Install the logical handler for -Wtautological-overlap-compare
+  std::unique_ptr<LogicalErrorHandler> LEH;
+  if (Diags.getDiagnosticLevel(diag::warn_tautological_overlap_comparison,
+                               D->getLocStart())) {
+    LEH.reset(new LogicalErrorHandler(S));
+    AC.getCFGBuildOptions().Observer = LEH.get();
+  }
 
   // Emit delayed diagnostics.
   if (!fscope->PossiblyUnreachableDiags.empty()) {
@@ -1954,6 +1989,13 @@ AnalysisBasedWarnings::IssueWarnings(sema::AnalysisBasedWarnings::Policy P,
     if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
       checkRecursiveFunction(S, FD, Body, AC);
     }
+  }
+
+  // If none of the previous checks caused a CFG build, trigger one here
+  // for -Wtautological-overlap-compare
+  if (Diags.getDiagnosticLevel(diag::warn_tautological_overlap_comparison,
+                               D->getLocStart())) {
+    AC.getCFG();
   }
 
   // Collect statistics about the CFG if it was built.

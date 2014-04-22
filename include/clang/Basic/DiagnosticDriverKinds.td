@@ -82,6 +82,9 @@ def err_drv_invalid_libcxx_deployment : Error<
 def err_drv_malformed_sanitizer_blacklist : Error<
   "malformed sanitizer blacklist: '%0'">;
 
+def err_target_unsupported_arch
+  : Error<"the target architecture '%0' is not supported by the target '%1'">;
+
 def err_drv_I_dash_not_supported : Error<
   "'%0' not supported, please use -iquote instead">;
 def err_drv_unknown_argument : Error<"unknown argument: '%0'">;
@@ -111,6 +114,8 @@ def err_drv_unknown_objc_runtime : Error<
   "unknown or ill-formed Objective-C runtime '%0'">;
 def err_drv_emit_llvm_link : Error<
    "-emit-llvm cannot be used when linking">;
+def err_drv_optimization_remark_pattern : Error<
+  "%0 in '%1'">;
 
 def warn_O4_is_O3 : Warning<"-O4 is equivalent to -O3">, InGroup<Deprecated>;
 def warn_drv_optimization_value : Warning<"optimization level '%0' is unsupported; using '%1%2' instead">,

@@ -39,9 +39,7 @@ public:
     Errors.push_back(Error.toStringFull());
   }
 
-  llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName,
-                                                const SourceRange &NameRange,
-                                                Diagnostics *Error) {
+  llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName) {
     const ExpectedMatchersTy::value_type *Matcher =
         &*ExpectedMatchers.find(MatcherName);
     return reinterpret_cast<MatcherCtor>(Matcher);
@@ -230,6 +228,10 @@ TEST(ParserTest, Errors) {
       "1:1: Matcher not found: Foo\n"
       "1:9: Error parsing matcher. Found token <123> while looking for ','.",
       ParseWithError("Foo(\"A\" 123)"));
+  EXPECT_EQ(
+      "1:1: Error parsing argument 1 for matcher stmt.\n"
+      "1:6: Value not found: someValue",
+      ParseWithError("stmt(someValue)"));
   EXPECT_EQ(
       "1:1: Matcher not found: Foo\n"
       "1:4: Error parsing matcher. Found end-of-code while looking for ')'.",

@@ -719,6 +719,32 @@ llvm::DIType CGDebugInfo::CreateType(const BlockPointerType *Ty,
   return BlockLiteralGeneric;
 }
 
+llvm::DIType CGDebugInfo::CreateType(const TemplateSpecializationType *Ty, llvm::DIFile Unit) {
+  assert(Ty->isTypeAlias());
+  llvm::DIType Src = getOrCreateType(Ty->getAliasedType(), Unit);
+  assert(Src);
+
+  SmallString<128> NS;
+  llvm::raw_svector_ostream OS(NS);
+  Ty->getTemplateName().print(OS, CGM.getContext().getPrintingPolicy(), /*qualified*/ false);
+
+  TemplateSpecializationType::PrintTemplateArgumentList(
+      OS, Ty->getArgs(), Ty->getNumArgs(),
+      CGM.getContext().getPrintingPolicy());
+
+  TypeAliasDecl *AliasDecl =
+      cast<TypeAliasTemplateDecl>(Ty->getTemplateName().getAsTemplateDecl())
+          ->getTemplatedDecl();
+
+  SourceLocation Loc = AliasDecl->getLocation();
+  llvm::DIFile File = getOrCreateFile(Loc);
+  unsigned Line = getLineNumber(Loc);
+
+  llvm::DIDescriptor Ctxt = getContextDescriptor(cast<Decl>(AliasDecl->getDeclContext()));
+
+  return DBuilder.createTypedef(Src, internString(OS.str()), File, Line, Ctxt);
+}
+
 llvm::DIType CGDebugInfo::CreateType(const TypedefType *Ty, llvm::DIFile Unit) {
   // Typedefs are derived from some other type.  If we have a typedef of a
   // typedef, make sure to emit the whole chain.
@@ -1330,14 +1356,11 @@ CollectFunctionTemplateParams(const FunctionDecl *FD, llvm::DIFile Unit) {
 llvm::DIArray CGDebugInfo::
 CollectCXXTemplateParams(const ClassTemplateSpecializationDecl *TSpecial,
                          llvm::DIFile Unit) {
-  llvm::PointerUnion<ClassTemplateDecl *,
-                     ClassTemplatePartialSpecializationDecl *>
-    PU = TSpecial->getSpecializedTemplateOrPartial();
-
-  TemplateParameterList *TPList = PU.is<ClassTemplateDecl *>() ?
-    PU.get<ClassTemplateDecl *>()->getTemplateParameters() :
-    PU.get<ClassTemplatePartialSpecializationDecl *>()->getTemplateParameters();
-  const TemplateArgumentList &TAList = TSpecial->getTemplateInstantiationArgs();
+  // Always get the full list of parameters, not just the ones from
+  // the specialization.
+  TemplateParameterList *TPList =
+    TSpecial->getSpecializedTemplate()->getTemplateParameters();
+  const TemplateArgumentList &TAList = TSpecial->getTemplateArgs();
   return CollectTemplateParams(TPList, TAList.asArray(), Unit);
 }
 
@@ -1932,9 +1955,12 @@ static QualType UnwrapTypeForDebugInfo(QualType T, const ASTContext &C) {
     switch (T->getTypeClass()) {
     default:
       return C.getQualifiedType(T.getTypePtr(), Quals);
-    case Type::TemplateSpecialization:
-      T = cast<TemplateSpecializationType>(T)->desugar();
-      break;
+    case Type::TemplateSpecialization: {
+      const auto *Spec = cast<TemplateSpecializationType>(T);
+      if (Spec->isTypeAlias())
+        return C.getQualifiedType(T.getTypePtr(), Quals);
+      T = Spec->desugar();
+      break; }
     case Type::TypeOfExpr:
       T = cast<TypeOfExprType>(T)->getUnderlyingExpr()->getType();
       break;
@@ -2191,8 +2217,10 @@ llvm::DIType CGDebugInfo::CreateTypeNode(QualType Ty, llvm::DIFile Unit) {
   case Type::Atomic:
     return CreateType(cast<AtomicType>(Ty), Unit);
 
-  case Type::Attributed:
   case Type::TemplateSpecialization:
+    return CreateType(cast<TemplateSpecializationType>(Ty), Unit);
+
+  case Type::Attributed:
   case Type::Elaborated:
   case Type::Paren:
   case Type::SubstTemplateTypeParm:
@@ -2473,7 +2501,10 @@ llvm::DICompositeType CGDebugInfo::getOrCreateFunctionType(const Decl *D,
 }
 
 /// EmitFunctionStart - Constructs the debug code for entering a function.
-void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
+void CGDebugInfo::EmitFunctionStart(GlobalDecl GD,
+                                    SourceLocation Loc,
+                                    SourceLocation ScopeLoc,
+                                    QualType FnType,
                                     llvm::Function *Fn,
                                     CGBuilderTy &Builder) {
 
@@ -2483,24 +2514,7 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   FnBeginRegionCount.push_back(LexicalBlockStack.size());
 
   const Decl *D = GD.getDecl();
-
-  // Use the location of the start of the function to determine where
-  // the function definition is located. By default use the location
-  // of the declaration as the location for the subprogram. A function
-  // may lack a declaration in the source code if it is created by code
-  // gen. (examples: _GLOBAL__I_a, __cxx_global_array_dtor, thunk).
   bool HasDecl = (D != 0);
-  SourceLocation Loc;
-  if (HasDecl) {
-    Loc = D->getLocation();
-
-    // If this is a function specialization then use the pattern body
-    // as the location for the function.
-    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
-      if (const FunctionDecl *SpecDecl = FD->getTemplateInstantiationPattern())
-        if (SpecDecl->hasBody(SpecDecl))
-          Loc = SpecDecl->getLocation();
-  }
 
   unsigned Flags = 0;
   llvm::DIFile Unit = getOrCreateFile(Loc);
@@ -2560,9 +2574,14 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   if (!Name.empty() && Name[0] == '\01')
     Name = Name.substr(1);
 
-  unsigned LineNo = getLineNumber(Loc);
-  if (!HasDecl || D->isImplicit())
+  if (!HasDecl || D->isImplicit()) {
     Flags |= llvm::DIDescriptor::FlagArtificial;
+    // Artificial functions without a location should not silently reuse CurLoc.
+    if (Loc.isInvalid())
+      CurLoc = SourceLocation();
+  }
+  unsigned LineNo = getLineNumber(Loc);
+  unsigned ScopeLine = getLineNumber(ScopeLoc);
 
   // FIXME: The function declaration we're constructing here is mostly reusing
   // declarations from CXXMethodDecl and not constructing new ones for arbitrary
@@ -2573,7 +2592,7 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
       DBuilder.createFunction(FDContext, Name, LinkageName, Unit, LineNo,
                               getOrCreateFunctionType(D, FnType, Unit),
                               Fn->hasInternalLinkage(), true /*definition*/,
-                              getLineNumber(CurLoc), Flags,
+                              ScopeLine, Flags,
                               CGM.getLangOpts().Optimize, Fn, TParamsArray,
                               getFunctionDeclaration(D));
   if (HasDecl)
@@ -2888,7 +2907,6 @@ llvm::DIType CGDebugInfo::CreateSelfType(const QualType &QualTy,
                                          llvm::DIType Ty) {
   llvm::DIType CachedTy = getTypeOrNull(QualTy);
   if (CachedTy) Ty = CachedTy;
-  else DEBUG(llvm::dbgs() << "No cached type for self.");
   return DBuilder.createObjectPointerType(Ty);
 }
 
@@ -3149,6 +3167,37 @@ CGDebugInfo::getOrCreateStaticDataMemberDeclarationOrNull(const VarDecl *D) {
   return T;
 }
 
+/// Recursively collect all of the member fields of a global anonymous decl and
+/// create static variables for them. The first time this is called it needs
+/// to be on a union and then from there we can have additional unnamed fields.
+llvm::DIGlobalVariable
+CGDebugInfo::CollectAnonRecordDecls(const RecordDecl *RD, llvm::DIFile Unit,
+                                    unsigned LineNo, StringRef LinkageName,
+                                    llvm::GlobalVariable *Var,
+                                    llvm::DIDescriptor DContext) {
+  llvm::DIGlobalVariable GV;
+
+  for (const auto *Field : RD->fields()) {
+    llvm::DIType FieldTy = getOrCreateType(Field->getType(), Unit);
+    StringRef FieldName = Field->getName();
+
+    // Ignore unnamed fields, but recurse into anonymous records.
+    if (FieldName.empty()) {
+      const RecordType *RT = dyn_cast<RecordType>(Field->getType());
+      if (RT)
+        GV = CollectAnonRecordDecls(RT->getDecl(), Unit, LineNo, LinkageName,
+                                    Var, DContext);
+      continue;
+    }
+    // Use VarDecl's Tag, Scope and Line number.
+    GV = DBuilder.createStaticVariable(DContext, FieldName, LinkageName, Unit,
+                                       LineNo, FieldTy,
+                                       Var->hasInternalLinkage(), Var,
+                                       llvm::DIDerivedType());
+  }
+  return GV;
+}
+
 /// EmitGlobalVariable - Emit information about a global variable.
 void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
                                      const VarDecl *D) {
@@ -3169,19 +3218,35 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
     T = CGM.getContext().getConstantArrayType(ET, ConstVal,
                                               ArrayType::Normal, 0);
   }
+
   StringRef DeclName = D->getName();
   StringRef LinkageName;
-  if (D->getDeclContext() && !isa<FunctionDecl>(D->getDeclContext())
-      && !isa<ObjCMethodDecl>(D->getDeclContext()))
+  if (D->getDeclContext() && !isa<FunctionDecl>(D->getDeclContext()) &&
+      !isa<ObjCMethodDecl>(D->getDeclContext()))
     LinkageName = Var->getName();
   if (LinkageName == DeclName)
     LinkageName = StringRef();
+
   llvm::DIDescriptor DContext =
     getContextDescriptor(dyn_cast<Decl>(D->getDeclContext()));
-  llvm::DIGlobalVariable GV = DBuilder.createStaticVariable(
-      DContext, DeclName, LinkageName, Unit, LineNo, getOrCreateType(T, Unit),
-      Var->hasInternalLinkage(), Var,
-      getOrCreateStaticDataMemberDeclarationOrNull(D));
+
+  // Attempt to store one global variable for the declaration - even if we
+  // emit a lot of fields.
+  llvm::DIGlobalVariable GV;
+
+  // If this is an anonymous union then we'll want to emit a global
+  // variable for each member of the anonymous union so that it's possible
+  // to find the name of any field in the union.
+  if (T->isUnionType() && DeclName.empty()) {
+    const RecordDecl *RD = cast<RecordType>(T)->getDecl();
+    assert(RD->isAnonymousStructOrUnion() && "unnamed non-anonymous struct or union?");
+    GV = CollectAnonRecordDecls(RD, Unit, LineNo, LinkageName, Var, DContext);
+  } else {
+      GV = DBuilder.createStaticVariable(
+        DContext, DeclName, LinkageName, Unit, LineNo, getOrCreateType(T, Unit),
+        Var->hasInternalLinkage(), Var,
+        getOrCreateStaticDataMemberDeclarationOrNull(D));
+  }
   DeclCache.insert(std::make_pair(D->getCanonicalDecl(), llvm::WeakVH(GV)));
 }
 
@@ -3227,10 +3292,20 @@ void CGDebugInfo::EmitGlobalVariable(const ValueDecl *VD,
   // Do not use DIGlobalVariable for enums.
   if (Ty.getTag() == llvm::dwarf::DW_TAG_enumeration_type)
     return;
+  // Do not emit separate definitions for function local const/statics.
+  if (isa<FunctionDecl>(VD->getDeclContext()))
+    return;
+  VD = cast<ValueDecl>(VD->getCanonicalDecl());
+  auto pair = DeclCache.insert(std::make_pair(VD, llvm::WeakVH()));
+  if (!pair.second)
+    return;
+  llvm::DIDescriptor DContext =
+      getContextDescriptor(dyn_cast<Decl>(VD->getDeclContext()));
   llvm::DIGlobalVariable GV = DBuilder.createStaticVariable(
-      Unit, Name, Name, Unit, getLineNumber(VD->getLocation()), Ty, true, Init,
+      DContext, Name, StringRef(), Unit, getLineNumber(VD->getLocation()), Ty,
+      true, Init,
       getOrCreateStaticDataMemberDeclarationOrNull(cast<VarDecl>(VD)));
-  DeclCache.insert(std::make_pair(VD->getCanonicalDecl(), llvm::WeakVH(GV)));
+  pair.first->second = llvm::WeakVH(GV);
 }
 
 llvm::DIScope CGDebugInfo::getCurrentContextDescriptor(const Decl *D) {
@@ -3274,12 +3349,12 @@ CGDebugInfo::EmitNamespaceAlias(const NamespaceAliasDecl &NA) {
   if (const NamespaceAliasDecl *Underlying =
           dyn_cast<NamespaceAliasDecl>(NA.getAliasedNamespace()))
     // This could cache & dedup here rather than relying on metadata deduping.
-    R = DBuilder.createImportedModule(
+    R = DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(NA.getDeclContext())),
         EmitNamespaceAlias(*Underlying), getLineNumber(NA.getLocation()),
         NA.getName());
   else
-    R = DBuilder.createImportedModule(
+    R = DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(NA.getDeclContext())),
         getOrCreateNameSpace(cast<NamespaceDecl>(NA.getAliasedNamespace())),
         getLineNumber(NA.getLocation()), NA.getName());

@@ -10,18 +10,21 @@
 // A intra-procedural analysis for thread safety (e.g. deadlocks and race
 // conditions), based off of an annotation system.
 //
-// See http://clang.llvm.org/docs/LanguageExtensions.html#thread-safety-annotation-checking
+// See http://clang.llvm.org/docs/ThreadSafetyAnalysis.html
 // for more information.
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/Analysis/Analyses/ThreadSafety.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Analysis/Analyses/PostOrderCFGView.h"
+#include "clang/Analysis/Analyses/ThreadSafety.h"
+#include "clang/Analysis/Analyses/ThreadSafetyTIL.h"
+#include "clang/Analysis/Analyses/ThreadSafetyTraverse.h"
+#include "clang/Analysis/Analyses/ThreadSafetyCommon.h"
 #include "clang/Analysis/AnalysisContext.h"
 #include "clang/Analysis/CFG.h"
 #include "clang/Analysis/CFGStmtMap.h"
@@ -1066,8 +1069,8 @@ public:
   }
 
   /// Builds the variable map.
-  void traverseCFG(CFG *CFGraph, PostOrderCFGView *SortedGraph,
-                     std::vector<CFGBlockInfo> &BlockInfo);
+  void traverseCFG(CFG *CFGraph, const PostOrderCFGView *SortedGraph,
+                   std::vector<CFGBlockInfo> &BlockInfo);
 
 protected:
   // Get the current context index
@@ -1286,15 +1289,13 @@ void LocalVariableMap::intersectBackEdge(Context C1, Context C2) {
 //   ...                 { y -> y1           | x3 = 2, x2 = 1, ... }
 //
 void LocalVariableMap::traverseCFG(CFG *CFGraph,
-                                   PostOrderCFGView *SortedGraph,
+                                   const PostOrderCFGView *SortedGraph,
                                    std::vector<CFGBlockInfo> &BlockInfo) {
   PostOrderCFGView::CFGBlockSet VisitedBlocks(CFGraph);
 
   CtxIndices.resize(CFGraph->getNumBlockIDs());
 
-  for (PostOrderCFGView::iterator I = SortedGraph->begin(),
-       E = SortedGraph->end(); I!= E; ++I) {
-    const CFGBlock *CurrBlock = *I;
+  for (const auto *CurrBlock : *SortedGraph) {
     int CurrBlockID = CurrBlock->getBlockID();
     CFGBlockInfo *CurrBlockInfo = &BlockInfo[CurrBlockID];
 
@@ -1373,11 +1374,9 @@ void LocalVariableMap::traverseCFG(CFG *CFGraph,
 /// Find the appropriate source locations to use when producing diagnostics for
 /// each block in the CFG.
 static void findBlockLocations(CFG *CFGraph,
-                               PostOrderCFGView *SortedGraph,
+                               const PostOrderCFGView *SortedGraph,
                                std::vector<CFGBlockInfo> &BlockInfo) {
-  for (PostOrderCFGView::iterator I = SortedGraph->begin(),
-       E = SortedGraph->end(); I!= E; ++I) {
-    const CFGBlock *CurrBlock = *I;
+  for (const auto *CurrBlock : *SortedGraph) {
     CFGBlockInfo *CurrBlockInfo = &BlockInfo[CurrBlock->getBlockID()];
 
     // Find the source location of the last statement in the block, if the
@@ -2362,16 +2361,21 @@ inline bool neverReturns(const CFGBlock* B) {
 /// at the end of each block, and issue warnings for thread safety violations.
 /// Each block in the CFG is traversed exactly once.
 void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
-  CFG *CFGraph = AC.getCFG();
-  if (!CFGraph) return;
-  const NamedDecl *D = dyn_cast_or_null<NamedDecl>(AC.getDecl());
+  // TODO: this whole function needs be rewritten as a visitor for CFGWalker.
+  // For now, we just use the walker to set things up.
+  threadSafety::CFGWalker walker;
+  if (!walker.init(AC))
+    return;
 
   // AC.dumpCFG(true);
+  // threadSafety::printSCFG(walker);
 
-  if (!D)
-    return;  // Ignore anonymous functions for now.
+  CFG *CFGraph = walker.getGraph();
+  const NamedDecl *D = walker.getDecl();
+
   if (D->hasAttr<NoThreadSafetyAnalysisAttr>())
     return;
+
   // FIXME: Do something a bit more intelligent inside constructor and
   // destructor code.  Constructors and destructors must assume unique access
   // to 'this', so checks on member variable access is disabled, but we should
@@ -2387,7 +2391,7 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
   // We need to explore the CFG via a "topological" ordering.
   // That way, we will be guaranteed to have information about required
   // predecessor locksets when exploring a new block.
-  PostOrderCFGView *SortedGraph = AC.getAnalysis<PostOrderCFGView>();
+  const PostOrderCFGView *SortedGraph = walker.getSortedGraph();
   PostOrderCFGView::CFGBlockSet VisitedBlocks(CFGraph);
 
   // Mark entry block as reachable
@@ -2416,23 +2420,22 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
     StringRef CapDiagKind = "mutex";
 
     SourceLocation Loc = D->getLocation();
-    for (unsigned i = 0; i < ArgAttrs.size(); ++i) {
-      Attr *Attr = ArgAttrs[i];
+    for (const auto *Attr : ArgAttrs) {
       Loc = Attr->getLocation();
-      if (RequiresCapabilityAttr *A = dyn_cast<RequiresCapabilityAttr>(Attr)) {
+      if (const auto *A = dyn_cast<RequiresCapabilityAttr>(Attr)) {
         getMutexIDs(A->isShared() ? SharedLocksToAdd : ExclusiveLocksToAdd, A,
                     0, D);
         CapDiagKind = ClassifyDiagnostic(A);
-      } else if (auto *A = dyn_cast<ReleaseCapabilityAttr>(Attr)) {
+      } else if (const auto *A = dyn_cast<ReleaseCapabilityAttr>(Attr)) {
         // UNLOCK_FUNCTION() is used to hide the underlying lock implementation.
         // We must ignore such methods.
         if (A->args_size() == 0)
           return;
         // FIXME -- deal with exclusive vs. shared unlock functions?
-        getMutexIDs(ExclusiveLocksToAdd, A, (Expr*) 0, D);
-        getMutexIDs(LocksReleased, A, (Expr*) 0, D);
+        getMutexIDs(ExclusiveLocksToAdd, A, nullptr, D);
+        getMutexIDs(LocksReleased, A, nullptr, D);
         CapDiagKind = ClassifyDiagnostic(A);
-      } else if (auto *A = dyn_cast<AcquireCapabilityAttr>(Attr)) {
+      } else if (const auto *A = dyn_cast<AcquireCapabilityAttr>(Attr)) {
         if (A->args_size() == 0)
           return;
         getMutexIDs(A->isShared() ? SharedLocksAcquired
@@ -2457,9 +2460,7 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
               CapDiagKind);
   }
 
-  for (PostOrderCFGView::iterator I = SortedGraph->begin(),
-       E = SortedGraph->end(); I!= E; ++I) {
-    const CFGBlock *CurrBlock = *I;
+  for (const auto *CurrBlock : *SortedGraph) {
     int CurrBlockID = CurrBlock->getBlockID();
     CFGBlockInfo *CurrBlockInfo = &BlockInfo[CurrBlockID];
 
@@ -2485,7 +2486,7 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
          PE  = CurrBlock->pred_end(); PI != PE; ++PI) {
 
       // if *PI -> CurrBlock is a back edge
-      if (*PI == 0 || !VisitedBlocks.alreadySet(*PI))
+      if (*PI == nullptr || !VisitedBlocks.alreadySet(*PI))
         continue;
 
       int PrevBlockID = (*PI)->getBlockID();
@@ -2528,9 +2529,7 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
 
     // Process continue and break blocks. Assume that the lockset for the
     // resulting block is unaffected by any discrepancies in them.
-    for (unsigned SpecialI = 0, SpecialN = SpecialBlocks.size();
-         SpecialI < SpecialN; ++SpecialI) {
-      CFGBlock *PrevBlock = SpecialBlocks[SpecialI];
+    for (const auto *PrevBlock : SpecialBlocks) {
       int PrevBlockID = PrevBlock->getBlockID();
       CFGBlockInfo *PrevBlockInfo = &BlockInfo[PrevBlockID];
 
@@ -2626,17 +2625,14 @@ void ThreadSafetyAnalyzer::runAnalysis(AnalysisDeclContext &AC) {
   // by *-LOCK_FUNCTION and UNLOCK_FUNCTION.  The intersect below will then
   // issue the appropriate warning.
   // FIXME: the location here is not quite right.
-  for (unsigned i=0,n=ExclusiveLocksAcquired.size(); i<n; ++i) {
-    ExpectedExitSet.addLock(FactMan, ExclusiveLocksAcquired[i],
+  for (const auto &Lock : ExclusiveLocksAcquired)
+    ExpectedExitSet.addLock(FactMan, Lock,
                             LockData(D->getLocation(), LK_Exclusive));
-  }
-  for (unsigned i=0,n=SharedLocksAcquired.size(); i<n; ++i) {
-    ExpectedExitSet.addLock(FactMan, SharedLocksAcquired[i],
+  for (const auto &Lock : SharedLocksAcquired)
+    ExpectedExitSet.addLock(FactMan, Lock,
                             LockData(D->getLocation(), LK_Shared));
-  }
-  for (unsigned i=0,n=LocksReleased.size(); i<n; ++i) {
-    ExpectedExitSet.removeLock(FactMan, LocksReleased[i]);
-  }
+  for (const auto &Lock : LocksReleased)
+    ExpectedExitSet.removeLock(FactMan, Lock);
 
   // FIXME: Should we call this function for all blocks which exit the function?
   intersectAndWarn(ExpectedExitSet, Final->ExitSet,

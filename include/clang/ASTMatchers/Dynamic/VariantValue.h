@@ -209,8 +209,9 @@ public:
   VariantValue(const std::string &String);
   VariantValue(const VariantMatcher &Matchers);
 
-  /// \brief Returns true iff this is an empty value.
-  bool isNothing() const { return Type == VT_Nothing; }
+  /// \brief Returns true iff this is not an empty value.
+  LLVM_EXPLICIT operator bool() const { return hasValue(); }
+  bool hasValue() const { return Type != VT_Nothing; }
 
   /// \brief Unsigned value functions.
   bool isUnsigned() const;

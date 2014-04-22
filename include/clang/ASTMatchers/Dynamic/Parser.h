@@ -71,10 +71,8 @@ public:
     /// \param Name The name of the value to lookup.
     ///
     /// \return The named value. It could be any type that VariantValue
-    ///   supports. A 'nothing' value means that the name is not recognized.
-    virtual VariantValue getNamedValue(StringRef Name) {
-      return VariantValue();
-    }
+    ///   supports. An empty value means that the name is not recognized.
+    virtual VariantValue getNamedValue(StringRef Name);
 
     /// \brief Process a matcher expression.
     ///
@@ -103,15 +101,10 @@ public:
     ///
     /// \param MatcherName The matcher name found by the parser.
     ///
-    /// \param NameRange The location of the name in the matcher source.
-    ///   Useful for error reporting.
-    ///
-    /// \return The matcher constructor, or Optional<MatcherCtor>() if an error
-    ///   occurred. In that case, \c Error will contain a description of the
-    ///   error.
+    /// \return The matcher constructor, or Optional<MatcherCtor>() if not
+    /// found.
     virtual llvm::Optional<MatcherCtor>
-    lookupMatcherCtor(StringRef MatcherName, const SourceRange &NameRange,
-                      Diagnostics *Error) = 0;
+    lookupMatcherCtor(StringRef MatcherName) = 0;
   };
 
   /// \brief Sema implementation that uses the matcher registry to process the
@@ -119,9 +112,10 @@ public:
   class RegistrySema : public Parser::Sema {
    public:
     virtual ~RegistrySema();
-    llvm::Optional<MatcherCtor> lookupMatcherCtor(StringRef MatcherName,
-                                                  const SourceRange &NameRange,
-                                                  Diagnostics *Error) override;
+
+    llvm::Optional<MatcherCtor>
+    lookupMatcherCtor(StringRef MatcherName) override;
+
     VariantMatcher actOnMatcherExpression(MatcherCtor Ctor,
                                           const SourceRange &NameRange,
                                           StringRef BindID,
@@ -189,7 +183,9 @@ private:
          Diagnostics *Error);
 
   bool parseExpressionImpl(VariantValue *Value);
-  bool parseMatcherExpressionImpl(VariantValue *Value);
+  bool parseMatcherExpressionImpl(const TokenInfo &NameToken,
+                                  VariantValue *Value);
+  bool parseIdentifierPrefixImpl(VariantValue *Value);
 
   void addCompletion(const TokenInfo &CompToken, StringRef TypedText,
                      StringRef Decl);

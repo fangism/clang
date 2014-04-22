@@ -1854,7 +1854,8 @@ bool Sema::DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
     NamedDecl *ND = Corrected.getCorrectionDecl();
     if (ND) {
       if (Corrected.isOverloaded()) {
-        OverloadCandidateSet OCS(R.getNameLoc());
+        OverloadCandidateSet OCS(R.getNameLoc(),
+                                 OverloadCandidateSet::CSK_Normal);
         OverloadCandidateSet::iterator Best;
         for (TypoCorrection::decl_iterator CD = Corrected.begin(),
                                         CDEnd = Corrected.end();
@@ -2872,6 +2873,7 @@ ExprResult Sema::ActOnPredefinedExpr(SourceLocation Loc, tok::TokenKind Kind) {
   case tok::kw___func__: IT = PredefinedExpr::Func; break; // [C99 6.4.2.2]
   case tok::kw___FUNCTION__: IT = PredefinedExpr::Function; break;
   case tok::kw___FUNCDNAME__: IT = PredefinedExpr::FuncDName; break; // [MS]
+  case tok::kw___FUNCSIG__: IT = PredefinedExpr::FuncSig; break; // [MS]
   case tok::kw_L__FUNCTION__: IT = PredefinedExpr::LFunction; break;
   case tok::kw___PRETTY_FUNCTION__: IT = PredefinedExpr::PrettyFunction; break;
   }
@@ -3974,8 +3976,8 @@ namespace {
 class FunctionCallCCC : public FunctionCallFilterCCC {
 public:
   FunctionCallCCC(Sema &SemaRef, const IdentifierInfo *FuncName,
-                  unsigned NumArgs, bool HasExplicitTemplateArgs)
-      : FunctionCallFilterCCC(SemaRef, NumArgs, HasExplicitTemplateArgs),
+                  unsigned NumArgs, MemberExpr *ME)
+      : FunctionCallFilterCCC(SemaRef, NumArgs, false, ME),
         FunctionName(FuncName) {}
 
   bool ValidateCandidate(const TypoCorrection &candidate) override {
@@ -3992,17 +3994,20 @@ private:
 };
 }
 
-static TypoCorrection TryTypoCorrectionForCall(Sema &S,
-                                               DeclarationNameInfo FuncName,
+static TypoCorrection TryTypoCorrectionForCall(Sema &S, Expr *Fn,
+                                               FunctionDecl *FDecl,
                                                ArrayRef<Expr *> Args) {
-  FunctionCallCCC CCC(S, FuncName.getName().getAsIdentifierInfo(),
-                      Args.size(), false);
-  if (TypoCorrection Corrected =
-          S.CorrectTypo(FuncName, Sema::LookupOrdinaryName,
-                        S.getScopeForContext(S.CurContext), NULL, CCC)) {
+  MemberExpr *ME = dyn_cast<MemberExpr>(Fn);
+  DeclarationName FuncName = FDecl->getDeclName();
+  SourceLocation NameLoc = ME ? ME->getMemberLoc() : Fn->getLocStart();
+  FunctionCallCCC CCC(S, FuncName.getAsIdentifierInfo(), Args.size(), ME);
+
+  if (TypoCorrection Corrected = S.CorrectTypo(
+          DeclarationNameInfo(FuncName, NameLoc), Sema::LookupOrdinaryName,
+          S.getScopeForContext(S.CurContext), NULL, CCC)) {
     if (NamedDecl *ND = Corrected.getCorrectionDecl()) {
       if (Corrected.isOverloaded()) {
-        OverloadCandidateSet OCS(FuncName.getLoc());
+        OverloadCandidateSet OCS(NameLoc, OverloadCandidateSet::CSK_Normal);
         OverloadCandidateSet::iterator Best;
         for (TypoCorrection::decl_iterator CD = Corrected.begin(),
                                            CDEnd = Corrected.end();
@@ -4011,7 +4016,7 @@ static TypoCorrection TryTypoCorrectionForCall(Sema &S,
             S.AddOverloadCandidate(FD, DeclAccessPair::make(FD, AS_none), Args,
                                    OCS);
         }
-        switch (OCS.BestViableFunction(S, FuncName.getLoc(), Best)) {
+        switch (OCS.BestViableFunction(S, NameLoc, Best)) {
         case OR_Success:
           ND = Best->Function;
           Corrected.setCorrectionDecl(ND);
@@ -4062,13 +4067,8 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   // arguments for the remaining parameters), don't make the call.
   if (Args.size() < NumParams) {
     if (Args.size() < MinArgs) {
-      MemberExpr *ME = dyn_cast<MemberExpr>(Fn);
       TypoCorrection TC;
-      if (FDecl && (TC = TryTypoCorrectionForCall(
-                        *this, DeclarationNameInfo(FDecl->getDeclName(),
-                                                   (ME ? ME->getMemberLoc()
-                                                       : Fn->getLocStart())),
-                        Args))) {
+      if (FDecl && (TC = TryTypoCorrectionForCall(*this, Fn, FDecl, Args))) {
         unsigned diag_id =
             MinArgs == NumParams && !Proto->isVariadic()
                 ? diag::err_typecheck_call_too_few_args_suggest
@@ -4103,13 +4103,8 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   // them.
   if (Args.size() > NumParams) {
     if (!Proto->isVariadic()) {
-      MemberExpr *ME = dyn_cast<MemberExpr>(Fn);
       TypoCorrection TC;
-      if (FDecl && (TC = TryTypoCorrectionForCall(
-                        *this, DeclarationNameInfo(FDecl->getDeclName(),
-                                                   (ME ? ME->getMemberLoc()
-                                                       : Fn->getLocStart())),
-                        Args))) {
+      if (FDecl && (TC = TryTypoCorrectionForCall(*this, Fn, FDecl, Args))) {
         unsigned diag_id =
             MinArgs == NumParams && !Proto->isVariadic()
                 ? diag::err_typecheck_call_too_many_args_suggest
@@ -6696,35 +6691,40 @@ QualType Sema::InvalidOperands(SourceLocation Loc, ExprResult &LHS,
   return QualType();
 }
 
-/// Try to convert a value of non-vector type to a vector type by
-/// promoting (and only promoting) the type to the element type of the
-/// vector and then performing a vector splat.
+/// Try to convert a value of non-vector type to a vector type by converting
+/// the type to the element type of the vector and then performing a splat.
+/// If the language is OpenCL, we only use conversions that promote scalar
+/// rank; for C, Obj-C, and C++ we allow any real scalar conversion except
+/// for float->int.
 ///
 /// \param scalar - if non-null, actually perform the conversions
 /// \return true if the operation fails (but without diagnosing the failure)
-static bool tryVectorPromoteAndSplat(Sema &S, ExprResult *scalar,
+static bool tryVectorConvertAndSplat(Sema &S, ExprResult *scalar,
                                      QualType scalarTy,
                                      QualType vectorEltTy,
                                      QualType vectorTy) {
   // The conversion to apply to the scalar before splatting it,
   // if necessary.
   CastKind scalarCast = CK_Invalid;
-
+  
   if (vectorEltTy->isIntegralType(S.Context)) {
-    if (!scalarTy->isIntegralType(S.Context)) return true;
-    int order = S.Context.getIntegerTypeOrder(vectorEltTy, scalarTy);
-    if (order < 0) return true;
-    if (order > 0) scalarCast = CK_IntegralCast;
+    if (!scalarTy->isIntegralType(S.Context))
+      return true;
+    if (S.getLangOpts().OpenCL &&
+        S.Context.getIntegerTypeOrder(vectorEltTy, scalarTy) < 0)
+      return true;
+    scalarCast = CK_IntegralCast;
   } else if (vectorEltTy->isRealFloatingType()) {
     if (scalarTy->isRealFloatingType()) {
-      int order = S.Context.getFloatingTypeOrder(vectorEltTy, scalarTy);
-      if (order < 0) return true;
-      if (order > 0) scalarCast = CK_FloatingCast;
-    } else if (scalarTy->isIntegralType(S.Context)) {
-      scalarCast = CK_IntegralToFloating;
-    } else {
-      return true;
+      if (S.getLangOpts().OpenCL &&
+          S.Context.getFloatingTypeOrder(vectorEltTy, scalarTy) < 0)
+        return true;
+      scalarCast = CK_FloatingCast;
     }
+    else if (scalarTy->isIntegralType(S.Context))
+      scalarCast = CK_IntegralToFloating;
+    else
+      return true;
   } else {
     return true;
   }
@@ -6732,7 +6732,7 @@ static bool tryVectorPromoteAndSplat(Sema &S, ExprResult *scalar,
   // Adjust scalar if desired.
   if (scalar) {
     if (scalarCast != CK_Invalid)
-       *scalar = S.ImpCastExprToType(scalar->take(), vectorEltTy, scalarCast);
+      *scalar = S.ImpCastExprToType(scalar->take(), vectorEltTy, scalarCast);
     *scalar = S.ImpCastExprToType(scalar->take(), vectorTy, CK_VectorSplat);
   }
   return false;
@@ -6775,6 +6775,19 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
     return RHSType;
   }
 
+  // If there's an ext-vector type and a scalar, try to convert the scalar to
+  // the vector element type and splat.
+  if (!RHSVecType && isa<ExtVectorType>(LHSVecType)) {
+    if (!tryVectorConvertAndSplat(*this, &RHS, RHSType,
+                                  LHSVecType->getElementType(), LHSType))
+      return LHSType;
+  }
+  if (!LHSVecType && isa<ExtVectorType>(RHSVecType)) {
+    if (!tryVectorConvertAndSplat(*this, (IsCompAssign ? 0 : &LHS), LHSType,
+                                  RHSVecType->getElementType(), RHSType))
+      return RHSType;
+  }
+
   // If we're allowing lax vector conversions, only the total (data) size
   // needs to be the same.
   // FIXME: Should we really be allowing this?
@@ -6783,19 +6796,6 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
     QualType resultType = LHSType;
     RHS = ImpCastExprToType(RHS.take(), resultType, CK_BitCast);
     return resultType;
-  }
-
-  // If there's an ext-vector type and a scalar, try to promote (and
-  // only promote) and splat the scalar to the vector type.
-  if (!RHSVecType && isa<ExtVectorType>(LHSVecType)) {
-    if (!tryVectorPromoteAndSplat(*this, &RHS, RHSType,
-                                  LHSVecType->getElementType(), LHSType))
-      return LHSType;
-  }
-  if (!LHSVecType && isa<ExtVectorType>(RHSVecType)) {
-    if (!tryVectorPromoteAndSplat(*this, (IsCompAssign ? 0 : &LHS), LHSType,
-                                  RHSVecType->getElementType(), RHSType))
-      return RHSType;
   }
 
   // Okay, the expression is invalid.

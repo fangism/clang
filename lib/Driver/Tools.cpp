@@ -473,8 +473,13 @@ static bool isSignedCharDefault(const llvm::Triple &Triple) {
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
   case llvm::Triple::arm64:
+  case llvm::Triple::arm64_be:
   case llvm::Triple::arm:
   case llvm::Triple::armeb:
+    if (Triple.isOSDarwin() || Triple.isOSWindows())
+      return true;
+    return false;
+
   case llvm::Triple::ppc:
   case llvm::Triple::ppc64:
     if (Triple.isOSDarwin())
@@ -645,6 +650,11 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
       break;
     }
 
+    // FIXME: this is invalid for WindowsCE
+    case llvm::Triple::Win32:
+      FloatABI = "hard";
+      break;
+
     case llvm::Triple::FreeBSD:
       switch(Triple.getEnvironment()) {
       case llvm::Triple::GNUEABIHF:
@@ -772,6 +782,9 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
     } else {
       ABIName = "apcs-gnu";
     }
+  } else if (Triple.isOSWindows()) {
+    // FIXME: this is invalid for WindowsCE
+    ABIName = "aapcs";
   } else {
     // Select the default based on the platform.
     switch(Triple.getEnvironment()) {
@@ -839,13 +852,13 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
                     true))
     CmdArgs.push_back("-no-implicit-float");
 
-    // llvm does not support reserving registers in general. There is support
-    // for reserving r9 on ARM though (defined as a platform-specific register
-    // in ARM EABI).
-    if (Args.hasArg(options::OPT_ffixed_r9)) {
-      CmdArgs.push_back("-backend-option");
-      CmdArgs.push_back("-arm-reserve-r9");
-    }
+  // llvm does not support reserving registers in general. There is support
+  // for reserving r9 on ARM though (defined as a platform-specific register
+  // in ARM EABI).
+  if (Args.hasArg(options::OPT_ffixed_r9)) {
+    CmdArgs.push_back("-backend-option");
+    CmdArgs.push_back("-arm-reserve-r9");
+  }
 }
 
 /// getARM64TargetCPU - Get the (LLVM) name of the ARM64 cpu we are targeting.
@@ -863,8 +876,12 @@ static std::string getARM64TargetCPU(const ArgList &Args) {
   // At some point, we may need to check -march here, but for now we only
   // one arm64 architecture.
 
-  // Default to "cyclone" CPU.
-  return "cyclone";
+  // Make sure we pick "cyclone" if -arch is used.
+  // FIXME: Should this be picked by checking the target triple instead?
+  if (Args.getLastArg(options::OPT_arch))
+    return "cyclone";
+
+  return "generic";
 }
 
 void Clang::AddARM64TargetArgs(const ArgList &Args,
@@ -1324,6 +1341,10 @@ static std::string getCPUName(const ArgList &Args, const llvm::Triple &T) {
   case llvm::Triple::aarch64_be:
     return getAArch64TargetCPU(Args, T);
 
+  case llvm::Triple::arm64:
+  case llvm::Triple::arm64_be:
+    return getARM64TargetCPU(Args);
+
   case llvm::Triple::arm:
   case llvm::Triple::armeb:
   case llvm::Triple::thumb:
@@ -1552,6 +1573,8 @@ static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     break;
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
+  case llvm::Triple::arm64:
+  case llvm::Triple::arm64_be:
     getAArch64TargetFeatures(D, Args, Features);
     break;
   case llvm::Triple::x86:
@@ -2198,6 +2221,16 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   std::string TripleStr = getToolChain().ComputeEffectiveClangTriple(Args);
   CmdArgs.push_back(Args.MakeArgString(TripleStr));
 
+  const llvm::Triple TT(TripleStr);
+  if (TT.isOSWindows() && (TT.getArch() == llvm::Triple::arm ||
+                           TT.getArch() == llvm::Triple::thumb)) {
+    unsigned Offset = TT.getArch() == llvm::Triple::arm ? 4 : 6;
+    unsigned Version;
+    TT.getArchName().substr(Offset).getAsInteger(10, Version);
+    if (Version < 7)
+      D.Diag(diag::err_target_unsupported_arch) << TT.getArchName() << TripleStr;
+  }
+
   // Push all default warning arguments that are specific to
   // the given target.  These come before user provided warning options
   // are provided.
@@ -2486,8 +2519,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // enabled.  This alias option is being used to simplify the hasFlag logic.
   OptSpecifier StrictAliasingAliasOption = OFastEnabled ? options::OPT_Ofast :
     options::OPT_fstrict_aliasing;
+  // We turn strict aliasing off by default if we're in CL mode, since MSVC
+  // doesn't do any TBAA.
+  bool TBAAOnByDefault = !getToolChain().getDriver().IsCLMode();
   if (!Args.hasFlag(options::OPT_fstrict_aliasing, StrictAliasingAliasOption,
-                    options::OPT_fno_strict_aliasing, true))
+                    options::OPT_fno_strict_aliasing, TBAAOnByDefault))
     CmdArgs.push_back("-relaxed-aliasing");
   if (!Args.hasFlag(options::OPT_fstruct_path_tbaa,
                     options::OPT_fno_struct_path_tbaa))
@@ -2732,6 +2768,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     break;
 
   case llvm::Triple::arm64:
+  case llvm::Triple::arm64_be:
     AddARM64TargetArgs(Args, CmdArgs);
     break;
 
@@ -3387,6 +3424,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       A->render(Args, CmdArgs);
   }
 
+  if (Arg *A = Args.getLastArg(options::OPT_Rpass_EQ))
+    A->render(Args, CmdArgs);
+
   if (Args.hasArg(options::OPT_mkernel)) {
     if (!Args.hasArg(options::OPT_fapple_kext) && types::isCXX(InputType))
       CmdArgs.push_back("-fapple-kext");
@@ -3442,6 +3482,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_fno_modules_decluse,
                    false)) {
     CmdArgs.push_back("-fmodules-decluse");
+  }
+
+  // -fmodules-strict-decluse is like -fmodule-decluse, but also checks that
+  // all #included headers are part of modules.
+  if (Args.hasFlag(options::OPT_fmodules_strict_decluse,
+                   options::OPT_fno_modules_strict_decluse,
+                   false)) {
+    CmdArgs.push_back("-fmodules-strict-decluse");
   }
 
   // -fmodule-name specifies the module that is currently being built (or
@@ -4232,12 +4280,6 @@ void Clang::AddClangCLArgs(const ArgList &Args, ArgStringList &CmdArgs) const {
   if (!Args.hasArg(options::OPT_frtti, options::OPT_fno_rtti))
     CmdArgs.push_back("-fno-rtti");
 
-  // Let -ffunction-sections imply -fdata-sections.
-  if (Arg * A = Args.getLastArg(options::OPT_ffunction_sections,
-                                options::OPT_fno_function_sections))
-    if (A->getOption().matches(options::OPT_ffunction_sections))
-      CmdArgs.push_back("-fdata-sections");
-
   const Driver &D = getToolChain().getDriver();
   Arg *MostGeneralArg = Args.getLastArg(options::OPT__SLASH_vmg);
   Arg *BestCaseArg = Args.getLastArg(options::OPT__SLASH_vmb);
@@ -4835,9 +4877,16 @@ const char *arm::getARMCPUForMArch(const ArgList &Args,
     }
   }
 
-  if (Triple.getOS() == llvm::Triple::NetBSD) {
+  switch (Triple.getOS()) {
+  case llvm::Triple::NetBSD:
     if (MArch == "armv6")
       return "arm1176jzf-s";
+    break;
+  case llvm::Triple::Win32:
+    // FIXME: this is invalid for WindowsCE
+    return "cortex-a9";
+  default:
+    break;
   }
 
   const char *result = llvm::StringSwitch<const char *>(MArch)
@@ -6815,7 +6864,8 @@ static StringRef getLinuxDynamicLinker(const ArgList &Args,
   else if (ToolChain.getArch() == llvm::Triple::aarch64 ||
            ToolChain.getArch() == llvm::Triple::arm64)
     return "/lib/ld-linux-aarch64.so.1";
-  else if (ToolChain.getArch() == llvm::Triple::aarch64_be)
+  else if (ToolChain.getArch() == llvm::Triple::aarch64_be ||
+           ToolChain.getArch() == llvm::Triple::arm64_be)
     return "/lib/ld-linux-aarch64_be.so.1";
   else if (ToolChain.getArch() == llvm::Triple::arm ||
            ToolChain.getArch() == llvm::Triple::thumb) {
@@ -6916,7 +6966,8 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   else if (ToolChain.getArch() == llvm::Triple::aarch64 ||
            ToolChain.getArch() == llvm::Triple::arm64)
     CmdArgs.push_back("aarch64linux");
-  else if (ToolChain.getArch() == llvm::Triple::aarch64_be)
+  else if (ToolChain.getArch() == llvm::Triple::aarch64_be ||
+           ToolChain.getArch() == llvm::Triple::arm64_be)
     CmdArgs.push_back("aarch64_be_linux");
   else if (ToolChain.getArch() == llvm::Triple::arm
            ||  ToolChain.getArch() == llvm::Triple::thumb)
@@ -7522,6 +7573,10 @@ Command *visualstudio::Compile::GetCommand(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(A->getOption().getID() == options::OPT_ffunction_sections
                           ? "/Gy"
                           : "/Gy-");
+  if (Arg *A = Args.getLastArg(options::OPT_fdata_sections,
+                               options::OPT_fno_data_sections))
+    CmdArgs.push_back(
+        A->getOption().getID() == options::OPT_fdata_sections ? "/Gw" : "/Gw-");
   if (Args.hasArg(options::OPT_fsyntax_only))
     CmdArgs.push_back("/Zs");
   if (Args.hasArg(options::OPT_g_Flag, options::OPT_gline_tables_only))

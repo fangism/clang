@@ -1437,6 +1437,7 @@ bool Generic_GCC::GCCInstallationDetector::getBiarchSibling(Multilib &M) const {
     BiarchTripleAliases.append(
         AArch64Triples, AArch64Triples + llvm::array_lengthof(AArch64Triples));
     break;
+  case llvm::Triple::arm64_be:
   case llvm::Triple::aarch64_be:
     LibDirs.append(AArch64beLibDirs,
                    AArch64beLibDirs + llvm::array_lengthof(AArch64beLibDirs));
@@ -2132,6 +2133,7 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
          getTriple().getArch() == llvm::Triple::aarch64 ||
          getTriple().getArch() == llvm::Triple::aarch64_be ||
          getTriple().getArch() == llvm::Triple::arm64 ||
+         getTriple().getArch() == llvm::Triple::arm64_be ||
          getTriple().getArch() == llvm::Triple::arm ||
          getTriple().getArch() == llvm::Triple::armeb ||
          getTriple().getArch() == llvm::Triple::thumb ||
@@ -2145,6 +2147,7 @@ void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
       getTriple().getArch() == llvm::Triple::aarch64 ||
       getTriple().getArch() == llvm::Triple::aarch64_be ||
       getTriple().getArch() == llvm::Triple::arm64 ||
+      getTriple().getArch() == llvm::Triple::arm64_be ||
       (getTriple().getOS() == llvm::Triple::Linux &&
        (!V.isOlderThan(4, 7, 0) ||
         getTriple().getEnvironment() == llvm::Triple::Android));
@@ -2594,6 +2597,9 @@ NetBSD::NetBSD(const Driver &D, const llvm::Triple& Triple, const ArgList &Args)
       else if (tools::mips::hasMipsAbiArg(Args, "64"))
         getFilePaths().push_back("=/usr/lib/64");
       break;
+    case llvm::Triple::sparc:
+      getFilePaths().push_back("=/usr/lib/sparc");
+      break;
     default:
       break;
     }
@@ -2888,6 +2894,7 @@ static std::string getMultiarchTriple(const llvm::Triple &TargetTriple,
     if (llvm::sys::fs::exists(SysRoot + "/lib/aarch64-linux-gnu"))
       return "aarch64-linux-gnu";
     return TargetTriple.str();
+  case llvm::Triple::arm64_be:
   case llvm::Triple::aarch64_be:
     if (llvm::sys::fs::exists(SysRoot + "/lib/aarch64_be-linux-gnu"))
       return "aarch64_be-linux-gnu";
@@ -3262,7 +3269,8 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     MultiarchIncludeDirs = X86MultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::aarch64 ||
              getTriple().getArch() == llvm::Triple::aarch64_be ||
-             getTriple().getArch() == llvm::Triple::arm64) {
+             getTriple().getArch() == llvm::Triple::arm64 ||
+             getTriple().getArch() == llvm::Triple::arm64_be) {
     MultiarchIncludeDirs = AArch64MultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::arm) {
     if (getTriple().getEnvironment() == llvm::Triple::GNUEABIHF)

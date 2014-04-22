@@ -1322,7 +1322,9 @@ CharUnits ASTContext::getDeclAlign(const Decl *D, bool ForAlignof) const {
             Align = std::max(Align, Target->getLargeArrayAlign());
         }
 
-        // Walk through any array types while we're at it.
+        // Keep track of extra alignment requirements on the array itself, then
+        // work with the element type.
+        Align = std::max(Align, getPreferredTypeAlign(T.getTypePtr()));
         T = getBaseElementType(arrayType);
       }
       Align = std::max(Align, getPreferredTypeAlign(T.getTypePtr()));
@@ -3559,12 +3561,28 @@ bool ASTContext::QIdProtocolsAdoptObjCObjectProtocols(QualType QT,
   CollectInheritedProtocols(IDecl, InheritedProtocols);
   if (InheritedProtocols.empty())
     return false;
-      
+  // Check that if every protocol in list of id<plist> conforms to a protcol
+  // of IDecl's, then bridge casting is ok.
+  bool Conforms = false;
+  for (auto *Proto : OPT->quals()) {
+    Conforms = false;
+    for (auto *PI : InheritedProtocols) {
+      if (ProtocolCompatibleWithProtocol(Proto, PI)) {
+        Conforms = true;
+        break;
+      }
+    }
+    if (!Conforms)
+      break;
+  }
+  if (Conforms)
+    return true;
+  
   for (auto *PI : InheritedProtocols) {
     // If both the right and left sides have qualifiers.
     bool Adopts = false;
     for (auto *Proto : OPT->quals()) {
-      // return 'true' if '*PI' is in the inheritance hierarchy of Proto
+      // return 'true' if 'PI' is in the inheritance hierarchy of Proto
       if ((Adopts = ProtocolCompatibleWithProtocol(PI, Proto)))
         break;
     }
@@ -5018,6 +5036,8 @@ void ASTContext::getObjCEncodingForPropertyDecl(const ObjCPropertyDecl *PD,
       S += ",C";
     if (PD->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_retain)
       S += ",&";
+    if (PD->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_weak)
+      S += ",W";
   } else {
     switch (PD->getSetterKind()) {
     case ObjCPropertyDecl::Assign: break;
@@ -7731,7 +7751,7 @@ QualType ASTContext::GetBuiltinType(unsigned Id,
   return getFunctionType(ResType, ArgTypes, EPI);
 }
 
-GVALinkage ASTContext::GetGVALinkageForFunction(const FunctionDecl *FD) {
+GVALinkage ASTContext::GetGVALinkageForFunction(const FunctionDecl *FD) const {
   if (!FD->isExternallyVisible())
     return GVA_Internal;
 
@@ -7743,7 +7763,7 @@ GVALinkage ASTContext::GetGVALinkageForFunction(const FunctionDecl *FD) {
     break;
 
   case TSK_ExplicitInstantiationDefinition:
-    return GVA_ExplicitTemplateInstantiation;
+    return GVA_StrongODR;
 
   case TSK_ExplicitInstantiationDeclaration:
   case TSK_ImplicitInstantiation:
@@ -7775,6 +7795,12 @@ GVALinkage ASTContext::GetGVALinkageForFunction(const FunctionDecl *FD) {
                                        == TSK_ExplicitInstantiationDeclaration)
     return GVA_C99Inline;
 
+  // Functions specified with extern and inline in -fms-compatibility mode
+  // forcibly get emitted.  While the body of the function cannot be later
+  // replaced, the function definition cannot be discarded.
+  if (FD->getMostRecentDecl()->isMSExternInline())
+    return GVA_StrongODR;
+
   return GVA_CXXInline;
 }
 
@@ -7792,7 +7818,7 @@ GVALinkage ASTContext::GetGVALinkageForVariable(const VarDecl *VD) {
   // Fall through to treat this like any other instantiation.
 
   case TSK_ExplicitInstantiationDefinition:
-    return GVA_ExplicitTemplateInstantiation;
+    return GVA_StrongODR;
 
   case TSK_ImplicitInstantiation:
     return GVA_TemplateInstantiation;

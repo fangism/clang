@@ -12,8 +12,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "format-formatter"
-
 #include "BreakableToken.h"
 #include "ContinuationIndenter.h"
 #include "WhitespaceManager.h"
@@ -22,6 +20,8 @@
 #include "clang/Format/Format.h"
 #include "llvm/Support/Debug.h"
 #include <string>
+
+#define DEBUG_TYPE "format-formatter"
 
 namespace clang {
 namespace format {
@@ -142,10 +142,11 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     return true;
   if (((Previous.Type == TT_DictLiteral && Previous.is(tok::l_brace)) ||
        Previous.Type == TT_ArrayInitializerLSquare) &&
+      Style.ColumnLimit > 0 &&
       getLengthToMatchingParen(Previous) + State.Column > getColumnLimit(State))
     return true;
   if (Current.Type == TT_CtorInitializerColon &&
-      (!Style.AllowShortFunctionsOnASingleLine ||
+      ((Style.AllowShortFunctionsOnASingleLine != FormatStyle::SFS_All) ||
        Style.BreakConstructorInitializersBeforeComma || Style.ColumnLimit != 0))
     return true;
 
@@ -173,8 +174,7 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     if (Previous.Type == TT_BinaryOperator &&
         (!IsComparison || LHSIsBinaryExpr) &&
         Current.Type != TT_BinaryOperator && // For >>.
-        !Current.isTrailingComment() &&
-        !Previous.isOneOf(tok::lessless, tok::question) &&
+        !Current.isTrailingComment() && !Previous.is(tok::lessless) &&
         Previous.getPrecedence() != prec::Assignment &&
         State.Stack.back().BreakBeforeParameter)
       return true;
@@ -301,7 +301,9 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
   else if ((Previous.Type == TT_BinaryOperator ||
             Previous.Type == TT_ConditionalExpr ||
             Previous.Type == TT_CtorInitializerColon) &&
-           (Previous.getPrecedence() != prec::Assignment ||
+           ((Previous.getPrecedence() != prec::Assignment &&
+             (Previous.isNot(tok::lessless) || Previous.OperatorIndex != 0 ||
+              !Previous.LastOperator)) ||
             Current.StartsBinaryExpression))
     // Always indent relative to the RHS of the expression unless this is a
     // simple assignment without binary expression on the RHS. Also indent
@@ -350,7 +352,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
 
   // Breaking before the first "<<" is generally not desirable if the LHS is
   // short. Also always add the penalty if the LHS is split over mutliple lines
-  // to avoid unncessary line breaks that just work around this penalty.
+  // to avoid unnecessary line breaks that just work around this penalty.
   if (NextNonComment->is(tok::lessless) &&
       State.Stack.back().FirstLessLess == 0 &&
       (State.Column <= Style.ColumnLimit / 3 ||
@@ -472,6 +474,9 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
     else
       return State.FirstIndent;
   }
+  if (Current.is(tok::identifier) && Current.Next &&
+      Current.Next->Type == TT_DictLiteral)
+    return State.Stack.back().Indent;
   if (NextNonComment->isStringLiteral() && State.StartOfStringLiteral != 0)
     return State.StartOfStringLiteral;
   if (NextNonComment->is(tok::lessless) &&
@@ -485,7 +490,8 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
     }
   }
   if (State.Stack.back().QuestionColumn != 0 &&
-      (NextNonComment->Type == TT_ConditionalExpr ||
+      ((NextNonComment->is(tok::colon) &&
+        NextNonComment->Type == TT_ConditionalExpr) ||
        Previous.Type == TT_ConditionalExpr))
     return State.Stack.back().QuestionColumn;
   if (Previous.is(tok::comma) && State.Stack.back().VariablePos != 0)
@@ -547,9 +553,15 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
 
   if (Current.Type == TT_InheritanceColon)
     State.Stack.back().AvoidBinPacking = true;
-  if (Current.is(tok::lessless) && Current.Type != TT_OverloadedOperator &&
-      State.Stack.back().FirstLessLess == 0)
-    State.Stack.back().FirstLessLess = State.Column;
+  if (Current.is(tok::lessless) && Current.Type != TT_OverloadedOperator) {
+    if (State.Stack.back().FirstLessLess == 0)
+      State.Stack.back().FirstLessLess = State.Column;
+    else
+      State.Stack.back().LastOperatorWrapped = Newline;
+  }
+  if ((Current.Type == TT_BinaryOperator && Current.isNot(tok::lessless)) ||
+      Current.Type == TT_ConditionalExpr)
+    State.Stack.back().LastOperatorWrapped = Newline;
   if (Current.Type == TT_ArraySubscriptLSquare &&
       State.Stack.back().StartOfArraySubscripts == 0)
     State.Stack.back().StartOfArraySubscripts = State.Column;
@@ -563,9 +575,11 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
         std::min(State.LowestLevelOnLine, State.ParenLevel);
   if (Current.isMemberAccess())
     State.Stack.back().StartOfFunctionCall =
-        Current.LastInChainOfCalls ? 0 : State.Column + Current.ColumnWidth;
+        Current.LastOperator ? 0 : State.Column + Current.ColumnWidth;
   if (Current.Type == TT_ObjCSelectorName)
     State.Stack.back().ObjCSelectorNameFound = true;
+  if (Current.Type == TT_LambdaLSquare)
+    ++State.Stack.back().LambdasFound;
   if (Current.Type == TT_CtorInitializerColon) {
     // Indent 2 from the column, so:
     // SomeClass::SomeClass()
@@ -609,6 +623,24 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
           std::max(std::max(State.Column, NewParenState.Indent),
                    State.Stack.back().LastSpace);
 
+    // Don't allow the RHS of an operator to be split over multiple lines unless
+    // there is a line-break right after the operator.
+    // Exclude relational operators, as there, it is always more desirable to
+    // have the LHS 'left' of the RHS.
+    if (Previous && Previous->getPrecedence() > prec::Assignment &&
+        (Previous->Type == TT_BinaryOperator ||
+         Previous->Type == TT_ConditionalExpr) &&
+        Previous->getPrecedence() != prec::Relational) {
+      bool BreakBeforeOperator = Previous->is(tok::lessless) ||
+                                 (Previous->Type == TT_BinaryOperator &&
+                                  Style.BreakBeforeBinaryOperators) ||
+                                 (Previous->Type == TT_ConditionalExpr &&
+                                  Style.BreakBeforeTernaryOperators);
+      if ((!Newline && !BreakBeforeOperator) ||
+          (!State.Stack.back().LastOperatorWrapped && BreakBeforeOperator))
+        NewParenState.NoLineBreak = true;
+    }
+
     // Do not indent relative to the fake parentheses inserted for "." or "->".
     // This is a special case to make the following to statements consistent:
     //   OuterFunction(InnerFunctionCall( // break
@@ -642,7 +674,8 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
     bool BreakBeforeParameter = false;
     if (Current.is(tok::l_brace) ||
         Current.Type == TT_ArrayInitializerLSquare) {
-      if (Current.MatchingParen && Current.BlockKind == BK_Block) {
+      if (Current.MatchingParen && Current.BlockKind == BK_Block &&
+          State.Stack.back().LambdasFound <= 1) {
         // If this is an l_brace starting a nested block, we pretend (wrt. to
         // indentation) that we already consumed the corresponding r_brace.
         // Thus, we remove all ParenStates caused by fake parentheses that end
@@ -658,6 +691,10 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
         //   SomeFunction(a, [] {
         //                     f();  // break
         //                   });
+        //
+        // If we have already found more than one lambda introducers on this
+        // level, we opt out of this because similarity between the lambdas is
+        // more important.
         for (unsigned i = 0; i != Current.MatchingParen->FakeRParens; ++i) {
           assert(State.Stack.size() > 1);
           if (State.Stack.size() == 1) {
@@ -688,6 +725,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
       AvoidBinPacking = Current.BlockKind == BK_Block ||
                         Current.Type == TT_ArrayInitializerLSquare ||
                         Current.Type == TT_DictLiteral ||
+                        !Style.BinPackParameters ||
                         (NextNoComment &&
                          NextNoComment->Type == TT_DesignatedInitializerPeriod);
     } else {
@@ -925,6 +963,12 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
           Token->replaceWhitespace(LineIndex, TailOffset, Split, Whitespaces);
         break;
       }
+
+      // When breaking before a tab character, it may be moved by a few columns,
+      // but will still be expanded to the next tab stop, so we don't save any
+      // columns.
+      if (NewRemainingTokenColumns == RemainingTokenColumns)
+        break;
 
       assert(NewRemainingTokenColumns < RemainingTokenColumns);
       if (!DryRun)
