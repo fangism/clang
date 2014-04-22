@@ -1982,10 +1982,6 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = new toolchains::XCore(*this, Target, Args);
         break;
       }
-      if (Target.isOSBinFormatELF()) {
-        TC = new toolchains::Generic_ELF(*this, Target, Args);
-        break;
-      }
       TC = new toolchains::Generic_GCC(*this, Target, Args);
       break;
     }
