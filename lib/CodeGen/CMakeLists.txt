@@ -38,14 +38,17 @@ add_clang_library(clangCodeGen
   CGExprComplex.cpp
   CGExprConstant.cpp
   CGExprScalar.cpp
+  CGLoopInfo.cpp
   CGObjC.cpp
   CGObjCGNU.cpp
   CGObjCMac.cpp
   CGObjCRuntime.cpp
   CGOpenCLRuntime.cpp
+  CGOpenMPRuntime.cpp
   CGRTTI.cpp
   CGRecordLayoutBuilder.cpp
   CGStmt.cpp
+  CGStmtOpenMP.cpp
   CGVTT.cpp
   CGVTables.cpp
   CodeGenABITypes.cpp

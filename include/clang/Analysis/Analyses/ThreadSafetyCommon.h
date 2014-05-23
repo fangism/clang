@@ -27,6 +27,7 @@
 #include "clang/Analysis/AnalysisContext.h"
 #include "clang/Basic/OperatorKinds.h"
 
+#include <memory>
 #include <vector>
 
 
@@ -192,8 +193,8 @@ public:
   const CFG *getGraph() const { return CFGraph; }
   CFG *getGraph() { return CFGraph; }
 
-  const FunctionDecl *getDecl() const {
-    return dyn_cast<FunctionDecl>(ACtx->getDecl());
+  const NamedDecl *getDecl() const {
+    return dyn_cast<NamedDecl>(ACtx->getDecl());
   }
 
   const PostOrderCFGView *getSortedGraph() const { return SortedGraph; }
@@ -234,14 +235,11 @@ public:
   };
 
   SExprBuilder(til::MemRegionRef A)
-    : Arena(A), SelfVar(nullptr), Scfg(nullptr), CallCtx(nullptr),
-      CurrentBB(nullptr), CurrentBlockInfo(nullptr) {
+      : Arena(A), SelfVar(nullptr), Scfg(nullptr), CurrentBB(nullptr),
+        CurrentBlockInfo(nullptr) {
     // FIXME: we don't always have a self-variable.
-    SelfVar = new (Arena) til::Variable(til::Variable::VK_SFun);
-  }
-  ~SExprBuilder() {
-    if (CallCtx)
-      delete CallCtx;
+    SelfVar = new (Arena) til::Variable();
+    SelfVar->setKind(til::Variable::VK_SFun);
   }
 
   // Translate a clang statement or expression to a TIL expression.
@@ -271,9 +269,12 @@ private:
                                            CallingContext *Ctx);
   til::SExpr *translateUnaryOperator(const UnaryOperator *UO,
                                      CallingContext *Ctx);
+  til::SExpr *translateBinOp(til::TIL_BinaryOpcode Op,
+                             const BinaryOperator *BO,
+                             CallingContext *Ctx, bool Reverse = false);
   til::SExpr *translateBinAssign(til::TIL_BinaryOpcode Op,
                                  const BinaryOperator *BO,
-                                 CallingContext *Ctx);
+                                 CallingContext *Ctx, bool Assign = false);
   til::SExpr *translateBinaryOperator(const BinaryOperator *BO,
                                       CallingContext *Ctx);
   til::SExpr *translateCastExpr(const CastExpr *CE, CallingContext *Ctx);
@@ -329,7 +330,7 @@ private:
   // We implement the CFGVisitor API
   friend class CFGWalker;
 
-  void enterCFG(CFG *Cfg, const FunctionDecl *D, const CFGBlock *First);
+  void enterCFG(CFG *Cfg, const NamedDecl *D, const CFGBlock *First);
   void enterCFGBlock(const CFGBlock *B);
   bool visitPredecessors() { return true; }
   void handlePredecessor(const CFGBlock *Pred);
@@ -349,7 +350,8 @@ private:
   }
   til::SExpr *getCurrentLVarDefinition(const ValueDecl *VD);
 
-  til::SExpr *addStatement(til::SExpr *E, const Stmt *S, const ValueDecl *VD=0);
+  til::SExpr *addStatement(til::SExpr *E, const Stmt *S,
+                           const ValueDecl *VD = nullptr);
   til::SExpr *lookupVarDecl(const ValueDecl *VD);
   til::SExpr *addVarDecl(const ValueDecl *VD, til::SExpr *E);
   til::SExpr *updateVarDecl(const ValueDecl *VD, til::SExpr *E);
@@ -369,7 +371,7 @@ private:
   std::vector<til::BasicBlock *> BlockMap; // Map from clang to til BBs.
   std::vector<BlockInfo> BBInfo;           // Extra information per BB.
                                            // Indexed by clang BlockID.
-  SExprBuilder::CallingContext *CallCtx;   // Root calling context
+  std::unique_ptr<SExprBuilder::CallingContext> CallCtx; // Root calling context
 
   LVarDefinitionMap CurrentLVarMap;
   std::vector<til::Variable*> CurrentArguments;
