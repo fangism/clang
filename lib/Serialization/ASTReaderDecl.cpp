@@ -1405,7 +1405,7 @@ void ASTDeclReader::ReadCXXRecordDefinition(CXXRecordDecl *D) {
   // that all other deserialized declarations will see it.
   CXXRecordDecl *Canon = D->getCanonicalDecl();
   if (Canon == D) {
-    D->DefinitionData.setNotUpdated(DD);
+    D->DefinitionData = DD;
     D->IsCompleteDefinition = true;
   } else if (auto *CanonDD = Canon->DefinitionData.getNotUpdated()) {
     // We have already deserialized a definition of this record. This
@@ -1417,7 +1417,7 @@ void ASTDeclReader::ReadCXXRecordDefinition(CXXRecordDecl *D) {
     D->IsCompleteDefinition = false;
     MergeDefinitionData(D, *DD);
   } else {
-    Canon->DefinitionData.setNotUpdated(DD);
+    Canon->DefinitionData = DD;
     D->DefinitionData = Canon->DefinitionData;
     D->IsCompleteDefinition = true;
 
@@ -1646,8 +1646,6 @@ void ASTDeclReader::VisitClassTemplateDecl(ClassTemplateDecl *D) {
       memcpy(CommonPtr->LazySpecializations, SpecIDs.data(), 
              SpecIDs.size() * sizeof(DeclID));
     }
-    
-    CommonPtr->InjectedClassNameType = Reader.readType(F, Record, Idx);
   }
 
   if (D->getTemplatedDecl()->TemplateOrInstantiation) {
@@ -1655,7 +1653,7 @@ void ASTDeclReader::VisitClassTemplateDecl(ClassTemplateDecl *D) {
     // its corresponding type yet (see VisitCXXRecordDeclImpl), so reconstruct
     // it now.
     Reader.Context.getInjectedClassNameType(
-        D->getTemplatedDecl(), D->getCommonPtr()->InjectedClassNameType);
+        D->getTemplatedDecl(), D->getInjectedClassNameSpecialization());
   }
 }
 
@@ -2493,6 +2491,32 @@ void ASTDeclReader::attachPreviousDecl(Decl *D, Decl *Previous) {
   D->IdentifierNamespace |=
       Previous->IdentifierNamespace &
       (Decl::IDNS_Ordinary | Decl::IDNS_Tag | Decl::IDNS_Type);
+
+  // If the previous declaration is an inline function declaration, then this
+  // declaration is too.
+  if (auto *FD = dyn_cast<FunctionDecl>(D)) {
+    if (cast<FunctionDecl>(Previous)->IsInline != FD->IsInline) {
+      // FIXME: [dcl.fct.spec]p4:
+      //   If a function with external linkage is declared inline in one
+      //   translation unit, it shall be declared inline in all translation
+      //   units in which it appears.
+      //
+      // Be careful of this case:
+      //
+      // module A:
+      //   template<typename T> struct X { void f(); };
+      //   template<typename T> inline void X<T>::f() {}
+      //
+      // module B instantiates the declaration of X<int>::f
+      // module C instantiates the definition of X<int>::f
+      //
+      // If module B and C are merged, we do not have a violation of this rule.
+      //
+      //if (!FD->IsInline || Previous->getOwningModule())
+      //  Diag(FD->getLocation(), diag::err_odr_differing_inline);
+      FD->IsInline = true;
+    }
+  }
 }
 
 template<typename DeclT>
@@ -3164,8 +3188,17 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
         return;
       }
 
-      if (Record[Idx++])
-        FD->setImplicitlyInline();
+      if (Record[Idx++]) {
+        // Maintain AST consistency: any later redeclarations of this function
+        // are inline if this one is. (We might have merged another declaration
+        // into this one.)
+        for (auto *D = FD->getMostRecentDecl(); /**/;
+             D = D->getPreviousDecl()) {
+          D->setImplicitlyInline();
+          if (D == FD)
+            break;
+        }
+      }
       FD->setInnerLocStart(Reader.ReadSourceLocation(ModuleFile, Record, Idx));
       if (auto *CD = dyn_cast<CXXConstructorDecl>(FD))
         std::tie(CD->CtorInitializers, CD->NumCtorInitializers) =
@@ -3201,6 +3234,16 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
             cast<ClassTemplateSpecializationDecl>(RD);
         Spec->setTemplateSpecializationKind(TSK);
         Spec->setPointOfInstantiation(POI);
+
+        if (Record[Idx++]) {
+          auto PartialSpec =
+              ReadDeclAs<ClassTemplatePartialSpecializationDecl>(Record, Idx);
+          SmallVector<TemplateArgument, 8> TemplArgs;
+          Reader.ReadTemplateArgumentList(TemplArgs, F, Record, Idx);
+          auto *TemplArgList = TemplateArgumentList::CreateCopy(
+              Reader.getContext(), TemplArgs.data(), TemplArgs.size());
+          Spec->setInstantiationOf(PartialSpec, TemplArgList);
+        }
       }
 
       RD->setTagKind((TagTypeKind)Record[Idx++]);

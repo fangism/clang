@@ -866,6 +866,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(MACRO_OFFSET);
   RECORD(MACRO_TABLE);
   RECORD(LATE_PARSED_TEMPLATE);
+  RECORD(OPTIMIZE_PRAGMA_OPTIONS);
 
   // SourceManager Block.
   BLOCK(SOURCE_MANAGER_BLOCK);
@@ -3850,6 +3851,14 @@ void ASTWriter::WriteLateParsedTemplates(Sema &SemaRef) {
   Stream.EmitRecord(LATE_PARSED_TEMPLATE, Record);
 }
 
+/// \brief Write the state of 'pragma clang optimize' at the end of the module.
+void ASTWriter::WriteOptimizePragmaOptions(Sema &SemaRef) {
+  RecordData Record;
+  SourceLocation PragmaLoc = SemaRef.getOptimizeOffPragmaLocation();
+  AddSourceLocation(PragmaLoc, Record);
+  Stream.EmitRecord(OPTIMIZE_PRAGMA_OPTIONS, Record);
+}
+
 //===----------------------------------------------------------------------===//
 // General Serialization Routines
 //===----------------------------------------------------------------------===//
@@ -4466,6 +4475,8 @@ void ASTWriter::WriteASTCore(Sema &SemaRef,
   WriteMergedDecls();
   WriteObjCCategories();
   WriteLateParsedTemplates(SemaRef);
+  if(!WritingModule)
+    WriteOptimizePragmaOptions(SemaRef);
 
   // Some simple statistics
   Record.clear();
@@ -4531,6 +4542,19 @@ void ASTWriter::WriteDeclUpdatesBlocks(RecordDataImpl &OffsetsRecord) {
           auto *Spec = cast<ClassTemplateSpecializationDecl>(RD);
           Record.push_back(Spec->getTemplateSpecializationKind());
           AddSourceLocation(Spec->getPointOfInstantiation(), Record);
+
+          // The instantiation might have been resolved to a partial
+          // specialization. If so, record which one.
+          auto From = Spec->getInstantiatedFrom();
+          if (auto PartialSpec =
+                From.dyn_cast<ClassTemplatePartialSpecializationDecl*>()) {
+            Record.push_back(true);
+            AddDeclRef(PartialSpec, Record);
+            AddTemplateArgumentList(&Spec->getTemplateInstantiationArgs(),
+                                    Record);
+          } else {
+            Record.push_back(false);
+          }
         }
         Record.push_back(RD->getTagKind());
         AddSourceLocation(RD->getLocation(), Record);
