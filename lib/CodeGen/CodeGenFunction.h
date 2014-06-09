@@ -1659,6 +1659,9 @@ public:
   void EmitDeleteCall(const FunctionDecl *DeleteFD, llvm::Value *Ptr,
                       QualType DeleteTy);
 
+  RValue EmitBuiltinNewDeleteCall(const FunctionProtoType *Type,
+                                  const Expr *Arg, bool IsDelete);
+
   llvm::Value* EmitCXXTypeidExpr(const CXXTypeidExpr *E);
   llvm::Value *EmitDynamicCast(llvm::Value *V, const CXXDynamicCastExpr *DCE);
   llvm::Value* EmitCXXUuidofExpr(const CXXUuidofExpr *E);
@@ -1857,9 +1860,14 @@ public:
   void EmitGotoStmt(const GotoStmt &S);
   void EmitIndirectGotoStmt(const IndirectGotoStmt &S);
   void EmitIfStmt(const IfStmt &S);
-  void EmitWhileStmt(const WhileStmt &S);
-  void EmitDoStmt(const DoStmt &S);
-  void EmitForStmt(const ForStmt &S);
+
+  void EmitCondBrHints(llvm::LLVMContext &Context, llvm::BranchInst *CondBr,
+                       const ArrayRef<const Attr *> &Attrs);
+  void EmitWhileStmt(const WhileStmt &S,
+                     const ArrayRef<const Attr *> &Attrs = None);
+  void EmitDoStmt(const DoStmt &S, const ArrayRef<const Attr *> &Attrs = None);
+  void EmitForStmt(const ForStmt &S,
+                   const ArrayRef<const Attr *> &Attrs = None);
   void EmitReturnStmt(const ReturnStmt &S);
   void EmitDeclStmt(const DeclStmt &S);
   void EmitBreakStmt(const BreakStmt &S);
@@ -1883,7 +1891,8 @@ public:
 
   void EmitCXXTryStmt(const CXXTryStmt &S);
   void EmitSEHTryStmt(const SEHTryStmt &S);
-  void EmitCXXForRangeStmt(const CXXForRangeStmt &S);
+  void EmitCXXForRangeStmt(const CXXForRangeStmt &S,
+                           const ArrayRef<const Attr *> &Attrs = None);
 
   llvm::Function *EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K);
   llvm::Function *GenerateCapturedStmtFunction(const CapturedDecl *CD,
@@ -2641,7 +2650,8 @@ public:
 
   void EmitCallArgs(CallArgList &Args, ArrayRef<QualType> ArgTypes,
                     CallExpr::const_arg_iterator ArgBeg,
-                    CallExpr::const_arg_iterator ArgEnd, bool ForceColumnInfo);
+                    CallExpr::const_arg_iterator ArgEnd,
+                    bool ForceColumnInfo = false);
 
 private:
   const TargetCodeGenInfo &getTargetHooks() const {

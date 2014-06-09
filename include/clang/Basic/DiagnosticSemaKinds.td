@@ -542,6 +542,15 @@ def err_pragma_pop_visibility_mismatch : Error<
   "#pragma visibility pop with no matching #pragma visibility push">;
 def note_surrounding_namespace_starts_here : Note<
   "surrounding namespace with visibility attribute starts here">;
+def err_pragma_loop_invalid_value : Error<
+  "%select{invalid|missing}0 value%select{ %1|}0; expected a positive integer value">;
+def err_pragma_loop_invalid_keyword : Error<
+  "%select{invalid|missing}0 keyword%select{ %1|}0; expected 'enable' or 'disable'">;
+def err_pragma_loop_compatibility : Error<
+  "%select{incompatible|duplicate}0 directives '%1(%2)' and '%3(%4)'">;
+def err_pragma_loop_precedes_nonloop : Error<
+  "expected a for, while, or do-while loop to follow the '#pragma clang loop' "
+  "directive">;
 
 /// Objective-C parser diagnostics
 def err_duplicate_class_def : Error<
@@ -2109,6 +2118,9 @@ def err_attribute_dllimport_data_definition : Error<
   "definition of dllimport data">;
 def err_attribute_dllimport_static_field_definition : Error<
   "definition of dllimport static field not allowed">;
+def warn_attribute_dllimport_static_field_definition : Warning<
+  "definition of dllimport static field">,
+  InGroup<DiagGroup<"dllimport-static-field-def">>;
 def err_attribute_dll_member_of_dll_class : Error<
   "attribute %q0 cannot be applied to member of %q1 class">;
 def err_attribute_weakref_not_static : Error<
@@ -2388,10 +2400,27 @@ def warn_impcast_pointer_to_bool : Warning<
     "address of%select{| function| array}0 '%1' will always evaluate to "
     "'true'">,
     InGroup<PointerBoolConversion>;
+def warn_this_bool_conversion : Warning<
+  "'this' pointer cannot be null in well-defined C++ code; pointer may be "
+  "assumed to always convert to true">, InGroup<UndefinedBoolConversion>;
+def warn_address_of_reference_bool_conversion : Warning<
+  "reference cannot be bound to dereferenced null pointer in well-defined C++ "
+  "code; pointer may be assumed to always convert to true">,
+  InGroup<UndefinedBoolConversion>;
+
 def warn_null_pointer_compare : Warning<
     "comparison of %select{address of|function|array}0 '%1' %select{not |}2"
     "equal to a null pointer is always %select{true|false}2">,
     InGroup<TautologicalPointerCompare>;
+def warn_this_null_compare : Warning<
+  "'this' pointer cannot be null in well-defined C++ code; comparison may be "
+  "assumed to always evaluate to %select{true|false}0">,
+  InGroup<TautologicalUndefinedCompare>;
+def warn_address_of_reference_null_compare : Warning<
+  "reference cannot be bound to dereferenced null pointer in well-defined C++ "
+  "code; comparison may be assumed to always evaluate to "
+  "%select{true|false}0">,
+  InGroup<TautologicalUndefinedCompare>;
 
 def note_function_warning_silence : Note<
     "prefix with the address-of operator to silence this warning">;
@@ -3194,6 +3223,9 @@ def err_pointer_to_member_oper_value_classify: Error<
   "%select{rvalue|lvalue}1">;
 def ext_ms_deref_template_argument: ExtWarn<
   "non-type template argument containing a dereference operation is a "
+  "Microsoft extension">, InGroup<Microsoft>;
+def ext_ms_delayed_template_argument: ExtWarn<
+  "using the undeclared type %0 as a default template argument is a "
   "Microsoft extension">, InGroup<Microsoft>;
 
 // C++ template specialization
@@ -5921,6 +5953,7 @@ let CategoryName = "Inline Assembly Issue" in {
     "%diff{$ matching output with type $|}0,1">;
   def err_asm_incomplete_type : Error<"asm operand has incomplete type %0">;
   def err_asm_unknown_register_name : Error<"unknown register name '%0' in asm">;
+  def err_asm_bad_register_type : Error<"bad type for named register variable">;
   def err_asm_invalid_input_size : Error<
     "invalid input size for constraint '%0'">;
   def err_invalid_asm_cast_lvalue : Error<
@@ -6682,6 +6715,7 @@ def err_argument_invalid_range : Error<
 
 def err_builtin_longjmp_invalid_val : Error<
   "argument to __builtin_longjmp must be a constant 1">;
+def err_builtin_requires_language : Error<"'%0' is only available in %1">;
 
 def err_constant_integer_arg_type : Error<
   "argument to %0 must be a constant integer">;
@@ -6919,6 +6953,8 @@ def err_omp_private_incomplete_type : Error<
   "a private variable with incomplete type %0">;
 def err_omp_firstprivate_incomplete_type : Error<
   "a firstprivate variable with incomplete type %0">;
+def err_omp_lastprivate_incomplete_type : Error<
+  "a lastprivate variable with incomplete type %0">;
 def err_omp_unexpected_clause_value : Error<
   "expected %0 in OpenMP clause '%1'">;
 def err_omp_expected_var_name : Error<

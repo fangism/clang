@@ -544,7 +544,7 @@ static void maybeDiagnoseTemplateParameterShadow(Sema &SemaRef, Scope *S,
 /// ParamNameLoc is the location of the parameter name (if any).
 /// If the type parameter has a default argument, it will be added
 /// later via ActOnTypeParameterDefault.
-Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename, bool Ellipsis,
+Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename,
                                SourceLocation EllipsisLoc,
                                SourceLocation KeyLoc,
                                IdentifierInfo *ParamName,
@@ -560,10 +560,11 @@ Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename, bool Ellipsis,
   if (!ParamName)
     Loc = KeyLoc;
 
+  bool IsParameterPack = EllipsisLoc.isValid();
   TemplateTypeParmDecl *Param
     = TemplateTypeParmDecl::Create(Context, Context.getTranslationUnitDecl(),
                                    KeyLoc, Loc, Depth, Position, ParamName,
-                                   Typename, Ellipsis);
+                                   Typename, IsParameterPack);
   Param->setAccess(AS_public);
   if (Invalid)
     Param->setInvalidDecl();
@@ -579,7 +580,7 @@ Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename, bool Ellipsis,
   // C++0x [temp.param]p9:
   //   A default template-argument may be specified for any kind of
   //   template-parameter that is not a template parameter pack.
-  if (DefaultArg && Ellipsis) {
+  if (DefaultArg && IsParameterPack) {
     Diag(EqualLoc, diag::err_template_param_pack_default_arg);
     DefaultArg = ParsedType();
   }
@@ -3853,6 +3854,17 @@ bool Sema::CheckTemplateArgumentList(TemplateDecl *Template,
     // Move to the next template parameter and argument.
     ++Param;
     ++ArgIdx;
+  }
+
+  // If we're performing a partial argument substitution, allow any trailing
+  // pack expansions; they might be empty. This can happen even if
+  // PartialTemplateArgs is false (the list of arguments is complete but
+  // still dependent).
+  if (ArgIdx < NumArgs && CurrentInstantiationScope &&
+      CurrentInstantiationScope->getPartiallySubstitutedPack()) {
+    while (ArgIdx < NumArgs &&
+           TemplateArgs[ArgIdx].getArgument().isPackExpansion())
+      Converted.push_back(TemplateArgs[ArgIdx++].getArgument());
   }
 
   // If we have any leftover arguments, then there were too many arguments.

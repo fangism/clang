@@ -231,7 +231,7 @@ static const llvm::GlobalObject *getAliasedGlobal(const llvm::GlobalAlias &GA) {
   llvm::SmallPtrSet<const llvm::GlobalAlias*, 4> Visited;
   const llvm::Constant *C = &GA;
   for (;;) {
-    C = cast<llvm::Constant>(C->stripPointerCasts());
+    C = C->stripPointerCasts();
     if (auto *GO = dyn_cast<llvm::GlobalObject>(C))
       return GO;
     // stripPointerCasts will not walk over weak aliases.
@@ -498,47 +498,40 @@ void CodeGenModule::setTLSMode(llvm::GlobalVariable *GV,
 }
 
 StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
+  StringRef &FoundStr = MangledDeclNames[GD.getCanonicalDecl()];
+  if (!FoundStr.empty())
+    return FoundStr;
+
   const auto *ND = cast<NamedDecl>(GD.getDecl());
-
-  StringRef &Str = MangledDeclNames[GD.getCanonicalDecl()];
-  if (!Str.empty())
-    return Str;
-
-  if (!getCXXABI().getMangleContext().shouldMangleDeclName(ND)) {
+  SmallString<256> Buffer;
+  StringRef Str;
+  if (getCXXABI().getMangleContext().shouldMangleDeclName(ND)) {
+    llvm::raw_svector_ostream Out(Buffer);
+    if (const auto *D = dyn_cast<CXXConstructorDecl>(ND))
+      getCXXABI().getMangleContext().mangleCXXCtor(D, GD.getCtorType(), Out);
+    else if (const auto *D = dyn_cast<CXXDestructorDecl>(ND))
+      getCXXABI().getMangleContext().mangleCXXDtor(D, GD.getDtorType(), Out);
+    else
+      getCXXABI().getMangleContext().mangleName(ND, Out);
+    Str = Out.str();
+  } else {
     IdentifierInfo *II = ND->getIdentifier();
     assert(II && "Attempt to mangle unnamed decl.");
-
     Str = II->getName();
-    return Str;
   }
-  
-  SmallString<256> Buffer;
-  llvm::raw_svector_ostream Out(Buffer);
-  if (const auto *D = dyn_cast<CXXConstructorDecl>(ND))
-    getCXXABI().getMangleContext().mangleCXXCtor(D, GD.getCtorType(), Out);
-  else if (const auto *D = dyn_cast<CXXDestructorDecl>(ND))
-    getCXXABI().getMangleContext().mangleCXXDtor(D, GD.getDtorType(), Out);
-  else
-    getCXXABI().getMangleContext().mangleName(ND, Out);
 
-  // Allocate space for the mangled name.
-  Out.flush();
-  size_t Length = Buffer.size();
-  char *Name = MangledNamesAllocator.Allocate<char>(Length);
-  std::copy(Buffer.begin(), Buffer.end(), Name);
-  
-  Str = StringRef(Name, Length);
-  
-  return Str;
+  auto &Mangled = Manglings.GetOrCreateValue(Str);
+  Mangled.second = GD;
+  return FoundStr = Mangled.first();
 }
 
-std::string CodeGenModule::getBlockMangledName(GlobalDecl GD,
-                                               const BlockDecl *BD) {
+StringRef CodeGenModule::getBlockMangledName(GlobalDecl GD,
+                                             const BlockDecl *BD) {
   MangleContext &MangleCtx = getCXXABI().getMangleContext();
   const Decl *D = GD.getDecl();
 
-  std::string Buffer;
-  llvm::raw_string_ostream Out(Buffer);
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
   if (!D)
     MangleCtx.mangleGlobalBlock(BD, 
       dyn_cast_or_null<VarDecl>(initializedGlobalDecl.getDecl()), Out);
@@ -549,7 +542,9 @@ std::string CodeGenModule::getBlockMangledName(GlobalDecl GD,
   else
     MangleCtx.mangleBlock(cast<DeclContext>(D), BD, Out);
 
-  return Out.str();
+  auto &Mangled = Manglings.GetOrCreateValue(Out.str());
+  Mangled.second = BD;
+  return Mangled.first();
 }
 
 llvm::GlobalValue *CodeGenModule::GetGlobalValue(StringRef Name) {
@@ -568,7 +563,7 @@ void CodeGenModule::AddGlobalCtor(llvm::Function *Ctor, int Priority,
 /// when the module is unloaded.
 void CodeGenModule::AddGlobalDtor(llvm::Function *Dtor, int Priority) {
   // FIXME: Type coercion of void()* types.
-  GlobalDtors.push_back(Structor(Priority, Dtor, 0));
+  GlobalDtors.push_back(Structor(Priority, Dtor, nullptr));
 }
 
 void CodeGenModule::EmitCtorList(const CtorList &Fns, const char *GlobalName) {
@@ -1462,7 +1457,7 @@ CodeGenModule::GetOrCreateLLVMFunction(StringRef MangledName,
     // This is the first use or definition of a mangled name.  If there is a
     // deferred decl with this name, remember that we need to emit it at the end
     // of the file.
-    llvm::StringMap<GlobalDecl>::iterator DDI = DeferredDecls.find(MangledName);
+    auto DDI = DeferredDecls.find(MangledName);
     if (DDI != DeferredDecls.end()) {
       // Move the potentially referenced deferred decl to the
       // DeferredDeclsToEmit list, and remove it from DeferredDecls (since we
@@ -1622,7 +1617,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
   // This is the first use or definition of a mangled name.  If there is a
   // deferred decl with this name, remember that we need to emit it at the end
   // of the file.
-  llvm::StringMap<GlobalDecl>::iterator DDI = DeferredDecls.find(MangledName);
+  auto DDI = DeferredDecls.find(MangledName);
   if (DDI != DeferredDecls.end()) {
     // Move the potentially referenced deferred decl to the DeferredDeclsToEmit
     // list, and remove it from DeferredDecls (since we don't need it anymore).
@@ -2686,72 +2681,65 @@ CodeGenModule::GetConstantArrayFromStringLiteral(const StringLiteral *E) {
   return llvm::ConstantDataArray::get(VMContext, Elements);
 }
 
+static llvm::GlobalVariable *
+GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
+                      CodeGenModule &CGM, StringRef GlobalName,
+                      unsigned Alignment) {
+  // OpenCL v1.2 s6.5.3: a string literal is in the constant address space.
+  unsigned AddrSpace = 0;
+  if (CGM.getLangOpts().OpenCL)
+    AddrSpace = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
+
+  // Create a global variable for this string
+  auto *GV = new llvm::GlobalVariable(
+      CGM.getModule(), C->getType(), !CGM.getLangOpts().WritableStrings, LT, C,
+      GlobalName, nullptr, llvm::GlobalVariable::NotThreadLocal, AddrSpace);
+  GV->setAlignment(Alignment);
+  GV->setUnnamedAddr(true);
+  return GV;
+}
+
 /// GetAddrOfConstantStringFromLiteral - Return a pointer to a
 /// constant array for the given string literal.
 llvm::Constant *
 CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S) {
-  CharUnits Align = getContext().getAlignOfGlobalVarInChars(S->getType());
+  auto Alignment =
+      getContext().getAlignOfGlobalVarInChars(S->getType()).getQuantity();
 
   llvm::StringMapEntry<llvm::GlobalVariable *> *Entry = nullptr;
-  llvm::GlobalVariable *GV = nullptr;
   if (!LangOpts.WritableStrings) {
-    llvm::StringMap<llvm::GlobalVariable *> *ConstantStringMap = nullptr;
-    switch (S->getCharByteWidth()) {
-    case 1:
-      ConstantStringMap = &Constant1ByteStringMap;
-      break;
-    case 2:
-      ConstantStringMap = &Constant2ByteStringMap;
-      break;
-    case 4:
-      ConstantStringMap = &Constant4ByteStringMap;
-      break;
-    default:
-      llvm_unreachable("unhandled byte width!");
+    Entry = getConstantStringMapEntry(S->getBytes(), S->getCharByteWidth());
+    if (auto GV = Entry->getValue()) {
+      if (Alignment > GV->getAlignment())
+        GV->setAlignment(Alignment);
+      return GV;
     }
-    Entry = &ConstantStringMap->GetOrCreateValue(S->getBytes());
-    GV = Entry->getValue();
   }
 
-  if (!GV) {
-    SmallString<256> MangledNameBuffer;
-    StringRef GlobalVariableName;
-    llvm::GlobalValue::LinkageTypes LT;
+  SmallString<256> MangledNameBuffer;
+  StringRef GlobalVariableName;
+  llvm::GlobalValue::LinkageTypes LT;
 
-    // Mangle the string literal if the ABI allows for it.  However, we cannot
-    // do this if  we are compiling with ASan or -fwritable-strings because they
-    // rely on strings having normal linkage.
-    if (!LangOpts.WritableStrings && !SanOpts.Address &&
-        getCXXABI().getMangleContext().shouldMangleStringLiteral(S)) {
-      llvm::raw_svector_ostream Out(MangledNameBuffer);
-      getCXXABI().getMangleContext().mangleStringLiteral(S, Out);
-      Out.flush();
+  // Mangle the string literal if the ABI allows for it.  However, we cannot
+  // do this if  we are compiling with ASan or -fwritable-strings because they
+  // rely on strings having normal linkage.
+  if (!LangOpts.WritableStrings && !SanOpts.Address &&
+      getCXXABI().getMangleContext().shouldMangleStringLiteral(S)) {
+    llvm::raw_svector_ostream Out(MangledNameBuffer);
+    getCXXABI().getMangleContext().mangleStringLiteral(S, Out);
+    Out.flush();
 
-      LT = llvm::GlobalValue::LinkOnceODRLinkage;
-      GlobalVariableName = MangledNameBuffer;
-    } else {
-      LT = llvm::GlobalValue::PrivateLinkage;
-      GlobalVariableName = ".str";
-    }
-
-    // OpenCL v1.2 s6.5.3: a string literal is in the constant address space.
-    unsigned AddrSpace = 0;
-    if (getLangOpts().OpenCL)
-      AddrSpace = getContext().getTargetAddressSpace(LangAS::opencl_constant);
-
-    llvm::Constant *C = GetConstantArrayFromStringLiteral(S);
-    GV = new llvm::GlobalVariable(
-        getModule(), C->getType(), !LangOpts.WritableStrings, LT, C,
-        GlobalVariableName, /*InsertBefore=*/nullptr,
-        llvm::GlobalVariable::NotThreadLocal, AddrSpace);
-    GV->setUnnamedAddr(true);
-    if (Entry)
-      Entry->setValue(GV);
+    LT = llvm::GlobalValue::LinkOnceODRLinkage;
+    GlobalVariableName = MangledNameBuffer;
+  } else {
+    LT = llvm::GlobalValue::PrivateLinkage;
+    GlobalVariableName = ".str";
   }
 
-  if (Align.getQuantity() > GV->getAlignment())
-    GV->setAlignment(Align.getQuantity());
-
+  llvm::Constant *C = GetConstantArrayFromStringLiteral(S);
+  auto GV = GenerateStringLiteral(C, LT, *this, GlobalVariableName, Alignment);
+  if (Entry)
+    Entry->setValue(GV);
   return GV;
 }
 
@@ -2766,79 +2754,60 @@ CodeGenModule::GetAddrOfConstantStringFromObjCEncode(const ObjCEncodeExpr *E) {
 }
 
 
-/// GenerateWritableString -- Creates storage for a string literal.
-static llvm::GlobalVariable *GenerateStringLiteral(StringRef str,
-                                             bool constant,
-                                             CodeGenModule &CGM,
-                                             const char *GlobalName,
-                                             unsigned Alignment) {
-  // Create Constant for this string literal. Don't add a '\0'.
-  llvm::Constant *C =
-      llvm::ConstantDataArray::getString(CGM.getLLVMContext(), str, false);
-
-  // OpenCL v1.2 s6.5.3: a string literal is in the constant address space.
-  unsigned AddrSpace = 0;
-  if (CGM.getLangOpts().OpenCL)
-    AddrSpace = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
-
-  // Create a global variable for this string
-  auto *GV = new llvm::GlobalVariable(
-      CGM.getModule(), C->getType(), constant,
-      llvm::GlobalValue::PrivateLinkage, C, GlobalName, nullptr,
-      llvm::GlobalVariable::NotThreadLocal, AddrSpace);
-  GV->setAlignment(Alignment);
-  GV->setUnnamedAddr(true);
-  return GV;
-}
-
-/// GetAddrOfConstantString - Returns a pointer to a character array
-/// containing the literal. This contents are exactly that of the
-/// given string, i.e. it will not be null terminated automatically;
-/// see GetAddrOfConstantCString. Note that whether the result is
-/// actually a pointer to an LLVM constant depends on
-/// Feature.WriteableStrings.
-///
-/// The result has pointer to array type.
-llvm::Constant *CodeGenModule::GetAddrOfConstantString(StringRef Str,
-                                                       const char *GlobalName,
-                                                       unsigned Alignment) {
-  // Get the default prefix if a name wasn't specified.
-  if (!GlobalName)
-    GlobalName = ".str";
-
-  if (Alignment == 0)
-    Alignment = getContext().getAlignOfGlobalVarInChars(getContext().CharTy)
-      .getQuantity();
-
-  // Don't share any string literals if strings aren't constant.
-  if (LangOpts.WritableStrings)
-    return GenerateStringLiteral(Str, false, *this, GlobalName, Alignment);
-
-  llvm::StringMapEntry<llvm::GlobalVariable *> &Entry =
-    Constant1ByteStringMap.GetOrCreateValue(Str);
-
-  if (llvm::GlobalVariable *GV = Entry.getValue()) {
-    if (Alignment > GV->getAlignment()) {
-      GV->setAlignment(Alignment);
-    }
-    return GV;
+llvm::StringMapEntry<llvm::GlobalVariable *> *CodeGenModule::getConstantStringMapEntry(
+    StringRef Str, int CharByteWidth) {
+  llvm::StringMap<llvm::GlobalVariable *> *ConstantStringMap = nullptr;
+  switch (CharByteWidth) {
+  case 1:
+    ConstantStringMap = &Constant1ByteStringMap;
+    break;
+  case 2:
+    ConstantStringMap = &Constant2ByteStringMap;
+    break;
+  case 4:
+    ConstantStringMap = &Constant4ByteStringMap;
+    break;
+  default:
+    llvm_unreachable("unhandled byte width!");
   }
-
-  // Create a global variable for this.
-  llvm::GlobalVariable *GV = GenerateStringLiteral(Str, true, *this, GlobalName,
-                                                   Alignment);
-  Entry.setValue(GV);
-  return GV;
+  return &ConstantStringMap->GetOrCreateValue(Str);
 }
 
-/// GetAddrOfConstantCString - Returns a pointer to a character
-/// array containing the literal and a terminating '\0'
-/// character. The result has pointer to array type.
+/// GetAddrOfConstantCString - Returns a pointer to a character array containing
+/// the literal and a terminating '\0' character.
+/// The result has pointer to array type.
 llvm::Constant *CodeGenModule::GetAddrOfConstantCString(const std::string &Str,
                                                         const char *GlobalName,
                                                         unsigned Alignment) {
   StringRef StrWithNull(Str.c_str(), Str.size() + 1);
-  return GetAddrOfConstantString(StrWithNull, GlobalName, Alignment);
+  if (Alignment == 0) {
+    Alignment = getContext()
+                    .getAlignOfGlobalVarInChars(getContext().CharTy)
+                    .getQuantity();
+  }
+
+  // Don't share any string literals if strings aren't constant.
+  llvm::StringMapEntry<llvm::GlobalVariable *> *Entry = nullptr;
+  if (!LangOpts.WritableStrings) {
+    Entry = getConstantStringMapEntry(StrWithNull, 1);
+    if (auto GV = Entry->getValue()) {
+      if (Alignment > GV->getAlignment())
+        GV->setAlignment(Alignment);
+      return GV;
+    }
+  }
+
+  llvm::Constant *C =
+      llvm::ConstantDataArray::getString(getLLVMContext(), StrWithNull, false);
+  // Get the default prefix if a name wasn't specified.
+  if (!GlobalName)
+    GlobalName = ".str";
+  // Create a global variable for this.
+  auto GV = GenerateStringLiteral(C, llvm::GlobalValue::PrivateLinkage, *this,
+                                  GlobalName, Alignment);
+  if (Entry)
+    Entry->setValue(GV);
+  return GV;
 }
 
 llvm::Constant *CodeGenModule::GetAddrOfGlobalTemporary(
@@ -3229,6 +3198,15 @@ void CodeGenModule::EmitStaticExternCAliases() {
     if (Val && !getModule().getNamedValue(Name->getName()))
       addUsedGlobal(llvm::GlobalAlias::create(Name->getName(), Val));
   }
+}
+
+bool CodeGenModule::lookupRepresentativeDecl(StringRef MangledName,
+                                             GlobalDecl &Result) const {
+  auto Res = Manglings.find(MangledName);
+  if (Res == Manglings.end())
+    return false;
+  Result = Res->getValue();
+  return true;
 }
 
 /// Emits metadata nodes associating all the global values in the

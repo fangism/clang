@@ -2227,6 +2227,8 @@ Parser::getDeclSpecContextFromDeclaratorContext(unsigned Context) {
     return DSC_class;
   if (Context == Declarator::FileContext)
     return DSC_top_level;
+  if (Context == Declarator::TemplateTypeArgContext)
+    return DSC_template_type_arg;
   if (Context == Declarator::TrailingReturnContext)
     return DSC_trailing;
   if (Context == Declarator::AliasDeclContext ||
@@ -2752,6 +2754,16 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       ParsedType TypeRep =
         Actions.getTypeName(*Tok.getIdentifierInfo(),
                             Tok.getLocation(), getCurScope());
+
+      // MSVC: If we weren't able to parse a default template argument, and it's
+      // just a simple identifier, create a DependentNameType.  This will allow us
+      // to defer the name lookup to template instantiation time, as long we forge a
+      // NestedNameSpecifier for the current context.
+      if (!TypeRep && DSContext == DSC_template_type_arg &&
+          getLangOpts().MSVCCompat && getCurScope()->isTemplateParamScope()) {
+        TypeRep = Actions.ActOnDelayedDefaultTemplateArg(
+            *Tok.getIdentifierInfo(), Tok.getLocation());
+      }
 
       // If this is not a typedef name, don't parse it as part of the declspec,
       // it must be an implicit int or an error.
@@ -4661,19 +4673,6 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
   }
 }
 
-static void diagnoseMisplacedEllipsis(Parser &P, Declarator &D,
-                                      SourceLocation EllipsisLoc) {
-  if (EllipsisLoc.isValid()) {
-    FixItHint Insertion;
-    if (!D.getEllipsisLoc().isValid()) {
-      Insertion = FixItHint::CreateInsertion(D.getIdentifierLoc(), "...");
-      D.setEllipsisLoc(EllipsisLoc);
-    }
-    P.Diag(EllipsisLoc, diag::err_misplaced_ellipsis_in_declaration)
-      << FixItHint::CreateRemoval(EllipsisLoc) << Insertion << !D.hasName();
-  }
-}
-
 /// ParseDirectDeclarator
 ///       direct-declarator: [C99 6.7.5]
 /// [C99]   identifier
@@ -4753,7 +4752,8 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
         // The ellipsis was put in the wrong place. Recover, and explain to
         // the user what they should have done.
         ParseDeclarator(D);
-        diagnoseMisplacedEllipsis(*this, D, EllipsisLoc);
+        if (EllipsisLoc.isValid())
+          DiagnoseMisplacedEllipsisInDeclarator(EllipsisLoc, D);
         return;
       } else
         D.setEllipsisLoc(EllipsisLoc);
@@ -5004,7 +5004,7 @@ void Parser::ParseParenDeclarator(Declarator &D) {
 
     // An ellipsis cannot be placed outside parentheses.
     if (EllipsisLoc.isValid())
-      diagnoseMisplacedEllipsis(*this, D, EllipsisLoc);
+      DiagnoseMisplacedEllipsisInDeclarator(EllipsisLoc, D);
 
     return;
   }

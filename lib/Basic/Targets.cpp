@@ -1863,7 +1863,7 @@ public:
   bool hasFeature(StringRef Feature) const override;
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override;
-  const char* getABI() const override {
+  StringRef getABI() const override {
     if (getTriple().getArch() == llvm::Triple::x86_64 && SSELevel >= AVX)
       return "avx";
     else if (getTriple().getArch() == llvm::Triple::x86 &&
@@ -3663,7 +3663,7 @@ public:
     // zero length bitfield.
     UseZeroLengthBitfieldAlignment = true;
   }
-  const char *getABI() const override { return ABI.c_str(); }
+  StringRef getABI() const override { return ABI; }
   bool setABI(const std::string &Name) override {
     ABI = Name;
 
@@ -4287,7 +4287,7 @@ public:
     TheCXXABI.set(TargetCXXABI::GenericAArch64);
   }
 
-  virtual const char *getABI() const { return ABI.c_str(); }
+  StringRef getABI() const override { return ABI; }
   virtual bool setABI(const std::string &Name) {
     if (Name != "aapcs" && Name != "darwinpcs")
       return false;
@@ -5222,12 +5222,13 @@ public:
         IsNan2008(false), IsSingleFloat(false), FloatABI(HardFloat),
         DspRev(NoDSP), HasMSA(false), HasFP64(false), ABI(ABIStr) {}
 
-  const char *getABI() const override { return ABI.c_str(); }
+  StringRef getABI() const override { return ABI; }
   bool setABI(const std::string &Name) override = 0;
   bool setCPU(const std::string &Name) override {
     CPU = Name;
     return true;
   }
+  const std::string& getCPU() const { return CPU; }
   void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {
     // The backend enables certain ABI's by default according to the
     // architecture.
@@ -5452,6 +5453,13 @@ public:
     MipsTargetInfoBase::getTargetDefines(Opts, Builder);
 
     Builder.defineMacro("__mips", "32");
+    Builder.defineMacro("_MIPS_ISA", "_MIPS_ISA_MIPS32");
+
+    const std::string& CPUStr = getCPU();
+    if (CPUStr == "mips32")
+      Builder.defineMacro("__mips_isa_rev", "1");
+    else if (CPUStr == "mips32r2")
+      Builder.defineMacro("__mips_isa_rev", "2");
 
     if (ABI == "o32") {
       Builder.defineMacro("__mips_o32");
@@ -5587,6 +5595,13 @@ public:
     Builder.defineMacro("__mips", "64");
     Builder.defineMacro("__mips64");
     Builder.defineMacro("__mips64__");
+    Builder.defineMacro("_MIPS_ISA", "_MIPS_ISA_MIPS64");
+
+    const std::string& CPUStr = getCPU();
+    if (CPUStr == "mips64")
+      Builder.defineMacro("__mips_isa_rev", "1");
+    else if (CPUStr == "mips64r2")
+      Builder.defineMacro("__mips_isa_rev", "2");
 
     if (ABI == "n32") {
       Builder.defineMacro("__mips_n32");

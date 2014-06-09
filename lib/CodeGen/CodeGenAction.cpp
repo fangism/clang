@@ -297,13 +297,24 @@ void BackendConsumer::InlineAsmDiagHandler2(const llvm::SMDiagnostic &D,
   FullSourceLoc Loc;
   if (D.getLoc() != SMLoc())
     Loc = ConvertBackendLocation(D, Context->getSourceManager());
-  
 
+  unsigned DiagID;
+  switch (D.getKind()) {
+  case llvm::SourceMgr::DK_Error:
+    DiagID = diag::err_fe_inline_asm;
+    break;
+  case llvm::SourceMgr::DK_Warning:
+    DiagID = diag::warn_fe_inline_asm;
+    break;
+  case llvm::SourceMgr::DK_Note:
+    DiagID = diag::note_fe_inline_asm;
+    break;
+  }
   // If this problem has clang-level source location information, report the
-  // issue as being an error in the source with a note showing the instantiated
+  // issue in the source with a note showing the instantiated
   // code.
   if (LocCookie.isValid()) {
-    Diags.Report(LocCookie, diag::err_fe_inline_asm).AddString(Message);
+    Diags.Report(LocCookie, DiagID).AddString(Message);
     
     if (D.getLoc().isValid()) {
       DiagnosticBuilder B = Diags.Report(Loc, diag::note_fe_inline_asm_here);
@@ -319,10 +330,10 @@ void BackendConsumer::InlineAsmDiagHandler2(const llvm::SMDiagnostic &D,
     return;
   }
   
-  // Otherwise, report the backend error as occurring in the generated .s file.
-  // If Loc is invalid, we still need to report the error, it just gets no
+  // Otherwise, report the backend issue as occurring in the generated .s file.
+  // If Loc is invalid, we still need to report the issue, it just gets no
   // location info.
-  Diags.Report(Loc, diag::err_fe_inline_asm).AddString(Message);
+  Diags.Report(Loc, DiagID).AddString(Message);
 }
 
 #define ComputeDiagID(Severity, GroupName, DiagID)                             \
@@ -393,12 +404,14 @@ BackendConsumer::StackSizeDiagHandler(const llvm::DiagnosticInfoStackSize &D) {
     // We do not know how to format other severities.
     return false;
 
-  // FIXME: We should demangle the function name.
-  // FIXME: Is there a way to get a location for that function?
-  FullSourceLoc Loc;
-  Diags.Report(Loc, diag::warn_fe_backend_frame_larger_than)
-      << D.getStackSize() << D.getFunction().getName();
-  return true;
+  if (const Decl *ND = Gen->GetDeclForMangledName(D.getFunction().getName())) {
+    Diags.Report(ND->getASTContext().getFullLoc(ND->getLocation()),
+                 diag::warn_fe_frame_larger_than)
+        << D.getStackSize() << Decl::castToDeclContext(ND);
+    return true;
+  }
+
+  return false;
 }
 
 void BackendConsumer::EmitOptimizationRemark(
@@ -411,15 +424,22 @@ void BackendConsumer::EmitOptimizationRemark(
   StringRef Filename;
   unsigned Line, Column;
   D.getLocation(&Filename, &Line, &Column);
-  SourceLocation Loc;
+  SourceLocation DILoc;
   const FileEntry *FE = FileMgr.getFile(Filename);
   if (FE && Line > 0) {
     // If -gcolumn-info was not used, Column will be 0. This upsets the
-    // source manager, so if Column is not set, set it to 1.
-    if (Column == 0)
-      Column = 1;
-    Loc = SourceMgr.translateFileLineCol(FE, Line, Column);
+    // source manager, so pass 1 if Column is not set.
+    DILoc = SourceMgr.translateFileLineCol(FE, Line, Column ? Column : 1);
   }
+
+  // If a location isn't available, try to approximate it using the associated
+  // function definition. We use the definition's right brace to differentiate
+  // from diagnostics that genuinely relate to the function itself.
+  FullSourceLoc Loc(DILoc, SourceMgr);
+  if (Loc.isInvalid())
+    if (const Decl *FD = Gen->GetDeclForMangledName(D.getFunction().getName()))
+      Loc = FD->getASTContext().getFullLoc(FD->getBodyRBrace());
+
   Diags.Report(Loc, DiagID) << AddFlagValue(D.getPassName())
                             << D.getMsg().str();
 
@@ -430,13 +450,13 @@ void BackendConsumer::EmitOptimizationRemark(
     // FIXME: We should really be generating !srcloc annotations when
     // -Rpass is used. !srcloc annotations need to be emitted in
     // approximately the same spots as !dbg nodes.
-    Diags.Report(diag::note_fe_backend_optimization_remark_missing_loc);
-  else if (Loc.isInvalid())
+    Diags.Report(Loc, diag::note_fe_backend_optimization_remark_missing_loc);
+  else if (DILoc.isInvalid())
     // If we were not able to translate the file:line:col information
     // back to a SourceLocation, at least emit a note stating that
     // we could not translate this location. This can happen in the
     // case of #line directives.
-    Diags.Report(diag::note_fe_backend_optimization_remark_invalid_loc)
+    Diags.Report(Loc, diag::note_fe_backend_optimization_remark_invalid_loc)
         << Filename << Line << Column;
 }
 

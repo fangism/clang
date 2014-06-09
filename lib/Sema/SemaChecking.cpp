@@ -296,8 +296,22 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
     if (SemaBuiltinAddressof(*this, TheCall))
       return ExprError();
     break;
+  case Builtin::BI__builtin_operator_new:
+  case Builtin::BI__builtin_operator_delete:
+    if (!getLangOpts().CPlusPlus) {
+      Diag(TheCall->getExprLoc(), diag::err_builtin_requires_language)
+        << (BuiltinID == Builtin::BI__builtin_operator_new
+                ? "__builtin_operator_new"
+                : "__builtin_operator_delete")
+        << "C++";
+      return ExprError();
+    }
+    // CodeGen assumes it can find the global new and delete to call,
+    // so ensure that they are declared.
+    DeclareGlobalNewDelete();
+    break;
   }
-  
+
   // Since the target specific builtins for each arch overlap, only check those
   // of the arch we are compiling for.
   if (BuiltinID >= Builtin::FirstTSBuiltin) {
@@ -6175,6 +6189,13 @@ void Sema::DiagnoseAlwaysNonNullPointer(Expr *E,
 
   const bool IsCompare = NullKind != Expr::NPCK_NotNull;
 
+  if (isa<CXXThisExpr>(E)) {
+    unsigned DiagID = IsCompare ? diag::warn_this_null_compare
+                                : diag::warn_this_bool_conversion;
+    Diag(E->getExprLoc(), DiagID) << E->getSourceRange() << Range << IsEqual;
+    return;
+  }
+
   bool IsAddressOf = false;
 
   if (UnaryOperator *UO = dyn_cast<UnaryOperator>(E)) {
@@ -6204,9 +6225,14 @@ void Sema::DiagnoseAlwaysNonNullPointer(Expr *E,
     // Address of function is used to silence the function warning.
     if (IsFunction)
       return;
-    // Address of reference can be null.
-    if (T->isReferenceType())
+
+    if (T->isReferenceType()) {
+      unsigned DiagID = IsCompare
+                            ? diag::warn_address_of_reference_null_compare
+                            : diag::warn_address_of_reference_bool_conversion;
+      Diag(E->getExprLoc(), DiagID) << E->getSourceRange() << Range << IsEqual;
       return;
+    }
   }
 
   // Found nothing.

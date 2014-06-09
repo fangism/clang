@@ -5,6 +5,10 @@
 // RUN: %clang_cc1 -triple i686-windows-msvc   -fno-rtti -emit-llvm -std=c++1y -O1 -o - %s -DMSABI | FileCheck --check-prefix=MO1 %s
 // RUN: %clang_cc1 -triple i686-windows-gnu    -fno-rtti -emit-llvm -std=c++1y -O1 -o - %s         | FileCheck --check-prefix=GO1 %s
 
+// CHECK-NOT doesn't play nice with CHECK-DAG, so use separate run lines.
+// RUN: %clang_cc1 -triple i686-windows-msvc   -fno-rtti -emit-llvm -std=c++1y -O0 -o - %s -DMSABI | FileCheck --check-prefix=MSC2 %s
+// RUN: %clang_cc1 -triple i686-windows-gnu    -fno-rtti -emit-llvm -std=c++1y -O0 -o - %s         | FileCheck --check-prefix=GNU2 %s
+
 // Helper structs to make templates more expressive.
 struct ImplicitInst_Imported {};
 struct ImplicitInst_NotImported {};
@@ -218,6 +222,11 @@ USE(inlineDef)
 // GNU-DAG: declare dllimport void @_Z8noinlinev()
 __declspec(dllimport) __attribute__((noinline)) inline void noinline() {}
 USE(noinline)
+
+// MSC2-NOT: @"\01?alwaysInline@@YAXXZ"()
+// GNU2-NOT: @_Z12alwaysInlinev()
+__declspec(dllimport) __attribute__((always_inline)) inline void alwaysInline() {}
+USE(alwaysInline)
 
 // Redeclarations
 // MSC-DAG: declare dllimport void @"\01?redecl1@@YAXXZ"()
@@ -557,7 +566,7 @@ namespace DontUseDtorAlias {
 
 namespace Vtordisp {
   // Don't dllimport the vtordisp.
-  // MO1-DAG: define weak x86_thiscallcc void @"\01?f@?$C@D@Vtordisp@@$4PPPPPPPM@A@AEXXZ"
+  // MO1-DAG: define linkonce_odr x86_thiscallcc void @"\01?f@?$C@D@Vtordisp@@$4PPPPPPPM@A@AEXXZ"
 
   class Base {
     virtual void f() {}
@@ -571,13 +580,45 @@ namespace Vtordisp {
   template class C<char>;
 }
 
-//===----------------------------------------------------------------------===//
-// Negative checks
-//===----------------------------------------------------------------------===//
+namespace ClassTemplateStaticDef {
+  // Regular template static field:
+  template <typename T> struct __declspec(dllimport) S {
+    static int x;
+  };
+  template <typename T> int S<T>::x;
+  // MSC-DAG: @"\01?x@?$S@H@ClassTemplateStaticDef@@2HA" = available_externally dllimport global i32 0
+  int f() { return S<int>::x; }
 
-// These checks are at the end to avoid interference with the DAG checks.
+  // Partial class template specialization static field:
+  template <typename A> struct T;
+  template <typename A> struct __declspec(dllimport) T<A*> {
+    static int x;
+  };
+  template <typename A> int T<A*>::x;
+  // M32-DAG: @"\01?x@?$T@PAX@ClassTemplateStaticDef@@2HA" = available_externally dllimport global i32 0
+  int g() { return T<void*>::x; }
+}
 
-// MSC-NOT: @"\01?alwaysInline@@YAXXZ"()
-// GNU-NOT: @_Z12alwaysInlinev()
-__declspec(dllimport) __attribute__((always_inline)) inline void alwaysInline() {}
-USE(alwaysInline)
+namespace PR19933 {
+// Don't dynamically initialize dllimport vars.
+// MSC2-NOT: @llvm.global_ctors
+// GNU2-NOT: @llvm.global_ctors
+
+  struct NonPOD { NonPOD(); };
+  template <typename T> struct A { static NonPOD x; };
+  template <typename T> NonPOD A<T>::x;
+  template struct __declspec(dllimport) A<int>;
+  // MSC-DAG: @"\01?x@?$A@H@PR19933@@2UNonPOD@2@A" = available_externally dllimport global %"struct.PR19933::NonPOD" zeroinitializer
+
+  int f();
+  template <typename T> struct B { static int x; };
+  template <typename T> int B<T>::x = f();
+  template struct __declspec(dllimport) B<int>;
+  // MSC-DAG: @"\01?x@?$B@H@PR19933@@2HA" = available_externally dllimport global i32 0
+
+  constexpr int g() { return 42; }
+  template <typename T> struct C { static int x; };
+  template <typename T> int C<T>::x = g();
+  template struct __declspec(dllimport) C<int>;
+  // MSC-DAG: @"\01?x@?$C@H@PR19933@@2HA" = available_externally dllimport global i32 42
+}
