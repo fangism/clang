@@ -1431,6 +1431,9 @@ Sema::ActOnBaseSpecifier(Decl *classdecl, SourceRange SpecifierRange,
   if (!Class)
     return true;
 
+  // We haven't yet attached the base specifiers.
+  Class->setIsParsingBaseSpecifiers();
+
   // We do not support any C++11 attributes on base-specifiers yet.
   // Diagnose any attributes we see.
   if (!Attributes.empty()) {
@@ -2116,9 +2119,7 @@ Sema::ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS, Declarator &D,
     FieldDecl *FD = cast<FieldDecl>(Member);
     FieldCollector->Add(FD);
 
-    if (Diags.getDiagnosticLevel(diag::warn_unused_private_field,
-                                 FD->getLocation())
-          != DiagnosticsEngine::Ignored) {
+    if (!Diags.isIgnored(diag::warn_unused_private_field, FD->getLocation())) {
       // Remember all explicit private FieldDecls that have a name, no side
       // effects and are not part of a dependent type declaration.
       if (!FD->isImplicit() && FD->getDeclName() &&
@@ -2306,9 +2307,8 @@ namespace {
   static void DiagnoseUninitializedFields(
       Sema &SemaRef, const CXXConstructorDecl *Constructor) {
 
-    if (SemaRef.getDiagnostics().getDiagnosticLevel(diag::warn_field_is_uninit,
-                                                    Constructor->getLocation())
-        == DiagnosticsEngine::Ignored) {
+    if (SemaRef.getDiagnostics().isIgnored(diag::warn_field_is_uninit,
+                                           Constructor->getLocation())) {
       return;
     }
 
@@ -3731,9 +3731,8 @@ static void DiagnoseBaseOrMemInitializerOrder(
   bool ShouldCheckOrder = false;
   for (unsigned InitIndex = 0; InitIndex != Inits.size(); ++InitIndex) {
     CXXCtorInitializer *Init = Inits[InitIndex];
-    if (SemaRef.Diags.getDiagnosticLevel(diag::warn_initializer_out_of_order,
-                                         Init->getSourceLocation())
-          != DiagnosticsEngine::Ignored) {
+    if (!SemaRef.Diags.isIgnored(diag::warn_initializer_out_of_order,
+                                 Init->getSourceLocation())) {
       ShouldCheckOrder = true;
       break;
     }
@@ -4348,17 +4347,6 @@ static void CheckAbstractClassUsage(AbstractUsageInfo &Info,
   }
 }
 
-/// \brief Return a DLL attribute from the declaration.
-static InheritableAttr *getDLLAttr(Decl *D) {
-  assert(!(D->hasAttr<DLLImportAttr>() && D->hasAttr<DLLExportAttr>()) &&
-         "A declaration cannot be both dllimport and dllexport.");
-  if (auto *Import = D->getAttr<DLLImportAttr>())
-    return Import;
-  if (auto *Export = D->getAttr<DLLExportAttr>())
-    return Export;
-  return nullptr;
-}
-
 /// \brief Check class-level dllimport/dllexport attribute.
 static void checkDLLAttribute(Sema &S, CXXRecordDecl *Class) {
   Attr *ClassAttr = getDLLAttr(Class);
@@ -4377,8 +4365,23 @@ static void checkDLLAttribute(Sema &S, CXXRecordDecl *Class) {
   // specialization bases.
 
   for (Decl *Member : Class->decls()) {
-    if (!isa<CXXMethodDecl>(Member) && !isa<VarDecl>(Member))
+    VarDecl *VD = dyn_cast<VarDecl>(Member);
+    CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Member);
+
+    // Only methods and static fields inherit the attributes.
+    if (!VD && !MD)
       continue;
+
+    // Don't process deleted methods.
+    if (MD && MD->isDeleted())
+      continue;
+
+    if (MD && MD->isMoveAssignmentOperator() && !ClassExported &&
+        MD->isInlined()) {
+      // Current MSVC versions don't export the move assignment operators, so
+      // don't attempt to import them if we have a definition.
+      continue;
+    }
 
     if (InheritableAttr *MemberAttr = getDLLAttr(Member)) {
       if (S.Context.getTargetInfo().getCXXABI().isMicrosoft() &&
@@ -4399,9 +4402,6 @@ static void checkDLLAttribute(Sema &S, CXXRecordDecl *Class) {
 
     if (CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Member)) {
       if (ClassExported) {
-        if (MD->isDeleted())
-          continue;
-
         if (MD->isUserProvided()) {
           // Instantiate non-default methods.
           S.MarkFunctionReferenced(Class->getLocation(), MD);
@@ -5956,8 +5956,7 @@ void Sema::DiagnoseHiddenVirtualMethods(CXXMethodDecl *MD) {
   if (MD->isInvalidDecl())
     return;
 
-  if (Diags.getDiagnosticLevel(diag::warn_overloaded_virtual,
-                               MD->getLocation()) == DiagnosticsEngine::Ignored)
+  if (Diags.isIgnored(diag::warn_overloaded_virtual, MD->getLocation()))
     return;
 
   SmallVector<CXXMethodDecl *, 8> OverloadedMethods;
@@ -8408,7 +8407,9 @@ void Sema::DefineImplicitDefaultConstructor(SourceLocation CurrentLocation,
     return;
   }
 
-  SourceLocation Loc = Constructor->getLocation();
+  SourceLocation Loc = Constructor->getLocEnd().isValid()
+                           ? Constructor->getLocEnd()
+                           : Constructor->getLocation();
   Constructor->setBody(new (Context) CompoundStmt(Loc));
 
   Constructor->markUsed(Context);
@@ -8870,7 +8871,9 @@ void Sema::DefineImplicitDestructor(SourceLocation CurrentLocation,
     return;
   }
 
-  SourceLocation Loc = Destructor->getLocation();
+  SourceLocation Loc = Destructor->getLocEnd().isValid()
+                           ? Destructor->getLocEnd()
+                           : Destructor->getLocation();
   Destructor->setBody(new (Context) CompoundStmt(Loc));
   Destructor->markUsed(Context);
   MarkVTableUsed(CurrentLocation, ClassDecl);
@@ -9570,8 +9573,10 @@ void Sema::DefineImplicitCopyAssignment(SourceLocation CurrentLocation,
   }
   
   // Our location for everything implicitly-generated.
-  SourceLocation Loc = CopyAssignOperator->getLocation();
-  
+  SourceLocation Loc = CopyAssignOperator->getLocEnd().isValid()
+                           ? CopyAssignOperator->getLocEnd()
+                           : CopyAssignOperator->getLocation();
+
   // Builds a DeclRefExpr for the "other" object.
   RefBuilder OtherRef(Other, OtherRefType);
 
@@ -9975,7 +9980,9 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
          "Bad argument type of defaulted move assignment");
 
   // Our location for everything implicitly-generated.
-  SourceLocation Loc = MoveAssignOperator->getLocation();
+  SourceLocation Loc = MoveAssignOperator->getLocEnd().isValid()
+                           ? MoveAssignOperator->getLocEnd()
+                           : MoveAssignOperator->getLocation();
 
   // Builds a reference to the "other" object.
   RefBuilder OtherRef(Other, OtherRefType);
@@ -10112,8 +10119,9 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
 
   if (!Invalid) {
     // Add a "return *this;"
-    ExprResult ThisObj = CreateBuiltinUnaryOp(Loc, UO_Deref, This.build(*this, Loc));
-    
+    ExprResult ThisObj =
+        CreateBuiltinUnaryOp(Loc, UO_Deref, This.build(*this, Loc));
+
     StmtResult Return = BuildReturnStmt(Loc, ThisObj.get());
     if (Return.isInvalid())
       Invalid = true;
@@ -10289,10 +10297,12 @@ void Sema::DefineImplicitCopyConstructor(SourceLocation CurrentLocation,
       << CXXCopyConstructor << Context.getTagDeclType(ClassDecl);
     CopyConstructor->setInvalidDecl();
   }  else {
+    SourceLocation Loc = CopyConstructor->getLocEnd().isValid()
+                             ? CopyConstructor->getLocEnd()
+                             : CopyConstructor->getLocation();
     Sema::CompoundScopeRAII CompoundScope(*this);
-    CopyConstructor->setBody(ActOnCompoundStmt(
-        CopyConstructor->getLocation(), CopyConstructor->getLocation(), None,
-        /*isStmtExpr=*/ false).getAs<Stmt>());
+    CopyConstructor->setBody(
+        ActOnCompoundStmt(Loc, Loc, None, /*isStmtExpr=*/false).getAs<Stmt>());
   }
 
   CopyConstructor->markUsed(Context);
@@ -10445,10 +10455,12 @@ void Sema::DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
       << CXXMoveConstructor << Context.getTagDeclType(ClassDecl);
     MoveConstructor->setInvalidDecl();
   }  else {
+    SourceLocation Loc = MoveConstructor->getLocEnd().isValid()
+                             ? MoveConstructor->getLocEnd()
+                             : MoveConstructor->getLocation();
     Sema::CompoundScopeRAII CompoundScope(*this);
     MoveConstructor->setBody(ActOnCompoundStmt(
-        MoveConstructor->getLocation(), MoveConstructor->getLocation(), None,
-        /*isStmtExpr=*/ false).getAs<Stmt>());
+        Loc, Loc, None, /*isStmtExpr=*/ false).getAs<Stmt>());
   }
 
   MoveConstructor->markUsed(Context);
@@ -11393,7 +11405,8 @@ Decl *Sema::ActOnStaticAssertDeclaration(SourceLocation StaticAssertLoc,
                                          Expr *AssertExpr,
                                          Expr *AssertMessageExpr,
                                          SourceLocation RParenLoc) {
-  StringLiteral *AssertMessage = cast<StringLiteral>(AssertMessageExpr);
+  StringLiteral *AssertMessage =
+      AssertMessageExpr ? cast<StringLiteral>(AssertMessageExpr) : nullptr;
 
   if (DiagnoseUnexpandedParameterPack(AssertExpr, UPPC_StaticAssertExpression))
     return nullptr;
@@ -11407,6 +11420,7 @@ Decl *Sema::BuildStaticAssertDeclaration(SourceLocation StaticAssertLoc,
                                          StringLiteral *AssertMessage,
                                          SourceLocation RParenLoc,
                                          bool Failed) {
+  assert(AssertExpr != nullptr && "Expected non-null condition");
   if (!AssertExpr->isTypeDependent() && !AssertExpr->isValueDependent() &&
       !Failed) {
     // In a static_assert-declaration, the constant-expression shall be a
@@ -11424,9 +11438,10 @@ Decl *Sema::BuildStaticAssertDeclaration(SourceLocation StaticAssertLoc,
     if (!Failed && !Cond) {
       SmallString<256> MsgBuffer;
       llvm::raw_svector_ostream Msg(MsgBuffer);
-      AssertMessage->printPretty(Msg, nullptr, getPrintingPolicy());
+      if (AssertMessage)
+        AssertMessage->printPretty(Msg, nullptr, getPrintingPolicy());
       Diag(StaticAssertLoc, diag::err_static_assert_failed)
-        << Msg.str() << AssertExpr->getSourceRange();
+        << !AssertMessage << Msg.str() << AssertExpr->getSourceRange();
       Failed = true;
     }
   }
@@ -12448,7 +12463,9 @@ void Sema::MarkVTableUsed(SourceLocation Loc, CXXRecordDecl *Class,
         Class->hasUserDeclaredDestructor() &&
         !Class->getDestructor()->isDefined() &&
         !Class->getDestructor()->isDeleted()) {
-      CheckDestructor(Class->getDestructor());
+      CXXDestructorDecl *DD = Class->getDestructor();
+      ContextRAII SavedContext(*this, DD);
+      CheckDestructor(DD);
     }
   }
 

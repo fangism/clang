@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/VirtualFileSystem.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
@@ -35,17 +36,17 @@ public:
     std::map<std::string, vfs::Status>::iterator I =
         FilesAndDirs.find(Path.str());
     if (I == FilesAndDirs.end())
-      return make_error_code(errc::no_such_file_or_directory);
+      return make_error_code(llvm::errc::no_such_file_or_directory);
     return I->second;
   }
-  error_code openFileForRead(const Twine &Path,
-                             std::unique_ptr<vfs::File> &Result) {
+  std::error_code openFileForRead(const Twine &Path,
+                                  std::unique_ptr<vfs::File> &Result) {
     llvm_unreachable("unimplemented");
   }
-  error_code getBufferForFile(const Twine &Name,
-                              std::unique_ptr<MemoryBuffer> &Result,
-                              int64_t FileSize = -1,
-                              bool RequiresNullTerminator = true) {
+  std::error_code getBufferForFile(const Twine &Name,
+                                   std::unique_ptr<MemoryBuffer> &Result,
+                                   int64_t FileSize = -1,
+                                   bool RequiresNullTerminator = true) {
     llvm_unreachable("unimplemented");
   }
 
@@ -75,7 +76,7 @@ public:
 
 TEST(VirtualFileSystemTest, StatusQueries) {
   IntrusiveRefCntPtr<DummyFileSystem> D(new DummyFileSystem());
-  ErrorOr<vfs::Status> Status((error_code()));
+  ErrorOr<vfs::Status> Status((std::error_code()));
 
   D->addRegularFile("/foo");
   Status = D->status("/foo");
@@ -115,7 +116,7 @@ TEST(VirtualFileSystemTest, StatusQueries) {
 
 TEST(VirtualFileSystemTest, BaseOnlyOverlay) {
   IntrusiveRefCntPtr<DummyFileSystem> D(new DummyFileSystem());
-  ErrorOr<vfs::Status> Status((error_code()));
+  ErrorOr<vfs::Status> Status((std::error_code()));
   EXPECT_FALSE(Status = D->status("/foo"));
 
   IntrusiveRefCntPtr<vfs::OverlayFileSystem> O(new vfs::OverlayFileSystem(D));
@@ -125,7 +126,7 @@ TEST(VirtualFileSystemTest, BaseOnlyOverlay) {
   Status = D->status("/foo");
   EXPECT_FALSE(Status.getError());
 
-  ErrorOr<vfs::Status> Status2((error_code()));
+  ErrorOr<vfs::Status> Status2((std::error_code()));
   Status2 = O->status("/foo");
   EXPECT_FALSE(Status2.getError());
   EXPECT_TRUE(Status->equivalent(*Status2));
@@ -140,9 +141,10 @@ TEST(VirtualFileSystemTest, OverlayFiles) {
   O->pushOverlay(Middle);
   O->pushOverlay(Top);
 
-  ErrorOr<vfs::Status> Status1((error_code())), Status2((error_code())),
-      Status3((error_code())), StatusB((error_code())), StatusM((error_code())),
-      StatusT((error_code()));
+  ErrorOr<vfs::Status> Status1((std::error_code())),
+      Status2((std::error_code())), Status3((std::error_code())),
+      StatusB((std::error_code())), StatusM((std::error_code())),
+      StatusT((std::error_code()));
 
   Base->addRegularFile("/foo");
   StatusB = Base->status("/foo");
@@ -201,7 +203,7 @@ TEST(VirtualFileSystemTest, MergedDirPermissions) {
       new vfs::OverlayFileSystem(Lower));
   O->pushOverlay(Upper);
 
-  ErrorOr<vfs::Status> Status((error_code()));
+  ErrorOr<vfs::Status> Status((std::error_code()));
   Lower->addDirectory("/both", sys::fs::owner_read);
   Upper->addDirectory("/both", sys::fs::owner_all | sys::fs::group_read);
   Status = O->status("/both");
@@ -306,7 +308,8 @@ TEST_F(VFSFromYAMLTest, MappedFiles) {
   EXPECT_TRUE(S->equivalent(*O->status("//root/"))); // non-volatile UniqueID
 
   // broken mapping
-  EXPECT_EQ(errc::no_such_file_or_directory, O->status("//root/file2").getError());
+  EXPECT_EQ(O->status("//root/file2").getError(),
+            llvm::errc::no_such_file_or_directory);
   EXPECT_EQ(0, NumDiagnostics);
 }
 
@@ -370,11 +373,11 @@ TEST_F(VFSFromYAMLTest, CaseSensitive) {
   O->pushOverlay(FS);
 
   ErrorOr<vfs::Status> SS = O->status("//root/xx");
-  EXPECT_EQ(errc::no_such_file_or_directory, SS.getError());
+  EXPECT_EQ(SS.getError(), llvm::errc::no_such_file_or_directory);
   SS = O->status("//root/xX");
-  EXPECT_EQ(errc::no_such_file_or_directory, SS.getError());
+  EXPECT_EQ(SS.getError(), llvm::errc::no_such_file_or_directory);
   SS = O->status("//root/Xx");
-  EXPECT_EQ(errc::no_such_file_or_directory, SS.getError());
+  EXPECT_EQ(SS.getError(), llvm::errc::no_such_file_or_directory);
   EXPECT_EQ(0, NumDiagnostics);
 }
 

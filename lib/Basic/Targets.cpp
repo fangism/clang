@@ -587,8 +587,12 @@ protected:
     if (Opts.POSIXThreads)
       Builder.defineMacro("_MT");
 
-    if (Opts.MSCVersion != 0)
-      Builder.defineMacro("_MSC_VER", Twine(Opts.MSCVersion));
+    if (Opts.MSCVersion != 0) {
+      Builder.defineMacro("_MSC_VER", Twine(Opts.MSCVersion / 100000));
+      Builder.defineMacro("_MSC_FULL_VER", Twine(Opts.MSCVersion));
+      // FIXME We cannot encode the revision information into 32-bits
+      Builder.defineMacro("_MSC_BUILD", Twine(1));
+    }
 
     if (Opts.MicrosoftExt) {
       Builder.defineMacro("_MSC_EXTENSIONS");
@@ -3839,6 +3843,18 @@ public:
     return true;
   }
   bool setFPMath(StringRef Name) override;
+  bool supportsThumb(StringRef ArchName, StringRef CPUArch,
+                     unsigned CPUArchVer) const {
+    return CPUArchVer >= 7 || (CPUArch.find('T') != StringRef::npos) ||
+           (CPUArch.find('M') != StringRef::npos);
+  }
+  bool supportsThumb2(StringRef ArchName, StringRef CPUArch,
+                      unsigned CPUArchVer) const {
+    // We check both CPUArchVer and ArchName because when only triple is
+    // specified, the default CPU is arm1136j-s.
+    return ArchName.endswith("v6t2") || ArchName.endswith("v7") ||
+           ArchName.endswith("v8") || CPUArch == "6T2" || CPUArchVer >= 7;
+  }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     // Target identification.
@@ -3854,10 +3870,37 @@ public:
       llvm_unreachable("Invalid char for architecture version number");
     }
     Builder.defineMacro("__ARM_ARCH_" + CPUArch + "__");
-    Builder.defineMacro("__ARM_ARCH", CPUArch.substr(0, 1));
+
+    // ACLE 6.4.1 ARM/Thumb instruction set architecture
     StringRef CPUProfile = getCPUProfile(CPU);
+    StringRef ArchName = getTriple().getArchName();
+
+    // __ARM_ARCH is defined as an integer value indicating the current ARM ISA
+    Builder.defineMacro("__ARM_ARCH", CPUArch.substr(0, 1));
+
+    // __ARM_ARCH_ISA_ARM is defined to 1 if the core supports the ARM ISA.  It
+    // is not defined for the M-profile.
+    // NOTE that the deffault profile is assumed to be 'A'
+    if (CPUProfile.empty() || CPUProfile != "M")
+      Builder.defineMacro("__ARM_ARCH_ISA_ARM", "1");
+
+    // __ARM_ARCH_ISA_THUMB is defined to 1 if the core supporst the original
+    // Thumb ISA (including v6-M).  It is set to 2 if the core supports the
+    // Thumb-2 ISA as found in the v6T2 architecture and all v7 architecture.
+    if (supportsThumb2(ArchName, CPUArch, CPUArchVer))
+      Builder.defineMacro("__ARM_ARCH_ISA_THUMB", "2");
+    else if (supportsThumb(ArchName, CPUArch, CPUArchVer))
+      Builder.defineMacro("__ARM_ARCH_ISA_THUMB", "1");
+
+    // __ARM_32BIT_STATE is defined to 1 if code is being generated for a 32-bit
+    // instruction set such as ARM or Thumb.
+    Builder.defineMacro("__ARM_32BIT_STATE", "1");
+
+    // ACLE 6.4.2 Architectural Profile (A, R, M or pre-Cortex)
+
+    // __ARM_ARCH_PROFILE is defined as 'A', 'R', 'M' or 'S', or unset.
     if (!CPUProfile.empty())
-      Builder.defineMacro("__ARM_ARCH_PROFILE", CPUProfile);
+      Builder.defineMacro("__ARM_ARCH_PROFILE", "'" + CPUProfile + "'");
 
     // Subtarget options.
 
@@ -3887,11 +3930,7 @@ public:
     if (IsThumb) {
       Builder.defineMacro("__THUMBEL__");
       Builder.defineMacro("__thumb__");
-      // We check both CPUArchVer and ArchName because when only triple is
-      // specified, the default CPU is arm1136j-s.
-      StringRef ArchName = getTriple().getArchName();
-      if (CPUArch == "6T2" || CPUArchVer >= 7 || ArchName.endswith("v6t2") ||
-          ArchName.endswith("v7") || ArchName.endswith("v8"))
+      if (supportsThumb2(ArchName, CPUArch, CPUArchVer))
         Builder.defineMacro("__thumb2__");
     }
     if (((HWDiv & HWDivThumb) && IsThumb) || ((HWDiv & HWDivARM) && !IsThumb))
@@ -4243,6 +4282,7 @@ class AArch64TargetInfo : public TargetInfo {
     NeonMode
   };
 
+  std::string CPU;
   unsigned FPU;
   unsigned CRC;
   unsigned Crypto;
@@ -4302,6 +4342,8 @@ public:
                         .Cases("cortex-a53", "cortex-a57", true)
                         .Case("cyclone", true)
                         .Default(false);
+    if (CPUKnown)
+      CPU = Name;
     return CPUKnown;
   }
 
@@ -4372,6 +4414,23 @@ public:
       Feature == "arm64" ||
       (Feature == "neon" && FPU == NeonMode);
   }
+
+  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {
+
+  if (CPU == "cyclone") {
+    Features["fp-armv8"] = true;
+    Features["neon"] = true;
+    Features["crypto"] = true;
+    Features["crc"] = true;
+    Features["zcm"] = true;
+    Features["zcz"] = true;
+  } else if (CPU == "cortex-a53" || CPU == "cortex-a57") {
+    Features["fp-armv8"] = true;
+    Features["neon"] = true;
+    Features["crypto"] = true;
+    Features["crc"] = true;
+  }
+}
 
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {

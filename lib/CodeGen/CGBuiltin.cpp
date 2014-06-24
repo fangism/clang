@@ -975,6 +975,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *Result = Builder.CreateAtomicCmpXchg(Args[0], Args[1], Args[2],
                                                 llvm::SequentiallyConsistent,
                                                 llvm::SequentiallyConsistent);
+    Result = Builder.CreateExtractValue(Result, 0);
     Result = EmitFromInt(*this, Result, T, ValueType);
     return RValue::get(Result);
   }
@@ -998,11 +999,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Args[1] = EmitToInt(*this, EmitScalarExpr(E->getArg(1)), T, IntType);
     Args[2] = EmitToInt(*this, EmitScalarExpr(E->getArg(2)), T, IntType);
 
-    Value *OldVal = Args[1];
-    Value *PrevVal = Builder.CreateAtomicCmpXchg(Args[0], Args[1], Args[2],
-                                                 llvm::SequentiallyConsistent,
-                                                 llvm::SequentiallyConsistent);
-    Value *Result = Builder.CreateICmpEQ(PrevVal, OldVal);
+    Value *Pair = Builder.CreateAtomicCmpXchg(Args[0], Args[1], Args[2],
+                                              llvm::SequentiallyConsistent,
+                                              llvm::SequentiallyConsistent);
+    Value *Result = Builder.CreateExtractValue(Pair, 1);
     // zext bool to int.
     Result = Builder.CreateZExt(Result, ConvertType(E->getType()));
     return RValue::get(Result);
@@ -1516,6 +1516,35 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                     E->getArg(0), true);
   case Builtin::BI__noop:
     return RValue::get(nullptr);
+  case Builtin::BI_InterlockedExchange:
+  case Builtin::BI_InterlockedExchangePointer:
+    return EmitBinaryAtomic(*this, llvm::AtomicRMWInst::Xchg, E);
+  case Builtin::BI_InterlockedCompareExchangePointer: {
+    llvm::Type *RTy;
+    llvm::IntegerType *IntType =
+      IntegerType::get(getLLVMContext(),
+                       getContext().getTypeSize(E->getType()));
+    llvm::Type *IntPtrType = IntType->getPointerTo();
+
+    llvm::Value *Destination =
+      Builder.CreateBitCast(EmitScalarExpr(E->getArg(0)), IntPtrType);
+
+    llvm::Value *Exchange = EmitScalarExpr(E->getArg(1));
+    RTy = Exchange->getType();
+    Exchange = Builder.CreatePtrToInt(Exchange, IntType);
+
+    llvm::Value *Comparand =
+      Builder.CreatePtrToInt(EmitScalarExpr(E->getArg(2)), IntType);
+
+    auto Result = Builder.CreateAtomicCmpXchg(Destination, Comparand, Exchange,
+                                              SequentiallyConsistent,
+                                              SequentiallyConsistent);
+    Result->setVolatile(true);
+
+    return RValue::get(Builder.CreateIntToPtr(Builder.CreateExtractValue(Result,
+                                                                         0),
+                                              RTy));
+  }
   case Builtin::BI_InterlockedCompareExchange: {
     AtomicCmpXchgInst *CXI = Builder.CreateAtomicCmpXchg(
         EmitScalarExpr(E->getArg(0)),
@@ -1524,7 +1553,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
         SequentiallyConsistent,
         SequentiallyConsistent);
       CXI->setVolatile(true);
-      return RValue::get(CXI);
+      return RValue::get(Builder.CreateExtractValue(CXI, 0));
   }
   case Builtin::BI_InterlockedIncrement: {
     AtomicRMWInst *RMWI = Builder.CreateAtomicRMW(
@@ -1755,36 +1784,6 @@ Value *CodeGenFunction::EmitNeonRShiftImm(Value *Vec, Value *Shift,
     return Builder.CreateLShr(Vec, Shift, name);
   else
     return Builder.CreateAShr(Vec, Shift, name);
-}
-
-Value *CodeGenFunction::EmitConcatVectors(Value *Lo, Value *Hi,
-                                          llvm::Type *ArgTy) {
-  unsigned NumElts = ArgTy->getVectorNumElements();
-  SmallVector<Constant *, 16> Indices;
-  for (unsigned i = 0; i < 2 * NumElts; ++i)
-    Indices.push_back(ConstantInt::get(Int32Ty, i));
-
-  Constant *Mask = ConstantVector::get(Indices);
-  Value *LoCast = Builder.CreateBitCast(Lo, ArgTy);
-  Value *HiCast = Builder.CreateBitCast(Hi, ArgTy);
-  return Builder.CreateShuffleVector(LoCast, HiCast, Mask, "concat");
-}
-
-Value *CodeGenFunction::EmitExtractHigh(Value *Vec, llvm::Type *ResTy) {
-  unsigned NumElts = ResTy->getVectorNumElements();
-  SmallVector<Constant *, 8> Indices;
-
-  llvm::Type *InTy = llvm::VectorType::get(ResTy->getVectorElementType(),
-                                           NumElts * 2);
-  Value *VecCast = Builder.CreateBitCast(Vec, InTy);
-
-  // extract_high is a shuffle on the second half of the input indices: E.g. 4,
-  // 5, 6, 7 if we're extracting <4 x i16> from <8 x i16>.
-  for (unsigned i = 0; i < NumElts; ++i)
-    Indices.push_back(ConstantInt::get(Int32Ty, NumElts + i));
-
-  Constant *Mask = ConstantVector::get(Indices);
-  return Builder.CreateShuffleVector(VecCast, VecCast, Mask, "concat");
 }
 
 /// GetPointeeAlignment - Given an expression with a pointer type, find the
@@ -3054,6 +3053,12 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     return Builder.CreateCall(F, llvm::ConstantInt::get(Int32Ty, HintID));
   }
 
+  if (BuiltinID == ARM::BI__builtin_arm_rbit) {
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_rbit),
+                                               EmitScalarExpr(E->getArg(0)),
+                              "rbit");
+  }
+
   if (BuiltinID == ARM::BI__clear_cache) {
     assert(E->getNumArgs() == 2 && "__clear_cache takes 2 arguments");
     const FunctionDecl *FD = E->getDirectCallee();
@@ -3727,7 +3732,7 @@ Value *CodeGenFunction::
 emitVectorWrappedScalar8Intrinsic(unsigned Int, SmallVectorImpl<Value*> &Ops,
                                   const char *Name) {
   // i8 is not a legal types for AArch64, so we can't just use
-  // a normal overloaed intrinsic call for these scalar types. Instead
+  // a normal overloaded intrinsic call for these scalar types. Instead
   // we'll build 64-bit vectors w/ lane zero being our input values and
   // perform the operation on that. The back end can pattern match directly
   // to the scalar instruction.
@@ -3743,7 +3748,7 @@ Value *CodeGenFunction::
 emitVectorWrappedScalar16Intrinsic(unsigned Int, SmallVectorImpl<Value*> &Ops,
                                    const char *Name) {
   // i16 is not a legal types for AArch64, so we can't just use
-  // a normal overloaed intrinsic call for these scalar types. Instead
+  // a normal overloaded intrinsic call for these scalar types. Instead
   // we'll build 64-bit vectors w/ lane zero being our input values and
   // perform the operation on that. The back end can pattern match directly
   // to the scalar instruction.
@@ -3757,6 +3762,21 @@ emitVectorWrappedScalar16Intrinsic(unsigned Int, SmallVectorImpl<Value*> &Ops,
 
 Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
                                                const CallExpr *E) {
+  if (BuiltinID == AArch64::BI__builtin_arm_rbit) {
+    assert((getContext().getTypeSize(E->getType()) == 32) &&
+           "rbit of unusual size!");
+    llvm::Value *Arg = EmitScalarExpr(E->getArg(0));
+    return Builder.CreateCall(
+        CGM.getIntrinsic(Intrinsic::aarch64_rbit, Arg->getType()), Arg, "rbit");
+  }
+  if (BuiltinID == AArch64::BI__builtin_arm_rbit64) {
+    assert((getContext().getTypeSize(E->getType()) == 64) &&
+           "rbit of unusual size!");
+    llvm::Value *Arg = EmitScalarExpr(E->getArg(0));
+    return Builder.CreateCall(
+        CGM.getIntrinsic(Intrinsic::aarch64_rbit, Arg->getType()), Arg, "rbit");
+  }
+
   if (BuiltinID == AArch64::BI__clear_cache) {
     assert(E->getNumArgs() == 2 && "__clear_cache takes 2 arguments");
     const FunctionDecl *FD = E->getDirectCallee();

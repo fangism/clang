@@ -495,17 +495,8 @@ MicrosoftCXXNameMangler::mangleMemberFunctionPointer(const CXXRecordDecl *RD,
   //                           ::= $H? <name> <number>
   //                           ::= $I? <name> <number> <number>
   //                           ::= $J? <name> <number> <number> <number>
-  //                           ::= $0A@
 
   MSInheritanceAttr::Spelling IM = RD->getMSInheritanceModel();
-
-  // The null member function pointer is $0A@ in function templates and crashes
-  // MSVC when used in class templates, so we don't know what they really look
-  // like.
-  if (!MD) {
-    Out << "$0A@";
-    return;
-  }
 
   char Code = '\0';
   switch (IM) {
@@ -515,28 +506,38 @@ MicrosoftCXXNameMangler::mangleMemberFunctionPointer(const CXXRecordDecl *RD,
   case MSInheritanceAttr::Keyword_unspecified_inheritance: Code = 'J'; break;
   }
 
-  Out << '$' << Code << '?';
-
   // If non-virtual, mangle the name.  If virtual, mangle as a virtual memptr
   // thunk.
   uint64_t NVOffset = 0;
   uint64_t VBTableOffset = 0;
   uint64_t VBPtrOffset = 0;
-  if (MD->isVirtual()) {
-    MicrosoftVTableContext *VTContext =
-        cast<MicrosoftVTableContext>(getASTContext().getVTableContext());
-    const MicrosoftVTableContext::MethodVFTableLocation &ML =
-        VTContext->getMethodVFTableLocation(GlobalDecl(MD));
-    mangleVirtualMemPtrThunk(MD, ML);
-    NVOffset = ML.VFPtrOffset.getQuantity();
-    VBTableOffset = ML.VBTableIndex * 4;
-    if (ML.VBase) {
-      const ASTRecordLayout &Layout = getASTContext().getASTRecordLayout(RD);
-      VBPtrOffset = Layout.getVBPtrOffset().getQuantity();
+  if (MD) {
+    Out << '$' << Code << '?';
+    if (MD->isVirtual()) {
+      MicrosoftVTableContext *VTContext =
+          cast<MicrosoftVTableContext>(getASTContext().getVTableContext());
+      const MicrosoftVTableContext::MethodVFTableLocation &ML =
+          VTContext->getMethodVFTableLocation(GlobalDecl(MD));
+      mangleVirtualMemPtrThunk(MD, ML);
+      NVOffset = ML.VFPtrOffset.getQuantity();
+      VBTableOffset = ML.VBTableIndex * 4;
+      if (ML.VBase) {
+        const ASTRecordLayout &Layout = getASTContext().getASTRecordLayout(RD);
+        VBPtrOffset = Layout.getVBPtrOffset().getQuantity();
+      }
+    } else {
+      mangleName(MD);
+      mangleFunctionEncoding(MD);
     }
   } else {
-    mangleName(MD);
-    mangleFunctionEncoding(MD);
+    // Null single inheritance member functions are encoded as a simple nullptr.
+    if (IM == MSInheritanceAttr::Keyword_single_inheritance) {
+      Out << "$0A@";
+      return;
+    }
+    if (IM == MSInheritanceAttr::Keyword_unspecified_inheritance)
+      VBTableOffset = -1;
+    Out << '$' << Code;
   }
 
   if (MSInheritanceAttr::hasNVOffsetField(/*IsMemberFunction=*/true, IM))
@@ -1063,6 +1064,9 @@ void MicrosoftCXXNameMangler::mangleExpression(const Expr *E) {
     return;
   }
 
+  // Look through no-op casts like template parameter substitutions.
+  E = E->IgnoreParenNoopCasts(Context.getASTContext());
+
   const CXXUuidofExpr *UE = nullptr;
   if (const UnaryOperator *UO = dyn_cast<UnaryOperator>(E)) {
     if (UO->getOpcode() == UO_AddrOf)
@@ -1152,13 +1156,16 @@ void MicrosoftCXXNameMangler::mangleTemplateArg(const TemplateDecl *TD,
     QualType T = TA.getNullPtrType();
     if (const MemberPointerType *MPT = T->getAs<MemberPointerType>()) {
       const CXXRecordDecl *RD = MPT->getMostRecentCXXRecordDecl();
-      if (MPT->isMemberFunctionPointerType())
+      if (MPT->isMemberFunctionPointerType() && isa<ClassTemplateDecl>(TD)) {
         mangleMemberFunctionPointer(RD, nullptr);
-      else
+        return;
+      }
+      if (MPT->isMemberDataPointer()) {
         mangleMemberDataPointer(RD, nullptr);
-    } else {
-      Out << "$0A@";
+        return;
+      }
     }
+    Out << "$0A@";
     break;
   }
   case TemplateArgument::Expression:

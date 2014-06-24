@@ -30,9 +30,8 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/system_error.h"
-
 #include <cstdlib> // ::getenv
+#include <system_error>
 
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
@@ -2046,7 +2045,7 @@ void Generic_GCC::GCCInstallationDetector::ScanLibDirForGCCTriple(
       (llvm::array_lengthof(LibSuffixes) - (TargetArch != llvm::Triple::x86));
   for (unsigned i = 0; i < NumLibSuffixes; ++i) {
     StringRef LibSuffix = LibSuffixes[i];
-    llvm::error_code EC;
+    std::error_code EC;
     for (llvm::sys::fs::directory_iterator LI(LibDir + LibSuffix, EC), LE;
          !EC && LI != LE; LI = LI.increment(EC)) {
       StringRef VersionText = llvm::sys::path::filename(LI->path());
@@ -2256,7 +2255,7 @@ Hexagon_TC::Hexagon_TC(const Driver &D, const llvm::Triple &Triple,
 
   // Determine version of GCC libraries and headers to use.
   const std::string HexagonDir(GnuDir + "/lib/gcc/hexagon");
-  llvm::error_code ec;
+  std::error_code ec;
   GCCVersion MaxVersion= GCCVersion::Parse("0.0.0");
   for (llvm::sys::fs::directory_iterator di(HexagonDir, ec), de;
        !ec && di != de; di = di.increment(ec)) {
@@ -3293,6 +3292,9 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   const StringRef PPC64MultiarchIncludeDirs[] = {
     "/usr/include/powerpc64-linux-gnu"
   };
+  const StringRef PPC64LEMultiarchIncludeDirs[] = {
+    "/usr/include/powerpc64le-linux-gnu"
+  };
   ArrayRef<StringRef> MultiarchIncludeDirs;
   if (getTriple().getArch() == llvm::Triple::x86_64) {
     MultiarchIncludeDirs = X86_64MultiarchIncludeDirs;
@@ -3316,6 +3318,8 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     MultiarchIncludeDirs = PPCMultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::ppc64) {
     MultiarchIncludeDirs = PPC64MultiarchIncludeDirs;
+  } else if (getTriple().getArch() == llvm::Triple::ppc64le) {
+    MultiarchIncludeDirs = PPC64LEMultiarchIncludeDirs;
   }
   for (StringRef Dir : MultiarchIncludeDirs) {
     if (llvm::sys::fs::exists(SysRoot + Dir)) {

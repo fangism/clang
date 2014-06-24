@@ -2938,6 +2938,7 @@ static bool EvaluateObjectArgument(EvalInfo &Info, const Expr *Object,
   if (Object->getType()->isLiteralType(Info.Ctx))
     return EvaluateTemporary(Object, This, Info);
 
+  Info.Diag(Object, diag::note_constexpr_nonliteral) << Object->getType();
   return false;
 }
 
@@ -4372,8 +4373,11 @@ static bool EvaluateLValue(const Expr *E, LValue &Result, EvalInfo &Info) {
 }
 
 bool LValueExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
-  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(E->getDecl()))
+  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(E->getDecl())) {
+    if (FD->hasAttr<DLLImportAttr>())
+      return ZeroInitialization(E);
     return Success(FD);
+  }
   if (const VarDecl *VD = dyn_cast<VarDecl>(E->getDecl()))
     return VisitVarDecl(E, VD);
   return Error(E);
@@ -4389,6 +4393,9 @@ bool LValueExprEvaluator::VisitVarDecl(const Expr *E, const VarDecl *VD) {
       Result.set(VD, Frame->Index);
       return true;
     }
+    // The address of __declspec(dllimport) variables aren't constant.
+    if (VD->hasAttr<DLLImportAttr>())
+      return ZeroInitialization(E);
     return Success(VD);
   }
 
@@ -6910,8 +6917,9 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
 }
 
 CharUnits IntExprEvaluator::GetAlignOfType(QualType T) {
-  // C++ [expr.alignof]p3: "When alignof is applied to a reference type, the
-  //   result shall be the alignment of the referenced type."
+  // C++ [expr.alignof]p3:
+  //     When alignof is applied to a reference type, the result is the
+  //     alignment of the referenced type.
   if (const ReferenceType *Ref = T->getAs<ReferenceType>())
     T = Ref->getPointeeType();
 
@@ -6930,7 +6938,7 @@ CharUnits IntExprEvaluator::GetAlignOfExpr(const Expr *E) {
   // alignof decl is always accepted, even if it doesn't make sense: we default
   // to 1 in those cases.
   if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E))
-    return Info.Ctx.getDeclAlign(DRE->getDecl(), 
+    return Info.Ctx.getDeclAlign(DRE->getDecl(),
                                  /*RefAsPointee*/true);
 
   if (const MemberExpr *ME = dyn_cast<MemberExpr>(E))

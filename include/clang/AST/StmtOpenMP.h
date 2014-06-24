@@ -67,8 +67,9 @@ protected:
   OMPExecutableDirective(const T *, StmtClass SC, OpenMPDirectiveKind K,
                          SourceLocation StartLoc, SourceLocation EndLoc,
                          unsigned NumClauses, unsigned NumChildren)
-      : Stmt(SC), Kind(K), StartLoc(StartLoc), EndLoc(EndLoc),
-        NumClauses(NumClauses), NumChildren(NumChildren),
+      : Stmt(SC), Kind(K), StartLoc(std::move(StartLoc)),
+        EndLoc(std::move(EndLoc)), NumClauses(NumClauses),
+        NumChildren(NumChildren),
         ClausesOffset(llvm::RoundUpToAlignment(sizeof(T),
                                                llvm::alignOf<OMPClause *>())) {}
 
@@ -85,6 +86,44 @@ protected:
   void setAssociatedStmt(Stmt *S) { *child_begin() = S; }
 
 public:
+  /// \brief Iterates over a filtered subrange of clauses applied to a
+  /// directive.
+  ///
+  /// This iterator visits only those declarations that meet some run-time
+  /// criteria.
+  template <class FilterPredicate> class filtered_clause_iterator {
+    ArrayRef<OMPClause *>::const_iterator Current;
+    ArrayRef<OMPClause *>::const_iterator End;
+    void SkipToNextClause() {
+      while (Current != End && !FilterPredicate()(*Current))
+        ++Current;
+    }
+
+  public:
+    typedef const OMPClause *value_type;
+    filtered_clause_iterator() : Current(), End() {}
+    explicit filtered_clause_iterator(ArrayRef<OMPClause *> Arr)
+        : Current(Arr.begin()), End(Arr.end()) {
+      SkipToNextClause();
+    }
+    value_type operator*() const { return *Current; }
+    value_type operator->() const { return *Current; }
+    filtered_clause_iterator &operator++() {
+      ++Current;
+      SkipToNextClause();
+      return *this;
+    }
+
+    filtered_clause_iterator operator++(int) {
+      filtered_clause_iterator tmp(*this);
+      ++(*this);
+      return tmp;
+    }
+
+    bool operator!() { return Current == End; }
+    operator bool() { return Current != End; }
+  };
+
   /// \brief Returns starting location of directive kind.
   SourceLocation getLocStart() const { return StartLoc; }
   /// \brief Returns ending location of directive.
@@ -252,6 +291,74 @@ public:
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPSimdDirectiveClass;
+  }
+};
+
+/// \brief This represents '#pragma omp for' directive.
+///
+/// \code
+/// #pragma omp for private(a,b) reduction(+:c,d)
+/// \endcode
+/// In this example directive '#pragma omp for' has clauses 'private' with the
+/// variables 'a' and 'b' and 'reduction' with operator '+' and variables 'c'
+/// and 'd'.
+///
+class OMPForDirective : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  /// \brief Number of collapsed loops as specified by 'collapse' clause.
+  unsigned CollapsedNum;
+  /// \brief Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  OMPForDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                  unsigned CollapsedNum, unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPForDirectiveClass, OMPD_for, StartLoc,
+                               EndLoc, NumClauses, 1),
+        CollapsedNum(CollapsedNum) {}
+
+  /// \brief Build an empty directive.
+  ///
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  explicit OMPForDirective(unsigned CollapsedNum, unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPForDirectiveClass, OMPD_for,
+                               SourceLocation(), SourceLocation(), NumClauses,
+                               1),
+        CollapsedNum(CollapsedNum) {}
+
+public:
+  /// \brief Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  ///
+  static OMPForDirective *Create(const ASTContext &C, SourceLocation StartLoc,
+                                 SourceLocation EndLoc,
+                                 ArrayRef<OMPClause *> Clauses,
+                                 Stmt *AssociatedStmt);
+
+  /// \brief Creates an empty directive with the place
+  /// for \a NumClauses clauses.
+  ///
+  /// \param C AST context.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPForDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
+                                      unsigned CollapsedNum, EmptyShell);
+
+  unsigned getCollapsedNumber() const { return CollapsedNum; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPForDirectiveClass;
   }
 };
 

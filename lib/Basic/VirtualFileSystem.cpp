@@ -14,6 +14,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/YAMLParser.h"
@@ -65,17 +66,15 @@ File::~File() {}
 
 FileSystem::~FileSystem() {}
 
-error_code FileSystem::getBufferForFile(const llvm::Twine &Name,
-                                        std::unique_ptr<MemoryBuffer> &Result,
-                                        int64_t FileSize,
-                                        bool RequiresNullTerminator,
-                                        bool IsVolatile) {
+std::error_code FileSystem::getBufferForFile(
+    const llvm::Twine &Name, std::unique_ptr<MemoryBuffer> &Result,
+    int64_t FileSize, bool RequiresNullTerminator, bool IsVolatile) {
   std::unique_ptr<File> F;
-  if (error_code EC = openFileForRead(Name, F))
+  if (std::error_code EC = openFileForRead(Name, F))
     return EC;
 
-  error_code EC = F->getBuffer(Name, Result, FileSize, RequiresNullTerminator,
-                               IsVolatile);
+  std::error_code EC =
+      F->getBuffer(Name, Result, FileSize, RequiresNullTerminator, IsVolatile);
   return EC;
 }
 
@@ -96,11 +95,12 @@ class RealFile : public File {
 public:
   ~RealFile();
   ErrorOr<Status> status() override;
-  error_code getBuffer(const Twine &Name, std::unique_ptr<MemoryBuffer> &Result,
-                       int64_t FileSize = -1,
-                       bool RequiresNullTerminator = true,
-                       bool IsVolatile = false) override;
-  error_code close() override;
+  std::error_code getBuffer(const Twine &Name,
+                            std::unique_ptr<MemoryBuffer> &Result,
+                            int64_t FileSize = -1,
+                            bool RequiresNullTerminator = true,
+                            bool IsVolatile = false) override;
+  std::error_code close() override;
   void setName(StringRef Name) override;
 };
 } // end anonymous namespace
@@ -110,7 +110,7 @@ ErrorOr<Status> RealFile::status() {
   assert(FD != -1 && "cannot stat closed file");
   if (!S.isStatusKnown()) {
     file_status RealStatus;
-    if (error_code EC = sys::fs::status(FD, RealStatus))
+    if (std::error_code EC = sys::fs::status(FD, RealStatus))
       return EC;
     Status NewS(RealStatus);
     NewS.setName(S.getName());
@@ -119,10 +119,11 @@ ErrorOr<Status> RealFile::status() {
   return S;
 }
 
-error_code RealFile::getBuffer(const Twine &Name,
-                               std::unique_ptr<MemoryBuffer> &Result,
-                               int64_t FileSize, bool RequiresNullTerminator,
-                               bool IsVolatile) {
+std::error_code RealFile::getBuffer(const Twine &Name,
+                                    std::unique_ptr<MemoryBuffer> &Result,
+                                    int64_t FileSize,
+                                    bool RequiresNullTerminator,
+                                    bool IsVolatile) {
   assert(FD != -1 && "cannot get buffer for closed file");
   return MemoryBuffer::getOpenFile(FD, Name.str().c_str(), Result, FileSize,
                                    RequiresNullTerminator, IsVolatile);
@@ -138,11 +139,11 @@ error_code RealFile::getBuffer(const Twine &Name,
 #define S_ISFIFO(x) (0)
 #endif
 #endif
-error_code RealFile::close() {
+std::error_code RealFile::close() {
   if (::close(FD))
-    return error_code(errno, system_category());
+    return std::error_code(errno, std::generic_category());
   FD = -1;
-  return error_code();
+  return std::error_code();
 }
 
 void RealFile::setName(StringRef Name) {
@@ -154,28 +155,28 @@ namespace {
 class RealFileSystem : public FileSystem {
 public:
   ErrorOr<Status> status(const Twine &Path) override;
-  error_code openFileForRead(const Twine &Path,
-                             std::unique_ptr<File> &Result) override;
+  std::error_code openFileForRead(const Twine &Path,
+                                  std::unique_ptr<File> &Result) override;
 };
 } // end anonymous namespace
 
 ErrorOr<Status> RealFileSystem::status(const Twine &Path) {
   sys::fs::file_status RealStatus;
-  if (error_code EC = sys::fs::status(Path, RealStatus))
+  if (std::error_code EC = sys::fs::status(Path, RealStatus))
     return EC;
   Status Result(RealStatus);
   Result.setName(Path.str());
   return Result;
 }
 
-error_code RealFileSystem::openFileForRead(const Twine &Name,
-                                           std::unique_ptr<File> &Result) {
+std::error_code RealFileSystem::openFileForRead(const Twine &Name,
+                                                std::unique_ptr<File> &Result) {
   int FD;
-  if (error_code EC = sys::fs::openFileForRead(Name, FD))
+  if (std::error_code EC = sys::fs::openFileForRead(Name, FD))
     return EC;
   Result.reset(new RealFile(FD));
   Result->setName(Name.str());
-  return error_code();
+  return std::error_code();
 }
 
 IntrusiveRefCntPtr<FileSystem> vfs::getRealFileSystem() {
@@ -198,21 +199,22 @@ ErrorOr<Status> OverlayFileSystem::status(const Twine &Path) {
   // FIXME: handle symlinks that cross file systems
   for (iterator I = overlays_begin(), E = overlays_end(); I != E; ++I) {
     ErrorOr<Status> Status = (*I)->status(Path);
-    if (Status || Status.getError() != errc::no_such_file_or_directory)
+    if (Status || Status.getError() != llvm::errc::no_such_file_or_directory)
       return Status;
   }
-  return make_error_code(errc::no_such_file_or_directory);
+  return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
-error_code OverlayFileSystem::openFileForRead(const llvm::Twine &Path,
-                                              std::unique_ptr<File> &Result) {
+std::error_code
+OverlayFileSystem::openFileForRead(const llvm::Twine &Path,
+                                   std::unique_ptr<File> &Result) {
   // FIXME: handle symlinks that cross file systems
   for (iterator I = overlays_begin(), E = overlays_end(); I != E; ++I) {
-    error_code EC = (*I)->openFileForRead(Path, Result);
-    if (!EC || EC != errc::no_such_file_or_directory)
+    std::error_code EC = (*I)->openFileForRead(Path, Result);
+    if (!EC || EC != llvm::errc::no_such_file_or_directory)
       return EC;
   }
-  return make_error_code(errc::no_such_file_or_directory);
+  return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
 //===-----------------------------------------------------------------------===/
@@ -389,8 +391,8 @@ public:
                              IntrusiveRefCntPtr<FileSystem> ExternalFS);
 
   ErrorOr<Status> status(const Twine &Path) override;
-  error_code openFileForRead(const Twine &Path,
-                             std::unique_ptr<File> &Result) override;
+  std::error_code openFileForRead(const Twine &Path,
+                                  std::unique_ptr<File> &Result) override;
 };
 
 /// \brief A helper class to hold the common YAML parsing state.
@@ -740,21 +742,21 @@ ErrorOr<Entry *> VFSFromYAML::lookupPath(const Twine &Path_) {
   Path_.toVector(Path);
 
   // Handle relative paths
-  if (error_code EC = sys::fs::make_absolute(Path))
+  if (std::error_code EC = sys::fs::make_absolute(Path))
     return EC;
 
   if (Path.empty())
-    return make_error_code(errc::invalid_argument);
+    return make_error_code(llvm::errc::invalid_argument);
 
   sys::path::const_iterator Start = sys::path::begin(Path);
   sys::path::const_iterator End = sys::path::end(Path);
   for (std::vector<Entry *>::iterator I = Roots.begin(), E = Roots.end();
        I != E; ++I) {
     ErrorOr<Entry *> Result = lookupPath(Start, End, *I);
-    if (Result || Result.getError() != errc::no_such_file_or_directory)
+    if (Result || Result.getError() != llvm::errc::no_such_file_or_directory)
       return Result;
   }
-  return make_error_code(errc::no_such_file_or_directory);
+  return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
 ErrorOr<Entry *> VFSFromYAML::lookupPath(sys::path::const_iterator Start,
@@ -767,7 +769,7 @@ ErrorOr<Entry *> VFSFromYAML::lookupPath(sys::path::const_iterator Start,
   if (CaseSensitive ? !Start->equals(From->getName())
                     : !Start->equals_lower(From->getName()))
     // failure to match
-    return make_error_code(errc::no_such_file_or_directory);
+    return make_error_code(llvm::errc::no_such_file_or_directory);
 
   ++Start;
 
@@ -778,16 +780,16 @@ ErrorOr<Entry *> VFSFromYAML::lookupPath(sys::path::const_iterator Start,
 
   DirectoryEntry *DE = dyn_cast<DirectoryEntry>(From);
   if (!DE)
-    return make_error_code(errc::not_a_directory);
+    return make_error_code(llvm::errc::not_a_directory);
 
   for (DirectoryEntry::iterator I = DE->contents_begin(),
                                 E = DE->contents_end();
        I != E; ++I) {
     ErrorOr<Entry *> Result = lookupPath(Start, End, *I);
-    if (Result || Result.getError() != errc::no_such_file_or_directory)
+    if (Result || Result.getError() != llvm::errc::no_such_file_or_directory)
       return Result;
   }
-  return make_error_code(errc::no_such_file_or_directory);
+  return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
 ErrorOr<Status> VFSFromYAML::status(const Twine &Path) {
@@ -812,24 +814,25 @@ ErrorOr<Status> VFSFromYAML::status(const Twine &Path) {
   }
 }
 
-error_code VFSFromYAML::openFileForRead(const Twine &Path,
-                                        std::unique_ptr<vfs::File> &Result) {
+std::error_code
+VFSFromYAML::openFileForRead(const Twine &Path,
+                             std::unique_ptr<vfs::File> &Result) {
   ErrorOr<Entry *> E = lookupPath(Path);
   if (!E)
     return E.getError();
 
   FileEntry *F = dyn_cast<FileEntry>(*E);
   if (!F) // FIXME: errc::not_a_file?
-    return make_error_code(errc::invalid_argument);
+    return make_error_code(llvm::errc::invalid_argument);
 
-  if (error_code EC = ExternalFS->openFileForRead(F->getExternalContentsPath(),
-                                                  Result))
+  if (std::error_code EC =
+          ExternalFS->openFileForRead(F->getExternalContentsPath(), Result))
     return EC;
 
   if (!F->useExternalName(UseExternalNames))
     Result->setName(Path.str());
 
-  return error_code();
+  return std::error_code();
 }
 
 IntrusiveRefCntPtr<FileSystem>

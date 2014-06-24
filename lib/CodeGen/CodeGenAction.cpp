@@ -443,15 +443,7 @@ void BackendConsumer::EmitOptimizationRemark(
   Diags.Report(Loc, DiagID) << AddFlagValue(D.getPassName())
                             << D.getMsg().str();
 
-  if (Line == 0)
-    // If we could not extract a source location for the diagnostic,
-    // inform the user how they can get source locations back.
-    //
-    // FIXME: We should really be generating !srcloc annotations when
-    // -Rpass is used. !srcloc annotations need to be emitted in
-    // approximately the same spots as !dbg nodes.
-    Diags.Report(Loc, diag::note_fe_backend_optimization_remark_missing_loc);
-  else if (DILoc.isInvalid())
+  if (DILoc.isInvalid())
     // If we were not able to translate the file:line:col information
     // back to a SourceLocation, at least emit a note stating that
     // we could not translate this location. This can happen in the
@@ -621,7 +613,7 @@ ASTConsumer *CodeGenAction::CreateASTConsumer(CompilerInstance &CI,
 
     ErrorOr<llvm::Module *> ModuleOrErr =
         getLazyBitcodeModule(BCBuf, *VMContext);
-    if (error_code EC = ModuleOrErr.getError()) {
+    if (std::error_code EC = ModuleOrErr.getError()) {
       CI.getDiagnostics().Report(diag::err_cannot_open_file)
         << LinkBCFile << EC.message();
       return nullptr;

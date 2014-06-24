@@ -141,7 +141,7 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CodeGenOptions &CGO,
   RRData = new RREntrypoints();
 
   if (!CodeGenOpts.InstrProfileInput.empty()) {
-    if (llvm::error_code EC = llvm::IndexedInstrProfReader::create(
+    if (std::error_code EC = llvm::IndexedInstrProfReader::create(
             CodeGenOpts.InstrProfileInput, PGOReader)) {
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                               "Could not read profile: %0");
@@ -351,6 +351,23 @@ void CodeGenModule::Release() {
     // (and warn about it, too).
     getModule().addModuleFlag(llvm::Module::Warning, "Debug Info Version",
                               llvm::DEBUG_METADATA_VERSION);
+
+  // We need to record the widths of enums and wchar_t, so that we can generate
+  // the correct build attributes in the ARM backend.
+  llvm::Triple::ArchType Arch = Context.getTargetInfo().getTriple().getArch();
+  if (   Arch == llvm::Triple::arm
+      || Arch == llvm::Triple::armeb
+      || Arch == llvm::Triple::thumb
+      || Arch == llvm::Triple::thumbeb) {
+    // Width of wchar_t in bytes
+    uint64_t WCharWidth =
+        Context.getTypeSizeInChars(Context.getWideCharType()).getQuantity();
+    getModule().addModuleFlag(llvm::Module::Error, "wchar_size", WCharWidth);
+
+    // The minimum width of an enum in bytes
+    uint64_t EnumWidth = Context.getLangOpts().ShortEnums ? 1 : 4;
+    getModule().addModuleFlag(llvm::Module::Error, "min_enum_size", EnumWidth);
+  }
 
   SimplifyPersonality();
 
@@ -1903,6 +1920,16 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   // Set the llvm linkage type as appropriate.
   llvm::GlobalValue::LinkageTypes Linkage =
       getLLVMLinkageVarDefinition(D, GV->isConstant());
+
+  // On Darwin, the backing variable for a C++11 thread_local variable always
+  // has internal linkage; all accesses should just be calls to the
+  // Itanium-specified entry point, which has the normal linkage of the
+  // variable.
+  if (const auto *VD = dyn_cast<VarDecl>(D))
+    if (!VD->isStaticLocal() && VD->getTLSKind() == VarDecl::TLS_Dynamic &&
+        Context.getTargetInfo().getTriple().isMacOSX())
+      Linkage = llvm::GlobalValue::InternalLinkage;
+
   GV->setLinkage(Linkage);
   if (D->hasAttr<DLLImportAttr>())
     GV->setDLLStorageClass(llvm::GlobalVariable::DLLImportStorageClass);

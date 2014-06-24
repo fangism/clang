@@ -1707,6 +1707,18 @@ void OMPClauseWriter::VisitOMPProcBindClause(OMPProcBindClause *C) {
   Writer->Writer.AddSourceLocation(C->getProcBindKindKwLoc(), Record);
 }
 
+void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
+  Record.push_back(C->getScheduleKind());
+  Writer->Writer.AddStmt(C->getChunkSize());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+  Writer->Writer.AddSourceLocation(C->getScheduleKindLoc(), Record);
+  Writer->Writer.AddSourceLocation(C->getCommaLoc(), Record);
+}
+
+void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *) {}
+
+void OMPClauseWriter::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
 void OMPClauseWriter::VisitOMPPrivateClause(OMPPrivateClause *C) {
   Record.push_back(C->varlist_size());
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
@@ -1731,6 +1743,16 @@ void OMPClauseWriter::VisitOMPLastprivateClause(OMPLastprivateClause *C) {
 void OMPClauseWriter::VisitOMPSharedClause(OMPSharedClause *C) {
   Record.push_back(C->varlist_size());
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+  for (auto *VE : C->varlists())
+    Writer->Writer.AddStmt(VE);
+}
+
+void OMPClauseWriter::VisitOMPReductionClause(OMPReductionClause *C) {
+  Record.push_back(C->varlist_size());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+  Writer->Writer.AddSourceLocation(C->getColonLoc(), Record);
+  Writer->Writer.AddNestedNameSpecifierLoc(C->getQualifierLoc(), Record);
+  Writer->Writer.AddDeclarationNameInfo(C->getNameInfo(), Record);
   for (auto *VE : C->varlists())
     Writer->Writer.AddStmt(VE);
 }
@@ -1786,6 +1808,14 @@ void ASTStmtWriter::VisitOMPSimdDirective(OMPSimdDirective *D) {
   Record.push_back(D->getCollapsedNumber());
   VisitOMPExecutableDirective(D);
   Code = serialization::STMT_OMP_SIMD_DIRECTIVE;
+}
+
+void ASTStmtWriter::VisitOMPForDirective(OMPForDirective *D) {
+  VisitStmt(D);
+  Record.push_back(D->getNumClauses());
+  Record.push_back(D->getCollapsedNumber());
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_FOR_DIRECTIVE;
 }
 
 //===----------------------------------------------------------------------===//

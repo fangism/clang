@@ -1851,6 +1851,7 @@ public:
   void VisitOMPExecutableDirective(const OMPExecutableDirective *D);
   void VisitOMPParallelDirective(const OMPParallelDirective *D);
   void VisitOMPSimdDirective(const OMPSimdDirective *D);
+  void VisitOMPForDirective(const OMPForDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -1943,6 +1944,14 @@ void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
 void OMPClauseEnqueue::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
+void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
+  Visitor->AddStmt(C->getChunkSize());
+}
+
+void OMPClauseEnqueue::VisitOMPOrderedClause(const OMPOrderedClause *) {}
+
+void OMPClauseEnqueue::VisitOMPNowaitClause(const OMPNowaitClause *) {}
+
 template<typename T>
 void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
   for (const auto *I : Node->varlists())
@@ -1961,6 +1970,9 @@ void OMPClauseEnqueue::VisitOMPLastprivateClause(
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPSharedClause(const OMPSharedClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPReductionClause(const OMPReductionClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPLinearClause(const OMPLinearClause *C) {
@@ -2268,6 +2280,10 @@ void EnqueueVisitor::VisitOMPParallelDirective(const OMPParallelDirective *D) {
 }
 
 void EnqueueVisitor::VisitOMPSimdDirective(const OMPSimdDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPForDirective(const OMPForDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -3947,6 +3963,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPParallelDirective");
   case CXCursor_OMPSimdDirective:
     return cxstring::createRef("OMPSimdDirective");
+  case CXCursor_OMPForDirective:
+    return cxstring::createRef("OMPForDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");

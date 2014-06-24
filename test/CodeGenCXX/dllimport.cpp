@@ -27,6 +27,8 @@ struct ExplicitSpec_NotImported {};
 #define USE(func) void UNIQ(use)() { func(); }
 #define USEMEMFUNC(class, func) void (class::*UNIQ(use)())() { return &class::func; }
 #define USECLASS(class) void UNIQ(USE)() { class x; }
+#define USECOPYASSIGN(class) class& (class::*UNIQ(use)())(class&) { return &class::operator=; }
+#define USEMOVEASSIGN(class) class& (class::*UNIQ(use)())(class&&) { return &class::operator=; }
 
 //===----------------------------------------------------------------------===//
 // Globals
@@ -82,6 +84,15 @@ USEVAR(GlobalRedecl3)
 // GNU-DAG: @_ZN2ns14ExternalGlobalE      = external dllimport global i32
 namespace ns { __declspec(dllimport) int ExternalGlobal; }
 USEVAR(ns::ExternalGlobal)
+
+int f();
+// MO1-DAG: @"\01?x@?1??inlineStaticLocalsFunc@@YAHXZ@4HA" = available_externally dllimport global i32 0
+// MO1-DAG: @"\01??_B?1??inlineStaticLocalsFunc@@YAHXZ@51" = available_externally dllimport global i32 0
+inline int __declspec(dllimport) inlineStaticLocalsFunc() {
+  static int x = f();
+  return x++;
+};
+USE(inlineStaticLocalsFunc);
 
 
 
@@ -518,9 +529,18 @@ struct __declspec(dllimport) T {
 
   static int b;
   // MO1-DAG: @"\01?b@T@@2HA" = external dllimport global i32
+
+  T& operator=(T&) = default;
+  // MO1-DAG: define available_externally dllimport x86_thiscallcc nonnull %struct.T* @"\01??4T@@QAEAAU0@AAU0@@Z"
+
+  T& operator=(T&&) = default;
+  // Note: Don't mark inline move operators dllimport because current MSVC versions don't export them.
+  // MO1-DAG: define linkonce_odr x86_thiscallcc nonnull %struct.T* @"\01??4T@@QAEAAU0@$$QAU0@@Z"
 };
 USEMEMFUNC(T, a)
 USEVAR(T::b)
+USECOPYASSIGN(T)
+USEMOVEASSIGN(T)
 
 template <typename T> struct __declspec(dllimport) U { void foo() {} };
 // MO1-DAG: define available_externally dllimport x86_thiscallcc void @"\01?foo@?$U@H@@QAEXXZ"
@@ -621,4 +641,11 @@ namespace PR19933 {
   template <typename T> int C<T>::x = g();
   template struct __declspec(dllimport) C<int>;
   // MSC-DAG: @"\01?x@?$C@H@PR19933@@2HA" = available_externally dllimport global i32 42
+
+  template <int I> struct D { static int x, y; };
+  template <int I> int D<I>::x = I + 1;
+  template <int I> int D<I>::y = I + f();
+  template struct __declspec(dllimport) D<42>;
+  // MSC-DAG: @"\01?x@?$D@$0CK@@PR19933@@2HA" = available_externally dllimport global i32 43
+  // MSC-DAG: @"\01?y@?$D@$0CK@@PR19933@@2HA" = available_externally dllimport global i32 0
 }
