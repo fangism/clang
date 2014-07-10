@@ -111,6 +111,8 @@ class CompilerInstance : public ModuleLoader {
   /// \brief The dependency file generator.
   std::unique_ptr<DependencyFileGenerator> TheDependencyFileGenerator;
 
+  std::vector<std::shared_ptr<DependencyCollector>> DependencyCollectors;
+
   /// \brief The set of top-level modules that has already been loaded,
   /// along with the module map
   llvm::DenseMap<const IdentifierInfo *, Module *> KnownModules;
@@ -358,7 +360,7 @@ public:
   }
   
   void resetAndLeakFileManager() {
-    BuryPointer(FileMgr.getPtr());
+    BuryPointer(FileMgr.get());
     FileMgr.resetWithoutRelease();
   }
 
@@ -378,7 +380,7 @@ public:
   }
   
   void resetAndLeakSourceManager() {
-    BuryPointer(SourceMgr.getPtr());
+    BuryPointer(SourceMgr.get());
     SourceMgr.resetWithoutRelease();
   }
 
@@ -398,7 +400,7 @@ public:
   }
 
   void resetAndLeakPreprocessor() {
-    BuryPointer(PP.getPtr());
+    BuryPointer(PP.get());
     PP.resetWithoutRelease();
   }
 
@@ -417,7 +419,7 @@ public:
   }
   
   void resetAndLeakASTContext() {
-    BuryPointer(Context.getPtr());
+    BuryPointer(Context.get());
     Context.resetWithoutRelease();
   }
 
@@ -711,6 +713,10 @@ public:
   GlobalModuleIndex *loadGlobalModuleIndex(SourceLocation TriggerLoc) override;
 
   bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override;
+
+  void addDependencyCollector(std::shared_ptr<DependencyCollector> Listener) {
+    DependencyCollectors.push_back(std::move(Listener));
+  }
 };
 
 } // end namespace clang

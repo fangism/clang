@@ -164,6 +164,8 @@ private:
           CurrentToken->Previous->Previous->isOneOf(tok::l_paren,
                                                     tok::coloncolon))
         MightBeFunctionType = true;
+      if (CurrentToken->Previous->Type == TT_BinaryOperator)
+        Contexts.back().IsExpression = true;
       if (CurrentToken->is(tok::r_paren)) {
         if (MightBeFunctionType && CurrentToken->Next &&
             (CurrentToken->Next->is(tok::l_paren) ||
@@ -323,8 +325,6 @@ private:
           return false;
       }
     }
-    // No closing "}" found, this probably starts a definition.
-    Line.StartsDefinition = true;
     return true;
   }
 
@@ -901,7 +901,7 @@ private:
       return TT_UnaryOperator;
 
     const FormatToken *NextToken = Tok.getNextNonComment();
-    if (!NextToken)
+    if (!NextToken || NextToken->is(tok::l_brace))
       return TT_Unknown;
 
     if (PrevToken->is(tok::coloncolon) ||
@@ -1199,6 +1199,43 @@ void TokenAnnotator::annotate(AnnotatedLine &Line) {
   Line.First->CanBreakBefore = Line.First->MustBreakBefore;
 }
 
+// This function heuristically determines whether 'Current' starts the name of a
+// function declaration.
+static bool isFunctionDeclarationName(const FormatToken &Current) {
+  if (Current.Type != TT_StartOfName ||
+      Current.NestingLevel != 0 ||
+      Current.Previous->Type == TT_StartOfName)
+    return false;
+  const FormatToken *Next = Current.Next;
+  for (; Next; Next = Next->Next) {
+    if (Next->Type == TT_TemplateOpener) {
+      Next = Next->MatchingParen;
+    } else if (Next->is(tok::coloncolon)) {
+      Next = Next->Next;
+      if (!Next || !Next->is(tok::identifier))
+        return false;
+    } else if (Next->is(tok::l_paren)) {
+      break;
+    } else {
+      return false;
+    }
+  }
+  if (!Next)
+    return false;
+  assert(Next->is(tok::l_paren));
+  if (Next->Next == Next->MatchingParen)
+    return true;
+  for (const FormatToken *Tok = Next->Next; Tok != Next->MatchingParen;
+       Tok = Tok->Next) {
+    if (Tok->is(tok::kw_const) || Tok->isSimpleTypeSpecifier() ||
+        Tok->Type == TT_PointerOrReference || Tok->Type == TT_StartOfName)
+      return true;
+    if (Tok->isOneOf(tok::l_brace, tok::string_literal) || Tok->Tok.isLiteral())
+      return false;
+  }
+  return false;
+}
+
 void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
   for (SmallVectorImpl<AnnotatedLine *>::iterator I = Line.Children.begin(),
                                                   E = Line.Children.end();
@@ -1213,6 +1250,8 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
   FormatToken *Current = Line.First->Next;
   bool InFunctionDecl = Line.MightBeFunctionDecl;
   while (Current) {
+    if (isFunctionDeclarationName(*Current))
+      Current->Type = TT_FunctionDeclarationName;
     if (Current->Type == TT_LineComment) {
       if (Current->Previous->BlockKind == BK_BracedInit &&
           Current->Previous->opensScope())
@@ -1318,7 +1357,8 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     if (Right.Type != TT_ObjCMethodExpr && Right.Type != TT_LambdaLSquare)
       return 500;
   }
-  if (Right.Type == TT_StartOfName || Right.is(tok::kw_operator)) {
+  if (Right.Type == TT_StartOfName ||
+      Right.Type == TT_FunctionDeclarationName || Right.is(tok::kw_operator)) {
     if (Line.First->is(tok::kw_for) && Right.PartOfMultiVariableDeclStmt)
       return 3;
     if (Left.Type == TT_StartOfName)
@@ -1672,7 +1712,8 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
     return false;
   if (Left.Tok.getObjCKeywordID() == tok::objc_interface)
     return false;
-  if (Right.Type == TT_StartOfName || Right.is(tok::kw_operator))
+  if (Right.Type == TT_StartOfName ||
+      Right.Type == TT_FunctionDeclarationName || Right.is(tok::kw_operator))
     return true;
   if (Right.isTrailingComment())
     // We rely on MustBreakBefore being set correctly here as we should not
@@ -1760,12 +1801,13 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
     return true;
   if (Left.Type == TT_ArrayInitializerLSquare)
     return true;
-  return (Left.isBinaryOperator() && Left.isNot(tok::lessless) &&
+  return (Left.isBinaryOperator() &&
+          !Left.isOneOf(tok::arrowstar, tok::lessless) &&
           !Style.BreakBeforeBinaryOperators) ||
          Left.isOneOf(tok::comma, tok::coloncolon, tok::semi, tok::l_brace,
                       tok::kw_class, tok::kw_struct) ||
-         Right.isOneOf(tok::lessless, tok::arrow, tok::period, tok::colon,
-                       tok::l_square, tok::at) ||
+         Right.isMemberAccess() ||
+         Right.isOneOf(tok::lessless, tok::colon, tok::l_square, tok::at) ||
          (Left.is(tok::r_paren) &&
           Right.isOneOf(tok::identifier, tok::kw_const)) ||
          (Left.is(tok::l_paren) && !Right.is(tok::r_paren));

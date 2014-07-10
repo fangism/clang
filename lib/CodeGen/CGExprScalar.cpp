@@ -358,7 +358,10 @@ public:
   Value *VisitExprWithCleanups(ExprWithCleanups *E) {
     CGF.enterFullExpression(E);
     CodeGenFunction::RunCleanupsScope Scope(CGF);
-    return Visit(E->getSubExpr());
+    auto *V = Visit(E->getSubExpr());
+    if (CGDebugInfo *DI = CGF.getDebugInfo())
+      DI->EmitLocation(Builder, E->getLocEnd(), false);
+    return V;
   }
   Value *VisitCXXNewExpr(const CXXNewExpr *E) {
     return CGF.EmitCXXNewExpr(E);
@@ -1325,7 +1328,7 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
 
     // C++11 [expr.static.cast]p11: Behavior is undefined if a downcast is
     // performed and the object is not of the derived type.
-    if (CGF.SanitizePerformTypeCheck)
+    if (CGF.sanitizePerformTypeCheck())
       CGF.EmitTypeCheck(CodeGenFunction::TCK_DowncastPointer, CE->getExprLoc(),
                         Derived, DestTy->getPointeeType());
 
@@ -1615,12 +1618,11 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
 
     // Note that signed integer inc/dec with width less than int can't
     // overflow because of promotion rules; we're just eliding a few steps here.
-    if (value->getType()->getPrimitiveSizeInBits() >=
-            CGF.IntTy->getBitWidth() &&
-        type->isSignedIntegerOrEnumerationType()) {
+    bool CanOverflow = value->getType()->getIntegerBitWidth() >=
+                       CGF.IntTy->getIntegerBitWidth();
+    if (CanOverflow && type->isSignedIntegerOrEnumerationType()) {
       value = EmitAddConsiderOverflowBehavior(E, value, amt, isInc);
-    } else if (value->getType()->getPrimitiveSizeInBits() >=
-               CGF.IntTy->getBitWidth() && type->isUnsignedIntegerType() &&
+    } else if (CanOverflow && type->isUnsignedIntegerType() &&
                CGF.SanOpts->UnsignedIntegerOverflow) {
       BinOpInfo BinOp;
       BinOp.LHS = value;

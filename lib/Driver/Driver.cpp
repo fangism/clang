@@ -522,9 +522,13 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
       std::string Script = StringRef(*it).rsplit('.').first;
       // In some cases (modules) we'll dump extra data to help with reproducing
       // the crash into a directory next to the output.
-      if (llvm::sys::fs::exists(Script + ".cache"))
+      SmallString<128> VFS;
+      if (llvm::sys::fs::exists(Script + ".cache")) {
         Diag(clang::diag::note_drv_command_failed_diag_msg)
             << Script + ".cache";
+        VFS = llvm::sys::path::filename(Script + ".cache");
+        llvm::sys::path::append(VFS, "vfs", "vfs.yaml");
+      }
 
       std::string Err;
       Script += ".sh";
@@ -533,7 +537,7 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
         Diag(clang::diag::note_drv_command_failed_diag_msg)
           << "Error generating run script: " + Script + " " + Err;
       } else {
-        // Append the new filename with correct preprocessed suffix.
+        // Replace the original filename with the preprocessed one.
         size_t I, E;
         I = Cmd.find("-main-file-name ");
         assert (I != std::string::npos && "Expected to find -main-file-name");
@@ -546,6 +550,11 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
         E = I + OldFilename.size();
         I = Cmd.rfind(" ", I) + 1;
         Cmd.replace(I, E - I, NewFilename.data(), NewFilename.size());
+        if (!VFS.empty()) {
+          // Add the VFS overlay to the reproduction script.
+          I += NewFilename.size();
+          Cmd.insert(I, std::string(" -ivfsoverlay ") + VFS.c_str());
+        }
         ScriptOS << Cmd;
         Diag(clang::diag::note_drv_command_failed_diag_msg) << Script;
       }
@@ -603,7 +612,7 @@ int Driver::ExecuteCompilation(const Compilation &C,
     // Print extra information about abnormal failures, if possible.
     //
     // This is ad-hoc, but we don't want to be excessively noisy. If the result
-    // status was 1, assume the command failed normally. In particular, if it 
+    // status was 1, assume the command failed normally. In particular, if it
     // was the compiler then assume it gave a reasonable error code. Failures
     // in other tools are less common, and they generally have worse
     // diagnostics, so always print the diagnostic there.
@@ -932,35 +941,6 @@ void Driver::BuildUniversalActions(const ToolChain &TC,
   }
 }
 
-/// \brief Check whether the file referenced by Value exists in the LIB
-/// environment variable.
-static bool ExistsInLibDir(StringRef Value) {
-  llvm::Optional<std::string> OptPath = llvm::sys::Process::GetEnv("LIB");
-  if (!OptPath.hasValue())
-    return false;
-
-#ifdef LLVM_ON_WIN32
-  const StringRef PathSeparators = ";";
-#else
-  const StringRef PathSeparators = ":";
-#endif
-
-  SmallVector<StringRef, 8> LibDirs;
-  llvm::SplitString(OptPath.getValue(), LibDirs, PathSeparators);
-
-  for (const auto &LibDir : LibDirs) {
-    if (LibDir.empty())
-      continue;
-
-    SmallString<128> FilePath(LibDir);
-    llvm::sys::path::append(FilePath, Value);
-    if (llvm::sys::fs::exists(Twine(FilePath)))
-      return true;
-  }
-
-  return false;
-}
-
 /// \brief Check that the file referenced by Value exists. If it doesn't,
 /// issue a diagnostic and return false.
 static bool DiagnoseInputExistence(const Driver &D, const DerivedArgList &Args,
@@ -984,7 +964,7 @@ static bool DiagnoseInputExistence(const Driver &D, const DerivedArgList &Args,
   if (llvm::sys::fs::exists(Twine(Path)))
     return true;
 
-  if (D.IsCLMode() && ExistsInLibDir(Value))
+  if (D.IsCLMode() && llvm::sys::Process::FindInEnvPath("LIB", Value))
     return true;
 
   D.Diag(clang::diag::err_drv_no_such_file) << Path.str();
@@ -1610,7 +1590,7 @@ void Driver::BuildJobsForAction(Compilation &C,
 static const char *MakeCLOutputFilename(const ArgList &Args, StringRef ArgValue,
                                         StringRef BaseName, types::ID FileType) {
   SmallString<128> Filename = ArgValue;
-  
+
   if (ArgValue.empty()) {
     // If the argument is empty, output to BaseName in the current dir.
     Filename = BaseName;

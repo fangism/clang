@@ -279,7 +279,7 @@ int test_iteration_spaces() {
 
 #pragma omp parallel
 // expected-note@+2  {{defined as firstprivate}}
-// expected-error@+2 {{loop iteration variable may not be firstprivate}}
+// expected-error@+2 {{loop iteration variable in the associated loop of 'omp for' directive may not be firstprivate, predetermined as private}}
 #pragma omp for firstprivate(ii)
   for (ii = 0; ii < 10; ii++)
     c[ii] = a[ii];
@@ -287,7 +287,7 @@ int test_iteration_spaces() {
 #pragma omp parallel
 // expected-error@+3 {{unexpected OpenMP clause 'linear' in directive '#pragma omp for'}}
 // expected-note@+2  {{defined as linear}}
-// expected-error@+2 {{loop iteration variable may not be linear}}
+// expected-error@+2 {{loop iteration variable in the associated loop of 'omp for' directive may not be linear, predetermined as private}}
 #pragma omp for linear(ii)
   for (ii = 0; ii < 10; ii++)
     c[ii] = a[ii];
@@ -304,7 +304,7 @@ int test_iteration_spaces() {
 
 #pragma omp parallel
   {
-// expected-error@+2 {{loop iteration variable may not be threadprivate or thread local}}
+// expected-error@+2 {{loop iteration variable in the associated loop of 'omp for' directive may not be threadprivate or thread local, predetermined as private}}
 #pragma omp for
     for (sii = 0; sii < 10; sii += 1)
       c[sii] = a[sii];

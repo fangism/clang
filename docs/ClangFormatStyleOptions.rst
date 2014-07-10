@@ -248,12 +248,12 @@ the configuration (without a prefix: ``Auto``).
   When ``false``, use the same indentation level as for the switch statement.
   Switch statement body is always indented one level more than case labels.
 
-**IndentFunctionDeclarationAfterType** (``bool``)
-  If ``true``, indent when breaking function declarations which
-  are not also definitions after the type.
-
 **IndentWidth** (``unsigned``)
   The number of columns to use for indentation.
+
+**IndentWrappedFunctionNames** (``bool``)
+  Indent if a function definition or declaration is wrapped after the
+  type.
 
 **KeepEmptyLinesAtTheStartOfBlocks** (``bool``)
   If true, empty lines at the start of blocks are kept.

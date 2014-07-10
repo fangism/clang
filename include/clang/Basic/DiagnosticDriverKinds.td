@@ -22,6 +22,8 @@ def err_drv_unknown_stdin_type_clang_cl : Error<
 def err_drv_unknown_language : Error<"language not recognized: '%0'">;
 def err_drv_invalid_arch_name : Error<
   "invalid arch name '%0'">;
+def err_drv_invalid_linker_name : Error<
+  "invalid linker name in argument '%0'">;
 def err_drv_invalid_rtlib_name : Error<
   "invalid runtime library name in argument '%0'">;
 def err_drv_unsupported_rtlib_for_platform : Error<
@@ -173,8 +175,5 @@ def err_drv_modules_validate_once_requires_timestamp : Error<
   "'-fbuild-session-timestamp=<seconds since Epoch>'">;
 
 def warn_drv_invoking_fallback : Warning<"falling back to %0">,
-  InGroup<Fallback>;
-def warn_drv_rtti_fallback :
-  Warning<"cannot compile RTTI yet, falling back to %0">,
   InGroup<Fallback>;
 }

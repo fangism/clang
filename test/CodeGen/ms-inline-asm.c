@@ -52,6 +52,11 @@ void t7() {
   __asm {
     int 0x2c ; } asm comments are fun! }{
   }
+  __asm {
+    {
+      int 0x2c ; } asm comments are fun! }{
+    }
+  }
   __asm {}
 // CHECK: t7
 // CHECK: call void asm sideeffect inteldialect "int $$0x2c", "~{dirflag},~{fpsr},~{flags}"()
@@ -73,8 +78,8 @@ int t8() {
 void t9() {
   __asm {
     push ebx
-    mov ebx, 0x07
-    pop ebx
+    { mov ebx, 0x07 }
+    __asm { pop ebx }
   }
 // CHECK: t9
 // CHECK: call void asm sideeffect inteldialect "push ebx\0A\09mov ebx, $$0x07\0A\09pop ebx", "~{ebx},~{esp},~{dirflag},~{fpsr},~{flags}"()
@@ -129,7 +134,7 @@ void t14() {
   unsigned i = 1, j = 2;
   __asm {
     .if 1
-    mov eax, i
+    { mov eax, i }
     .else
     mov ebx, j
     .endif
@@ -409,6 +414,7 @@ void t37() {
   __asm mov eax, 4 + 8 * -16
   __asm mov eax, 4 + 16 / -8
   __asm mov eax, (16 + 16) / -8
+  __asm mov eax, ~15
 // CHECK: t37
 // CHECK: call void asm sideeffect inteldialect "mov eax, $$12", "~{eax},~{dirflag},~{fpsr},~{flags}"()
 // CHECK: call void asm sideeffect inteldialect "mov eax, $$132", "~{eax},~{dirflag},~{fpsr},~{flags}"()
@@ -417,6 +423,7 @@ void t37() {
 // CHECK: call void asm sideeffect inteldialect "mov eax, $$4294967172", "~{eax},~{dirflag},~{fpsr},~{flags}"()
 // CHECK: call void asm sideeffect inteldialect "mov eax, $$2", "~{eax},~{dirflag},~{fpsr},~{flags}"()
 // CHECK: call void asm sideeffect inteldialect "mov eax, $$4294967292", "~{eax},~{dirflag},~{fpsr},~{flags}"()
+// CHECK: call void asm sideeffect inteldialect "mov eax, $$4294967280", "~{eax},~{dirflag},~{fpsr},~{flags}"()
 }
 
 void t38() {

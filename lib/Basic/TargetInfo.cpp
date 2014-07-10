@@ -168,6 +168,21 @@ TargetInfo::IntType TargetInfo::getIntTypeByWidth(
   return NoInt;
 }
 
+TargetInfo::IntType TargetInfo::getLeastIntTypeByWidth(unsigned BitWidth,
+                                                       bool IsSigned) const {
+  if (getCharWidth() >= BitWidth)
+    return IsSigned ? SignedChar : UnsignedChar;
+  if (getShortWidth() >= BitWidth)
+    return IsSigned ? SignedShort : UnsignedShort;
+  if (getIntWidth() >= BitWidth)
+    return IsSigned ? SignedInt : UnsignedInt;
+  if (getLongWidth() >= BitWidth)
+    return IsSigned ? SignedLong : UnsignedLong;
+  if (getLongLongWidth() >= BitWidth)
+    return IsSigned ? SignedLongLong : UnsignedLongLong;
+  return NoInt;
+}
+
 TargetInfo::RealType TargetInfo::getRealTypeByWidth(unsigned BitWidth) const {
   if (getFloatWidth() == BitWidth)
     return Float;
@@ -227,10 +242,10 @@ bool TargetInfo::isTypeSigned(IntType T) {
   };
 }
 
-/// setForcedLangOptions - Set forced language options.
+/// adjust - Set forced language options.
 /// Apply changes to the target information with respect to certain
 /// language options which change the target configuration.
-void TargetInfo::setForcedLangOptions(LangOptions &Opts) {
+void TargetInfo::adjust(const LangOptions &Opts) {
   if (Opts.NoBitFieldTypeAlign)
     UseBitFieldTypeAlignment = false;
   if (Opts.ShortWChar)

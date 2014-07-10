@@ -13,7 +13,6 @@ set(LLVM_LINK_COMPONENTS
   ScalarOpts
   Support
   Target
-  TransformUtils
   )
 
 add_clang_library(clangCodeGen
@@ -45,7 +44,6 @@ add_clang_library(clangCodeGen
   CGObjCRuntime.cpp
   CGOpenCLRuntime.cpp
   CGOpenMPRuntime.cpp
-  CGRTTI.cpp
   CGRecordLayoutBuilder.cpp
   CGStmt.cpp
   CGStmtOpenMP.cpp
@@ -60,8 +58,8 @@ add_clang_library(clangCodeGen
   CodeGenTypes.cpp
   ItaniumCXXABI.cpp
   MicrosoftCXXABI.cpp
-  MicrosoftRTTI.cpp
   ModuleBuilder.cpp
+  SanitizerBlacklist.cpp
   TargetInfo.cpp
 
   DEPENDS

@@ -44,6 +44,9 @@ def CLOption : OptionFlag;
 // CC1Option - This option should be accepted by clang -cc1.
 def CC1Option : OptionFlag;
 
+// CC1AsOption - This option should be accepted by clang -cc1as.
+def CC1AsOption : OptionFlag;
+
 // NoDriverOption - This option should not be accepted by the driver.
 def NoDriverOption : OptionFlag;
 
@@ -217,7 +220,7 @@ def G_EQ : Joined<["-"], "G=">, Flags<[DriverOption]>;
 def H : Flag<["-"], "H">, Flags<[CC1Option]>,
     HelpText<"Show header includes and nesting depth">;
 def I_ : Flag<["-"], "I-">, Group<I_Group>;
-def I : JoinedOrSeparate<["-"], "I">, Group<I_Group>, Flags<[CC1Option]>,
+def I : JoinedOrSeparate<["-"], "I">, Group<I_Group>, Flags<[CC1Option,CC1AsOption]>,
     HelpText<"Add directory to include search path">;
 def L : JoinedOrSeparate<["-"], "L">, Flags<[RenderJoined]>;
 def MD : Flag<["-"], "MD">, Group<M_Group>,
@@ -470,6 +473,8 @@ def fexceptions : Flag<["-"], "fexceptions">, Group<f_Group>, Flags<[CC1Option]>
 def : Flag<["-"], "fexpensive-optimizations">, Group<clang_ignored_f_Group>;
 def : Flag<["-"], "fno-expensive-optimizations">, Group<clang_ignored_f_Group>;
 def fextdirs_EQ : Joined<["-"], "fextdirs=">, Group<f_Group>;
+def : Flag<["-"], "fdefer-pop">, Group<clang_ignored_f_Group>;
+def : Flag<["-"], "fno-defer-pop">, Group<clang_ignored_f_Group>;
 def : Flag<["-"], "fextended-identifiers">, Group<clang_ignored_f_Group>;
 def : Flag<["-"], "fno-extended-identifiers">, Group<f_Group>, Flags<[Unsupported]>;
 def fhosted : Flag<["-"], "fhosted">, Group<f_Group>;
@@ -560,6 +565,7 @@ def filelist : Separate<["-"], "filelist">, Flags<[LinkerInput]>;
 def : Flag<["-"], "findirect-virtual-calls">, Alias<fapple_kext>;
 def finline_functions : Flag<["-"], "finline-functions">, Group<clang_ignored_f_Group>;
 def finline : Flag<["-"], "finline">, Group<clang_ignored_f_Group>;
+def finput_charset_EQ : Joined<["-"], "finput-charset=">, Group<f_Group>;
 def finstrument_functions : Flag<["-"], "finstrument-functions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Generate calls to instrument function entry and exit">;
 def : Flag<["-"], "fkeep-inline-functions">, Group<clang_ignored_f_Group>;
@@ -857,12 +863,11 @@ def Wlarge_by_value_copy_def : Flag<["-"], "Wlarge-by-value-copy">,
            "in bytes than a given value">, Flags<[HelpHidden]>;
 def Wlarge_by_value_copy_EQ : Joined<["-"], "Wlarge-by-value-copy=">, Flags<[CC1Option]>;
 
+// These "special" warning flags are effectively processed as f_Group flags by the driver:
 // Just silence warnings about -Wlarger-than for now.
-def Wlarger_than : Separate<["-"], "Wlarger-than">, Group<clang_ignored_f_Group>;
-def Wlarger_than_EQ : Joined<["-"], "Wlarger-than=">, Alias<Wlarger_than>;
-def Wlarger_than_ : Joined<["-"], "Wlarger-than-">, Alias<Wlarger_than>;
-def Wframe_larger_than_EQ : Joined<["-"], "Wframe-larger-than=">, Flags<[DriverOption]>;
-def Wstack_usage_EQ : Joined<["-"], "Wstack-usage=">, Group<clang_ignored_f_Group>;
+def Wlarger_than_EQ : Joined<["-"], "Wlarger-than=">, Group<clang_ignored_f_Group>;
+def Wlarger_than_ : Joined<["-"], "Wlarger-than-">, Alias<Wlarger_than_EQ>;
+def Wframe_larger_than_EQ : Joined<["-"], "Wframe-larger-than=">, Group<f_Group>, Flags<[DriverOption]>;
 
 def : Flag<["-"], "fterminated-vtables">, Alias<fapple_kext>;
 def fthreadsafe_statics : Flag<["-"], "fthreadsafe-statics">, Group<f_Group>;
@@ -922,7 +927,7 @@ def fdebug_types_section: Flag <["-"], "fdebug-types-section">, Group<f_Group>,
 def fno_debug_types_section: Flag<["-"], "fno-debug-types-section">, Group<f_Group>,
   Flags<[CC1Option]>;
 def g_Flag : Flag<["-"], "g">, Group<g_Group>,
-  HelpText<"Generate source level debug information">, Flags<[CC1Option]>;
+  HelpText<"Generate source-level debug information">, Flags<[CC1Option,CC1AsOption]>;
 def gline_tables_only : Flag<["-"], "gline-tables-only">, Group<g_Group>,
   HelpText<"Emit debug line number tables only">, Flags<[CC1Option]>;
 def gmlt : Flag<["-"], "gmlt">, Alias<gline_tables_only>;
@@ -936,11 +941,11 @@ def ggdb1 : Flag<["-"], "ggdb1">, Group<g_Group>;
 def ggdb2 : Flag<["-"], "ggdb2">, Group<g_Group>;
 def ggdb3 : Flag<["-"], "ggdb3">, Group<g_Group>;
 def gdwarf_2 : Flag<["-"], "gdwarf-2">, Group<g_Group>,
-  HelpText<"Generate source level debug information with dwarf version 2">, Flags<[CC1Option]>;
+  HelpText<"Generate source-level debug information with dwarf version 2">, Flags<[CC1Option,CC1AsOption]>;
 def gdwarf_3 : Flag<["-"], "gdwarf-3">, Group<g_Group>,
-  HelpText<"Generate source level debug information with dwarf version 3">, Flags<[CC1Option]>;
+  HelpText<"Generate source-level debug information with dwarf version 3">, Flags<[CC1Option,CC1AsOption]>;
 def gdwarf_4 : Flag<["-"], "gdwarf-4">, Group<g_Group>,
-  HelpText<"Generate source level debug information with dwarf version 4">, Flags<[CC1Option]>;
+  HelpText<"Generate source-level debug information with dwarf version 4">, Flags<[CC1Option,CC1AsOption]>;
 def gfull : Flag<["-"], "gfull">, Group<g_Group>;
 def gused : Flag<["-"], "gused">, Group<g_Group>;
 def gstabs : Joined<["-"], "gstabs">, Group<g_Group>, Flags<[Unsupported]>;
@@ -958,7 +963,7 @@ def gsplit_dwarf : Flag<["-"], "gsplit-dwarf">, Group<g_flags_Group>;
 def ggnu_pubnames : Flag<["-"], "ggnu-pubnames">, Group<g_flags_Group>;
 def gdwarf_aranges : Flag<["-"], "gdwarf-aranges">, Group<g_flags_Group>;
 def headerpad__max__install__names : Joined<["-"], "headerpad_max_install_names">;
-def help : Flag<["-", "--"], "help">, Flags<[CC1Option]>,
+def help : Flag<["-", "--"], "help">, Flags<[CC1Option,CC1AsOption]>,
   HelpText<"Display available options">;
 def index_header_map : Flag<["-"], "index-header-map">, Flags<[CC1Option]>,
   HelpText<"Make the next included directory (-I or -F) an indexer header map">;
@@ -1037,7 +1042,7 @@ def mios_simulator_version_min_EQ : Joined<["-"], "mios-simulator-version-min=">
 def mkernel : Flag<["-"], "mkernel">, Group<m_Group>;
 def mlinker_version_EQ : Joined<["-"], "mlinker-version=">,
   Flags<[DriverOption]>;
-def mllvm : Separate<["-"], "mllvm">, Flags<[CC1Option, CoreOption]>,
+def mllvm : Separate<["-"], "mllvm">, Flags<[CC1Option,CC1AsOption,CoreOption]>,
   HelpText<"Additional arguments to forward to LLVM's option processing">;
 def mmacosx_version_min_EQ : Joined<["-"], "mmacosx-version-min=">, Group<m_Group>;
 def mms_bitfields : Flag<["-"], "mms-bitfields">, Group<m_Group>, Flags<[CC1Option]>,
@@ -1144,7 +1149,7 @@ def moslib_EQ : Joined<["-"], "moslib=">, Group<m_Group>;
 def mpascal_strings : Flag<["-"], "mpascal-strings">, Alias<fpascal_strings>;
 def mred_zone : Flag<["-"], "mred-zone">, Group<m_Group>;
 def mregparm_EQ : Joined<["-"], "mregparm=">, Group<m_Group>;
-def mrelax_all : Flag<["-"], "mrelax-all">, Group<m_Group>, Flags<[CC1Option]>,
+def mrelax_all : Flag<["-"], "mrelax-all">, Group<m_Group>, Flags<[CC1Option,CC1AsOption]>,
   HelpText<"(integrated-as) Relax all machine instructions">;
 def mrtd : Flag<["-"], "mrtd">, Group<m_Group>, Flags<[CC1Option]>,
   HelpText<"Make StdCall calling convention the default">;
@@ -1211,18 +1216,45 @@ def mfp64 : Flag<["-"], "mfp64">, Group<m_Group>,
 def mfp32 : Flag<["-"], "mfp32">, Group<m_Group>,
   HelpText<"Use 32-bit floating point registers (MIPS only)">;
 def mnan_EQ : Joined<["-"], "mnan=">, Group<m_Group>;
+def mips1 : Flag<["-"], "mips1">,
+  Alias<march_EQ>, AliasArgs<["mips1"]>,
+  HelpText<"Equivalent to -march=mips1">, Flags<[HelpHidden]>;
+def mips2 : Flag<["-"], "mips2">,
+  Alias<march_EQ>, AliasArgs<["mips2"]>,
+  HelpText<"Equivalent to -march=mips2">, Flags<[HelpHidden]>;
+def mips3 : Flag<["-"], "mips3">,
+  Alias<march_EQ>, AliasArgs<["mips3"]>,
+  HelpText<"Equivalent to -march=mips3">, Flags<[HelpHidden]>;
+def mips4 : Flag<["-"], "mips4">,
+  Alias<march_EQ>, AliasArgs<["mips4"]>,
+  HelpText<"Equivalent to -march=mips4">, Flags<[HelpHidden]>;
+def mips5 : Flag<["-"], "mips5">,
+  Alias<march_EQ>, AliasArgs<["mips5"]>,
+  HelpText<"Equivalent to -march=mips5">, Flags<[HelpHidden]>;
 def mips32 : Flag<["-"], "mips32">,
   Alias<march_EQ>, AliasArgs<["mips32"]>,
   HelpText<"Equivalent to -march=mips32">, Flags<[HelpHidden]>;
 def mips32r2 : Flag<["-"], "mips32r2">,
   Alias<march_EQ>, AliasArgs<["mips32r2"]>,
   HelpText<"Equivalent to -march=mips32r2">, Flags<[HelpHidden]>;
+def mips32r6 : Flag<["-"], "mips32r6">,
+  Alias<march_EQ>, AliasArgs<["mips32r6"]>,
+  HelpText<"Equivalent to -march=mips32r6">, Flags<[HelpHidden]>;
 def mips64 : Flag<["-"], "mips64">,
   Alias<march_EQ>, AliasArgs<["mips64"]>,
   HelpText<"Equivalent to -march=mips64">, Flags<[HelpHidden]>;
 def mips64r2 : Flag<["-"], "mips64r2">,
   Alias<march_EQ>, AliasArgs<["mips64r2"]>,
   HelpText<"Equivalent to -march=mips64r2">, Flags<[HelpHidden]>;
+def mips64r6 : Flag<["-"], "mips64r6">,
+  Alias<march_EQ>, AliasArgs<["mips64r6"]>,
+  HelpText<"Equivalent to -march=mips64r6">, Flags<[HelpHidden]>;
+def modd_spreg : Flag<["-"], "modd-spreg">, Group<m_Group>,
+  HelpText<"Enable odd single-precision floating point registers">,
+  Flags<[HelpHidden]>;
+def mno_odd_spreg : Flag<["-"], "mno-odd-spreg">, Group<m_Group>,
+  HelpText<"Disable odd single-precision floating point registers">,
+  Flags<[HelpHidden]>;
 def module_file_info : Flag<["-"], "module-file-info">, Flags<[DriverOption,CC1Option]>, Group<Action_Group>;
 def mthumb : Flag<["-"], "mthumb">, Group<m_Group>;
 def mtune_EQ : Joined<["-"], "mtune=">, Group<m_Group>;
@@ -1252,7 +1284,7 @@ def nostdincxx : Flag<["-"], "nostdinc++">, Flags<[CC1Option]>,
   HelpText<"Disable standard #include directories for the C++ standard library">;
 def nostdlib : Flag<["-"], "nostdlib">;
 def object : Flag<["-"], "object">;
-def o : JoinedOrSeparate<["-"], "o">, Flags<[DriverOption, RenderAsInput, CC1Option]>,
+def o : JoinedOrSeparate<["-"], "o">, Flags<[DriverOption, RenderAsInput, CC1Option, CC1AsOption]>,
   HelpText<"Write output to <file>">, MetaVarName<"<file>">;
 def pagezero__size : JoinedOrSeparate<["-"], "pagezero_size">;
 def pass_exit_codes : Flag<["-", "--"], "pass-exit-codes">, Flags<[Unsupported]>;
@@ -1543,7 +1575,7 @@ def fprofile_dir : Joined<["-"], "fprofile-dir=">, Group<clang_ignored_f_Group>;
 
 defm profile_use : BooleanFFlag<"profile-use">, Group<clang_ignored_f_Group>;
 def fprofile_use_EQ : Joined<["-"], "fprofile-use=">, Group<clang_ignored_f_Group>;
-def fuse_ld_EQ : Joined<["-"], "fuse-ld=">, Group<clang_ignored_f_Group>;
+def fuse_ld_EQ : Joined<["-"], "fuse-ld=">, Group<f_Group>;
 
 defm align_functions : BooleanFFlag<"align-functions">, Group<clang_ignored_f_Group>;
 def falign_functions_EQ : Joined<["-"], "falign-functions=">, Group<clang_ignored_f_Group>;

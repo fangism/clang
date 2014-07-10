@@ -300,7 +300,7 @@ int main(int argc_, const char **argv_) {
   SmallVector<const char *, 256> argv;
   llvm::SpecificBumpPtrAllocator<char> ArgAllocator;
   std::error_code EC = llvm::sys::Process::GetArgumentVector(
-      argv, llvm::ArrayRef<const char *>(argv_, argc_), ArgAllocator);
+      argv, ArrayRef<const char *>(argv_, argc_), ArgAllocator);
   if (EC) {
     llvm::errs() << "error: couldn't get arguments: " << EC.message() << '\n';
     return 1;
@@ -433,8 +433,13 @@ int main(int argc_, const char **argv_) {
 
     // If result status is < 0, then the driver command signalled an error.
     // If result status is 70, then the driver command reported a fatal error.
-    // In these cases, generate additional diagnostic information if possible.
-    if (CommandRes < 0 || CommandRes == 70) {
+    // On Windows, abort will return an exit code of 3.  In these cases,
+    // generate additional diagnostic information if possible.
+    bool DiagnoseCrash = CommandRes < 0 || CommandRes == 70;
+#ifdef LLVM_ON_WIN32
+    DiagnoseCrash |= CommandRes == 3;
+#endif
+    if (DiagnoseCrash) {
       TheDriver.generateCompilationDiagnostics(*C, FailingCommand);
       break;
     }

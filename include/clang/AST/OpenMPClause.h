@@ -76,8 +76,8 @@ template <class T> class OMPVarListClause : public OMPClause {
 
 protected:
   /// \brief Fetches list of variables associated with this clause.
-  llvm::MutableArrayRef<Expr *> getVarRefs() {
-    return llvm::MutableArrayRef<Expr *>(
+  MutableArrayRef<Expr *> getVarRefs() {
+    return MutableArrayRef<Expr *>(
         reinterpret_cast<Expr **>(
             reinterpret_cast<char *>(this) +
             llvm::RoundUpToAlignment(sizeof(T), llvm::alignOf<Expr *>())),
@@ -108,7 +108,7 @@ protected:
       : OMPClause(K, StartLoc, EndLoc), LParenLoc(LParenLoc), NumVars(N) {}
 
 public:
-  typedef llvm::MutableArrayRef<Expr *>::iterator varlist_iterator;
+  typedef MutableArrayRef<Expr *>::iterator varlist_iterator;
   typedef ArrayRef<const Expr *>::iterator varlist_const_iterator;
   typedef llvm::iterator_range<varlist_iterator> varlist_range;
   typedef llvm::iterator_range<varlist_const_iterator> varlist_const_range;
@@ -1215,6 +1215,66 @@ public:
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_copyin;
+  }
+};
+
+/// \brief This represents clause 'copyprivate' in the '#pragma omp ...'
+/// directives.
+///
+/// \code
+/// #pragma omp single copyprivate(a,b)
+/// \endcode
+/// In this example directive '#pragma omp single' has clause 'copyprivate'
+/// with the variables 'a' and 'b'.
+///
+class OMPCopyprivateClause : public OMPVarListClause<OMPCopyprivateClause> {
+  /// \brief Build clause with number of variables \a N.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param N Number of the variables in the clause.
+  ///
+  OMPCopyprivateClause(SourceLocation StartLoc, SourceLocation LParenLoc,
+                       SourceLocation EndLoc, unsigned N)
+      : OMPVarListClause<OMPCopyprivateClause>(OMPC_copyprivate, StartLoc,
+                                               LParenLoc, EndLoc, N) {}
+
+  /// \brief Build an empty clause.
+  ///
+  /// \param N Number of variables.
+  ///
+  explicit OMPCopyprivateClause(unsigned N)
+      : OMPVarListClause<OMPCopyprivateClause>(
+            OMPC_copyprivate, SourceLocation(), SourceLocation(),
+            SourceLocation(), N) {}
+
+public:
+  /// \brief Creates clause with a list of variables \a VL.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param VL List of references to the variables.
+  ///
+  static OMPCopyprivateClause *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation LParenLoc,
+         SourceLocation EndLoc, ArrayRef<Expr *> VL);
+  /// \brief Creates an empty clause with \a N variables.
+  ///
+  /// \param C AST context.
+  /// \param N The number of variables.
+  ///
+  static OMPCopyprivateClause *CreateEmpty(const ASTContext &C, unsigned N);
+
+  StmtRange children() {
+    return StmtRange(reinterpret_cast<Stmt **>(varlist_begin()),
+                     reinterpret_cast<Stmt **>(varlist_end()));
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_copyprivate;
   }
 };
 

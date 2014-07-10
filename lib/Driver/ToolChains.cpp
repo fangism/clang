@@ -1369,8 +1369,9 @@ bool Generic_GCC::GCCInstallationDetector::getBiarchSibling(Multilib &M) const {
     "x86_64-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-pc-linux-gnu",
     "x86_64-redhat-linux6E", "x86_64-redhat-linux", "x86_64-suse-linux",
     "x86_64-manbo-linux-gnu", "x86_64-linux-gnu", "x86_64-slackware-linux",
-    "x86_64-linux-android"
+    "x86_64-linux-android", "x86_64-unknown-linux"
   };
+  static const char *const X32LibDirs[] = { "/libx32" };
   static const char *const X86LibDirs[] = { "/lib32", "/lib" };
   static const char *const X86Triples[] = {
     "i686-linux-gnu", "i686-pc-linux-gnu", "i486-linux-gnu", "i386-linux-gnu",
@@ -1381,18 +1382,24 @@ bool Generic_GCC::GCCInstallationDetector::getBiarchSibling(Multilib &M) const {
 
   static const char *const MIPSLibDirs[] = { "/lib" };
   static const char *const MIPSTriples[] = { "mips-linux-gnu",
-                                             "mips-mti-linux-gnu" };
+                                             "mips-mti-linux-gnu",
+                                             "mips-img-linux-gnu" };
   static const char *const MIPSELLibDirs[] = { "/lib" };
   static const char *const MIPSELTriples[] = { "mipsel-linux-gnu",
-                                               "mipsel-linux-android" };
+                                               "mipsel-linux-android",
+                                               "mips-img-linux-gnu" };
 
   static const char *const MIPS64LibDirs[] = { "/lib64", "/lib" };
   static const char *const MIPS64Triples[] = { "mips64-linux-gnu",
-                                               "mips-mti-linux-gnu" };
+                                               "mips-mti-linux-gnu",
+                                               "mips-img-linux-gnu",
+                                               "mips64-linux-gnuabi64" };
   static const char *const MIPS64ELLibDirs[] = { "/lib64", "/lib" };
   static const char *const MIPS64ELTriples[] = { "mips64el-linux-gnu",
                                                  "mips-mti-linux-gnu",
-                                                 "mips64el-linux-android" };
+                                                 "mips-img-linux-gnu",
+                                                 "mips64el-linux-android",
+                                                 "mips64el-linux-gnuabi64" };
 
   static const char *const PPCLibDirs[] = { "/lib32", "/lib" };
   static const char *const PPCTriples[] = {
@@ -1473,10 +1480,19 @@ bool Generic_GCC::GCCInstallationDetector::getBiarchSibling(Multilib &M) const {
                    X86_64LibDirs + llvm::array_lengthof(X86_64LibDirs));
     TripleAliases.append(X86_64Triples,
                          X86_64Triples + llvm::array_lengthof(X86_64Triples));
-    BiarchLibDirs.append(X86LibDirs,
-                         X86LibDirs + llvm::array_lengthof(X86LibDirs));
-    BiarchTripleAliases.append(X86Triples,
-                               X86Triples + llvm::array_lengthof(X86Triples));
+    // x32 is always available when x86_64 is available, so adding it as secondary
+    // arch with x86_64 triples
+    if (TargetTriple.getEnvironment() == llvm::Triple::GNUX32) {
+      BiarchLibDirs.append(X32LibDirs,
+                           X32LibDirs + llvm::array_lengthof(X32LibDirs));
+      BiarchTripleAliases.append(X86_64Triples,
+                                 X86_64Triples + llvm::array_lengthof(X86_64Triples));
+    } else {
+      BiarchLibDirs.append(X86LibDirs,
+                           X86LibDirs + llvm::array_lengthof(X86LibDirs));
+      BiarchTripleAliases.append(X86Triples,
+                                 X86Triples + llvm::array_lengthof(X86Triples));
+    }
     break;
   case llvm::Triple::x86:
     LibDirs.append(X86LibDirs, X86LibDirs + llvm::array_lengthof(X86LibDirs));
@@ -1659,7 +1675,8 @@ static bool isMips64r2(const ArgList &Args) {
   Arg *A = Args.getLastArg(options::OPT_march_EQ,
                            options::OPT_mcpu_EQ);
 
-  return A && A->getValue() == StringRef("mips64r2");
+  return A && (A->getValue() == StringRef("mips64r2") ||
+               A->getValue() == StringRef("octeon"));
 }
 
 static bool isMicroMips(const ArgList &Args) {
@@ -1894,6 +1911,33 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
       .FilterOut(NonExistent);
   }
 
+  MultilibSet ImgMultilibs;
+  {
+    Multilib Mips64r6 = Multilib()
+      .gccSuffix("/mips64r6")
+      .osSuffix("/mips64r6")
+      .includeSuffix("/mips64r6")
+      .flag("+m64").flag("-m32");
+
+    Multilib LittleEndian = Multilib()
+      .gccSuffix("/el")
+      .osSuffix("/el")
+      .includeSuffix("/el")
+      .flag("+EL").flag("-EB");
+
+    Multilib MAbi64 = Multilib()
+      .gccSuffix("/64")
+      .osSuffix("/64")
+      .includeSuffix("/64")
+      .flag("+mabi=64").flag("-mabi=n32").flag("-m32");
+
+    ImgMultilibs = MultilibSet()
+      .Maybe(Mips64r6)
+      .Maybe(MAbi64)
+      .Maybe(LittleEndian)
+      .FilterOut(NonExistent);
+  }
+
   llvm::Triple::ArchType TargetArch = TargetTriple.getArch();
 
   Multilib::flags_list Flags;
@@ -1928,6 +1972,17 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
     return false;
   }
 
+  if (TargetTriple.getVendor() == llvm::Triple::ImaginationTechnologies &&
+      TargetTriple.getOS() == llvm::Triple::Linux &&
+      TargetTriple.getEnvironment() == llvm::Triple::GNU) {
+    // Select mips-img-linux-gnu toolchain.
+    if (ImgMultilibs.select(Flags, Result.SelectedMultilib)) {
+      Result.Multilibs = ImgMultilibs;
+      return true;
+    }
+    return false;
+  }
+
   // Sort candidates. Toolchain that best meets the directories goes first.
   // Then select the first toolchains matches command line flags.
   MultilibSet *candidates[] = { &DebianMipsMultilibs, &FSFMipsMultilibs,
@@ -1940,6 +1995,18 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
       if (candidate == &DebianMipsMultilibs)
         Result.BiarchSibling = Multilib();
       Result.Multilibs = *candidate;
+      return true;
+    }
+  }
+
+  {
+    // Fallback to the regular toolchain-tree structure.
+    Multilib Default;
+    Result.Multilibs.push_back(Default);
+    Result.Multilibs.FilterOut(NonExistent);
+
+    if (Result.Multilibs.select(Flags, Result.SelectedMultilib)) {
+      Result.BiarchSibling = Multilib();
       return true;
     }
   }
@@ -1963,47 +2030,64 @@ static bool findBiarchMultilibs(const llvm::Triple &TargetTriple,
   Multilib Alt64 = Multilib()
     .gccSuffix("/64")
     .includeSuffix("/64")
-    .flag("-m32").flag("+m64");
+    .flag("-m32").flag("+m64").flag("-mx32");
   Multilib Alt32 = Multilib()
     .gccSuffix("/32")
     .includeSuffix("/32")
-    .flag("+m32").flag("-m64");
+    .flag("+m32").flag("-m64").flag("-mx32");
+  Multilib Altx32 = Multilib()
+    .gccSuffix("/x32")
+    .includeSuffix("/x32")
+    .flag("-m32").flag("-m64").flag("+mx32");
 
   FilterNonExistent NonExistent(Path);
 
-  // Decide whether the default multilib is 32bit, correcting for
-  // when the default multilib and the alternate appear backwards
-  bool DefaultIs32Bit;
+  // Determine default multilib from: 32, 64, x32
+  // Also handle cases such as 64 on 32, 32 on 64, etc.
+  enum { UNKNOWN, WANT32, WANT64, WANTX32 } Want = UNKNOWN;
+  const bool IsX32 {TargetTriple.getEnvironment() == llvm::Triple::GNUX32};
   if (TargetTriple.isArch32Bit() && !NonExistent(Alt32))
-    DefaultIs32Bit = false;
-  else if (TargetTriple.isArch64Bit() && !NonExistent(Alt64))
-    DefaultIs32Bit = true;
+    Want = WANT64;
+  else if (TargetTriple.isArch64Bit() && IsX32 && !NonExistent(Altx32))
+    Want = WANT64;
+  else if (TargetTriple.isArch64Bit() && !IsX32 && !NonExistent(Alt64))
+    Want = WANT32;
   else {
-    if (NeedsBiarchSuffix)
-      DefaultIs32Bit = TargetTriple.isArch64Bit();
+    if (TargetTriple.isArch32Bit())
+      Want = NeedsBiarchSuffix ? WANT64 : WANT32;
+    else if (IsX32)
+      Want = NeedsBiarchSuffix ? WANT64 : WANTX32;
     else
-      DefaultIs32Bit = TargetTriple.isArch32Bit();
+      Want = NeedsBiarchSuffix ? WANT32 : WANT64;
   }
 
-  if (DefaultIs32Bit)
-    Default.flag("+m32").flag("-m64");
+  if (Want == WANT32)
+    Default.flag("+m32").flag("-m64").flag("-mx32");
+  else if (Want == WANT64)
+    Default.flag("-m32").flag("+m64").flag("-mx32");
+  else if (Want == WANTX32)
+    Default.flag("-m32").flag("-m64").flag("+mx32");
   else
-    Default.flag("-m32").flag("+m64");
+    return false;
 
   Result.Multilibs.push_back(Default);
   Result.Multilibs.push_back(Alt64);
   Result.Multilibs.push_back(Alt32);
+  Result.Multilibs.push_back(Altx32);
 
   Result.Multilibs.FilterOut(NonExistent);
 
   Multilib::flags_list Flags;
-  addMultilibFlag(TargetTriple.isArch64Bit(), "m64", Flags);
+  addMultilibFlag(TargetTriple.isArch64Bit() && !IsX32, "m64", Flags);
   addMultilibFlag(TargetTriple.isArch32Bit(), "m32", Flags);
+  addMultilibFlag(TargetTriple.isArch64Bit() && IsX32, "mx32", Flags);
 
   if (!Result.Multilibs.select(Flags, Result.SelectedMultilib))
     return false;
 
-  if (Result.SelectedMultilib == Alt64 || Result.SelectedMultilib == Alt32)
+  if (Result.SelectedMultilib == Alt64 ||
+      Result.SelectedMultilib == Alt32 ||
+      Result.SelectedMultilib == Altx32)
     Result.BiarchSibling = Default;
 
   return true;
@@ -2807,8 +2891,9 @@ static bool IsUbuntu(enum Distro Distro) {
 }
 
 static Distro DetectDistro(llvm::Triple::ArchType Arch) {
-  std::unique_ptr<llvm::MemoryBuffer> File;
-  if (!llvm::MemoryBuffer::getFile("/etc/lsb-release", File)) {
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> File =
+      llvm::MemoryBuffer::getFile("/etc/lsb-release");
+  if (File) {
     StringRef Data = File.get()->getBuffer();
     SmallVector<StringRef, 8> Lines;
     Data.split(Lines, "\n");
@@ -2833,7 +2918,8 @@ static Distro DetectDistro(llvm::Triple::ArchType Arch) {
     return Version;
   }
 
-  if (!llvm::MemoryBuffer::getFile("/etc/redhat-release", File)) {
+  File = llvm::MemoryBuffer::getFile("/etc/redhat-release");
+  if (File) {
     StringRef Data = File.get()->getBuffer();
     if (Data.startswith("Fedora release"))
       return Fedora;
@@ -2849,7 +2935,8 @@ static Distro DetectDistro(llvm::Triple::ArchType Arch) {
     return UnknownDistro;
   }
 
-  if (!llvm::MemoryBuffer::getFile("/etc/debian_version", File)) {
+  File = llvm::MemoryBuffer::getFile("/etc/debian_version");
+  if (File) {
     StringRef Data = File.get()->getBuffer();
     if (Data[0] == '5')
       return DebianLenny;
@@ -2917,7 +3004,9 @@ static std::string getMultiarchTriple(const llvm::Triple &TargetTriple,
       return "i386-linux-gnu";
     return TargetTriple.str();
   case llvm::Triple::x86_64:
-    if (llvm::sys::fs::exists(SysRoot + "/lib/x86_64-linux-gnu"))
+    // We don't want this for x32, otherwise it will match x86_64 libs
+    if (TargetTriple.getEnvironment() != llvm::Triple::GNUX32 &&
+        llvm::sys::fs::exists(SysRoot + "/lib/x86_64-linux-gnu"))
       return "x86_64-linux-gnu";
     return TargetTriple.str();
   case llvm::Triple::arm64:
@@ -2937,6 +3026,18 @@ static std::string getMultiarchTriple(const llvm::Triple &TargetTriple,
   case llvm::Triple::mipsel:
     if (llvm::sys::fs::exists(SysRoot + "/lib/mipsel-linux-gnu"))
       return "mipsel-linux-gnu";
+    return TargetTriple.str();
+  case llvm::Triple::mips64:
+    if (llvm::sys::fs::exists(SysRoot + "/lib/mips64-linux-gnu"))
+      return "mips64-linux-gnu";
+    if (llvm::sys::fs::exists(SysRoot + "/lib/mips64-linux-gnuabi64"))
+      return "mips64-linux-gnuabi64";
+    return TargetTriple.str();
+  case llvm::Triple::mips64el:
+    if (llvm::sys::fs::exists(SysRoot + "/lib/mips64el-linux-gnu"))
+      return "mips64el-linux-gnu";
+    if (llvm::sys::fs::exists(SysRoot + "/lib/mips64el-linux-gnuabi64"))
+      return "mips64el-linux-gnuabi64";
     return TargetTriple.str();
   case llvm::Triple::ppc:
     if (llvm::sys::fs::exists(SysRoot + "/lib/powerpc-linux-gnuspe"))
@@ -2981,6 +3082,10 @@ static StringRef getOSLibDir(const llvm::Triple &Triple, const ArgList &Args) {
       Triple.getArch() == llvm::Triple::ppc)
     return "lib32";
 
+  if (Triple.getArch() == llvm::Triple::x86_64 &&
+      Triple.getEnvironment() == llvm::Triple::GNUX32)
+    return "libx32";
+
   return Triple.isArch32Bit() ? "lib" : "lib64";
 }
 
@@ -3003,7 +3108,7 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   PPaths.push_back(Twine(GCCInstallation.getParentLibPath() + "/../" +
                          GCCInstallation.getTriple().str() + "/bin").str());
 
-  Linker = GetProgramPath("ld");
+  Linker = GetLinkerPath();
 
   Distro Distro = DetectDistro(Arch);
 
@@ -3286,6 +3391,14 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   const StringRef MIPSELMultiarchIncludeDirs[] = {
     "/usr/include/mipsel-linux-gnu"
   };
+  const StringRef MIPS64MultiarchIncludeDirs[] = {
+    "/usr/include/mips64-linux-gnu",
+    "/usr/include/mips64-linux-gnuabi64"
+  };
+  const StringRef MIPS64ELMultiarchIncludeDirs[] = {
+    "/usr/include/mips64el-linux-gnu",
+    "/usr/include/mips64el-linux-gnuabi64"
+  };
   const StringRef PPCMultiarchIncludeDirs[] = {
     "/usr/include/powerpc-linux-gnu"
   };
@@ -3314,6 +3427,10 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     MultiarchIncludeDirs = MIPSMultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::mipsel) {
     MultiarchIncludeDirs = MIPSELMultiarchIncludeDirs;
+  } else if (getTriple().getArch() == llvm::Triple::mips64) {
+    MultiarchIncludeDirs = MIPS64MultiarchIncludeDirs;
+  } else if (getTriple().getArch() == llvm::Triple::mips64el) {
+    MultiarchIncludeDirs = MIPS64ELMultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::ppc) {
     MultiarchIncludeDirs = PPCMultiarchIncludeDirs;
   } else if (getTriple().getArch() == llvm::Triple::ppc64) {

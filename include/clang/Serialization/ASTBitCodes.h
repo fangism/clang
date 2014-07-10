@@ -1334,6 +1334,7 @@ namespace clang {
       EXPR_CXX_PROPERTY_REF_EXPR, // MSPropertyRefExpr
       EXPR_CXX_UUIDOF_EXPR,       // CXXUuidofExpr (of expr).
       EXPR_CXX_UUIDOF_TYPE,       // CXXUuidofExpr (of type).
+      STMT_SEH_LEAVE,             // SEHLeaveStmt
       STMT_SEH_EXCEPT,            // SEHExceptStmt
       STMT_SEH_FINALLY,           // SEHFinallyStmt
       STMT_SEH_TRY,               // SEHTryStmt
@@ -1342,6 +1343,11 @@ namespace clang {
       STMT_OMP_PARALLEL_DIRECTIVE,
       STMT_OMP_SIMD_DIRECTIVE,
       STMT_OMP_FOR_DIRECTIVE,
+      STMT_OMP_SECTIONS_DIRECTIVE,
+      STMT_OMP_SECTION_DIRECTIVE,
+      STMT_OMP_SINGLE_DIRECTIVE,
+      STMT_OMP_PARALLEL_FOR_DIRECTIVE,
+      STMT_OMP_PARALLEL_SECTIONS_DIRECTIVE,
 
       // ARC
       EXPR_OBJC_BRIDGED_CAST,     // ObjCBridgedCastExpr

@@ -15,6 +15,9 @@
 #ifndef OPENMP_DIRECTIVE
 #  define OPENMP_DIRECTIVE(Name)
 #endif
+#ifndef OPENMP_DIRECTIVE_EXT
+#define OPENMP_DIRECTIVE_EXT(Name, Str)
+#endif
 #ifndef OPENMP_CLAUSE
 #  define OPENMP_CLAUSE(Name, Class)
 #endif
@@ -26,6 +29,18 @@
 #endif
 #ifndef OPENMP_FOR_CLAUSE
 #  define OPENMP_FOR_CLAUSE(Name)
+#endif
+#ifndef OPENMP_SECTIONS_CLAUSE
+#  define OPENMP_SECTIONS_CLAUSE(Name)
+#endif
+#ifndef OPENMP_SINGLE_CLAUSE
+#  define OPENMP_SINGLE_CLAUSE(Name)
+#endif
+#ifndef OPENMP_PARALLEL_FOR_CLAUSE
+#  define OPENMP_PARALLEL_FOR_CLAUSE(Name)
+#endif
+#ifndef OPENMP_PARALLEL_SECTIONS_CLAUSE
+#  define OPENMP_PARALLEL_SECTIONS_CLAUSE(Name)
 #endif
 #ifndef OPENMP_DEFAULT_KIND
 #  define OPENMP_DEFAULT_KIND(Name)
@@ -43,6 +58,11 @@ OPENMP_DIRECTIVE(parallel)
 OPENMP_DIRECTIVE(task)
 OPENMP_DIRECTIVE(simd)
 OPENMP_DIRECTIVE(for)
+OPENMP_DIRECTIVE(sections)
+OPENMP_DIRECTIVE(section)
+OPENMP_DIRECTIVE(single)
+OPENMP_DIRECTIVE_EXT(parallel_for, "parallel for")
+OPENMP_DIRECTIVE_EXT(parallel_sections, "parallel sections")
 
 // OpenMP clauses.
 OPENMP_CLAUSE(if, OMPIfClause)
@@ -58,6 +78,7 @@ OPENMP_CLAUSE(reduction,  OMPReductionClause)
 OPENMP_CLAUSE(linear,  OMPLinearClause)
 OPENMP_CLAUSE(aligned, OMPAlignedClause)
 OPENMP_CLAUSE(copyin,  OMPCopyinClause)
+OPENMP_CLAUSE(copyprivate,  OMPCopyprivateClause)
 OPENMP_CLAUSE(proc_bind, OMPProcBindClause)
 OPENMP_CLAUSE(schedule, OMPScheduleClause)
 OPENMP_CLAUSE(ordered, OMPOrderedClause)
@@ -74,13 +95,14 @@ OPENMP_PARALLEL_CLAUSE(shared)
 OPENMP_PARALLEL_CLAUSE(reduction)
 OPENMP_PARALLEL_CLAUSE(copyin)
 
-// FIXME: more clauses allowed for directive 'omp simd'.
+// Clauses allowed for directive 'omp simd'.
 OPENMP_SIMD_CLAUSE(private)
 OPENMP_SIMD_CLAUSE(lastprivate)
 OPENMP_SIMD_CLAUSE(linear)
 OPENMP_SIMD_CLAUSE(aligned)
 OPENMP_SIMD_CLAUSE(safelen)
 OPENMP_SIMD_CLAUSE(collapse)
+OPENMP_SIMD_CLAUSE(reduction)
 
 // TODO more clauses allowed for directive 'omp for'.
 OPENMP_FOR_CLAUSE(private)
@@ -91,6 +113,19 @@ OPENMP_FOR_CLAUSE(collapse)
 OPENMP_FOR_CLAUSE(schedule)
 OPENMP_FOR_CLAUSE(ordered)
 OPENMP_FOR_CLAUSE(nowait)
+
+// Clauses allowed for OpenMP directive 'omp sections'.
+OPENMP_SECTIONS_CLAUSE(private)
+OPENMP_SECTIONS_CLAUSE(lastprivate)
+OPENMP_SECTIONS_CLAUSE(firstprivate)
+OPENMP_SECTIONS_CLAUSE(reduction)
+OPENMP_SECTIONS_CLAUSE(nowait)
+
+// TODO more clauses allowed for directive 'omp single'.
+OPENMP_SINGLE_CLAUSE(private)
+OPENMP_SINGLE_CLAUSE(firstprivate)
+OPENMP_SINGLE_CLAUSE(copyprivate)
+OPENMP_SINGLE_CLAUSE(nowait)
 
 // Static attributes for 'default' clause.
 OPENMP_DEFAULT_KIND(none)
@@ -108,12 +143,44 @@ OPENMP_SCHEDULE_KIND(guided)
 OPENMP_SCHEDULE_KIND(auto)
 OPENMP_SCHEDULE_KIND(runtime)
 
+// Clauses allowed for OpenMP directive 'parallel for'.
+OPENMP_PARALLEL_FOR_CLAUSE(if)
+OPENMP_PARALLEL_FOR_CLAUSE(num_threads)
+OPENMP_PARALLEL_FOR_CLAUSE(default)
+OPENMP_PARALLEL_FOR_CLAUSE(proc_bind)
+OPENMP_PARALLEL_FOR_CLAUSE(private)
+OPENMP_PARALLEL_FOR_CLAUSE(firstprivate)
+OPENMP_PARALLEL_FOR_CLAUSE(shared)
+OPENMP_PARALLEL_FOR_CLAUSE(reduction)
+OPENMP_PARALLEL_FOR_CLAUSE(copyin)
+OPENMP_PARALLEL_FOR_CLAUSE(lastprivate)
+OPENMP_PARALLEL_FOR_CLAUSE(collapse)
+OPENMP_PARALLEL_FOR_CLAUSE(schedule)
+OPENMP_PARALLEL_FOR_CLAUSE(ordered)
+
+// Clauses allowed for OpenMP directive 'parallel sections'.
+OPENMP_PARALLEL_SECTIONS_CLAUSE(if)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(num_threads)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(default)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(proc_bind)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(private)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(firstprivate)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(shared)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(reduction)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(copyin)
+OPENMP_PARALLEL_SECTIONS_CLAUSE(lastprivate)
+
 #undef OPENMP_SCHEDULE_KIND
 #undef OPENMP_PROC_BIND_KIND
 #undef OPENMP_DEFAULT_KIND
 #undef OPENMP_DIRECTIVE
+#undef OPENMP_DIRECTIVE_EXT
 #undef OPENMP_CLAUSE
+#undef OPENMP_SINGLE_CLAUSE
+#undef OPENMP_SECTIONS_CLAUSE
 #undef OPENMP_PARALLEL_CLAUSE
+#undef OPENMP_PARALLEL_FOR_CLAUSE
+#undef OPENMP_PARALLEL_SECTIONS_CLAUSE
 #undef OPENMP_SIMD_CLAUSE
 #undef OPENMP_FOR_CLAUSE
 

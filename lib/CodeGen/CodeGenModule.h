@@ -16,6 +16,7 @@
 
 #include "CGVTables.h"
 #include "CodeGenTypes.h"
+#include "SanitizerBlacklist.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
@@ -31,7 +32,6 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
-#include "llvm/Transforms/Utils/SpecialCaseList.h"
 
 namespace llvm {
 class Module;
@@ -218,12 +218,36 @@ struct ARCEntrypoints {
 };
 
 /// This class records statistics on instrumentation based profiling.
-struct InstrProfStats {
-  InstrProfStats() : Visited(0), Missing(0), Mismatched(0) {}
-  bool isOutOfDate() { return Missing || Mismatched; }
+class InstrProfStats {
+  uint32_t VisitedInMainFile;
+  uint32_t MissingInMainFile;
   uint32_t Visited;
   uint32_t Missing;
   uint32_t Mismatched;
+
+public:
+  InstrProfStats()
+      : VisitedInMainFile(0), MissingInMainFile(0), Visited(0), Missing(0),
+        Mismatched(0) {}
+  /// Record that we've visited a function and whether or not that function was
+  /// in the main source file.
+  void addVisited(bool MainFile) {
+    if (MainFile)
+      ++VisitedInMainFile;
+    ++Visited;
+  }
+  /// Record that a function we've visited has no profile data.
+  void addMissing(bool MainFile) {
+    if (MainFile)
+      ++MissingInMainFile;
+    ++Missing;
+  }
+  /// Record that a function we've visited has mismatched profile data.
+  void addMismatched(bool MainFile) { ++Mismatched; }
+  /// Whether or not the stats we've gathered indicate any potential problems.
+  bool hasDiagnostics() { return Missing || Mismatched; }
+  /// Report potential problems we've found to \c Diags.
+  void reportDiagnostics(DiagnosticsEngine &Diags, StringRef MainFile);
 };
 
 /// This class organizes the cross-function state that is used while generating
@@ -325,8 +349,8 @@ class CodeGenModule : public CodeGenTypeCache {
   /// emitted when the translation unit is complete.
   CtorList GlobalDtors;
 
-  /// A map of canonical GlobalDecls to their mangled names.
-  llvm::DenseMap<GlobalDecl, StringRef> MangledDeclNames;
+  /// An ordered map of canonical GlobalDecls to their mangled names.
+  llvm::MapVector<GlobalDecl, StringRef> MangledDeclNames;
   llvm::StringMap<GlobalDecl, llvm::BumpPtrAllocator> Manglings;
 
   /// Global annotations.
@@ -449,9 +473,7 @@ class CodeGenModule : public CodeGenTypeCache {
 
   GlobalDecl initializedGlobalDecl;
 
-  std::unique_ptr<llvm::SpecialCaseList> SanitizerBlacklist;
-
-  const SanitizerOptions &SanOpts;
+  SanitizerBlacklist SanitizerBL;
 
   /// @}
 public:
@@ -723,12 +745,6 @@ public:
   /// The type of a generic block literal.
   llvm::Type *getGenericBlockLiteralType();
 
-  /// \brief Gets or a creats a Microsoft TypeDescriptor.
-  llvm::Constant *getMSTypeDescriptor(QualType Ty);
-  /// \brief Gets or a creats a Microsoft CompleteObjectLocator.
-  llvm::GlobalVariable *getMSCompleteObjectLocator(const CXXRecordDecl *RD,
-                                                   const VPtrInfo *Info);
-
   /// Gets the address of a block which requires no captures.
   llvm::Constant *GetAddrOfGlobalBlock(const BlockExpr *BE, const char *);
   
@@ -949,9 +965,6 @@ public:
     F->setLinkage(getFunctionLinkage(GD));
   }
 
-  /// \brief Returns the appropriate linkage for the TypeInfo struct for a type.
-  llvm::GlobalVariable::LinkageTypes getTypeInfoLinkage(QualType Ty);
-
   /// Return the appropriate linkage for the vtable, VTT, and type information
   /// of the given class.
   llvm::GlobalVariable::LinkageTypes getVTableLinkage(const CXXRecordDecl *RD);
@@ -995,11 +1008,12 @@ public:
   /// annotations are emitted during finalization of the LLVM code.
   void AddGlobalAnnotations(const ValueDecl *D, llvm::GlobalValue *GV);
 
-  const llvm::SpecialCaseList &getSanitizerBlacklist() const {
-    return *SanitizerBlacklist;
+  const SanitizerBlacklist &getSanitizerBlacklist() const {
+    return SanitizerBL;
   }
 
-  const SanitizerOptions &getSanOpts() const { return SanOpts; }
+  void reportGlobalToASan(llvm::GlobalVariable *GV, SourceLocation Loc,
+                          bool IsDynInit = false);
 
   void addDeferredVTable(const CXXRecordDecl *RD) {
     DeferredVTables.push_back(RD);
@@ -1118,6 +1132,9 @@ private:
 
   /// \brief Emit the Clang version as llvm.ident metadata.
   void EmitVersionIdentMetadata();
+
+  /// Emits target specific Metadata for global declarations.
+  void EmitTargetMetadata();
 
   /// Emit the llvm.gcov metadata used to tell LLVM where to emit the .gcno and
   /// .gcda files in a way that persists in .bc files.

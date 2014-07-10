@@ -128,6 +128,65 @@ bool Sema::isSimpleTypeSpecifier(tok::TokenKind Kind) const {
   return false;
 }
 
+static ParsedType recoverFromTypeInKnownDependentBase(Sema &S,
+                                                      const IdentifierInfo &II,
+                                                      SourceLocation NameLoc) {
+  // Find the first parent class template context, if any.
+  // FIXME: Perform the lookup in all enclosing class templates.
+  const CXXRecordDecl *RD = nullptr;
+  for (DeclContext *DC = S.CurContext; DC; DC = DC->getParent()) {
+    RD = dyn_cast<CXXRecordDecl>(DC);
+    if (RD && RD->getDescribedClassTemplate())
+      break;
+  }
+  if (!RD)
+    return ParsedType();
+
+  // Look for type decls in dependent base classes that have known primary
+  // templates.
+  bool FoundTypeDecl = false;
+  for (const auto &Base : RD->bases()) {
+    auto *TST = Base.getType()->getAs<TemplateSpecializationType>();
+    if (!TST || !TST->isDependentType())
+      continue;
+    auto *TD = TST->getTemplateName().getAsTemplateDecl();
+    if (!TD)
+      continue;
+    auto *BasePrimaryTemplate = cast<CXXRecordDecl>(TD->getTemplatedDecl());
+    // FIXME: Allow lookup into non-dependent bases of dependent bases, possibly
+    // by calling or integrating with the main LookupQualifiedName mechanism.
+    for (NamedDecl *ND : BasePrimaryTemplate->lookup(&II)) {
+      if (FoundTypeDecl)
+        return ParsedType();
+      FoundTypeDecl = isa<TypeDecl>(ND);
+      if (!FoundTypeDecl)
+        return ParsedType();
+    }
+  }
+  if (!FoundTypeDecl)
+    return ParsedType();
+
+  // We found some types in dependent base classes.  Recover as if the user
+  // wrote 'typename MyClass::II' instead of 'II'.  We'll fully resolve the
+  // lookup during template instantiation.
+  S.Diag(NameLoc, diag::ext_found_via_dependent_bases_lookup) << &II;
+
+  ASTContext &Context = S.Context;
+  auto *NNS = NestedNameSpecifier::Create(Context, nullptr, false,
+                                          cast<Type>(Context.getRecordType(RD)));
+  QualType T = Context.getDependentNameType(ETK_Typename, NNS, &II);
+
+  CXXScopeSpec SS;
+  SS.MakeTrivial(Context, NNS, SourceRange(NameLoc));
+
+  TypeLocBuilder Builder;
+  DependentNameTypeLoc DepTL = Builder.push<DependentNameTypeLoc>(T);
+  DepTL.setNameLoc(NameLoc);
+  DepTL.setElaboratedKeywordLoc(SourceLocation());
+  DepTL.setQualifierLoc(SS.getWithLocInContext(Context));
+  return S.CreateParsedType(T, Builder.getTypeSourceInfo(Context, T));
+}
+
 /// \brief If the identifier refers to a type name within this scope,
 /// return the declaration of that type.
 ///
@@ -209,6 +268,14 @@ ParsedType Sema::getTypeName(const IdentifierInfo &II, SourceLocation NameLoc,
   } else {
     // Perform unqualified name lookup.
     LookupName(Result, S);
+
+    // For unqualified lookup in a class template in MSVC mode, look into
+    // dependent base classes where the primary class template is known.
+    if (Result.empty() && getLangOpts().MSVCCompat && (!SS || SS->isEmpty())) {
+      if (ParsedType TypeInBase =
+              recoverFromTypeInKnownDependentBase(*this, II, NameLoc))
+        return TypeInBase;
+    }
   }
 
   NamedDecl *IIDecl = nullptr;
@@ -629,6 +696,14 @@ Sema::NameClassification Sema::ClassifyName(Scope *S,
 
   LookupResult Result(*this, Name, NameLoc, LookupOrdinaryName);
   LookupParsedName(Result, S, &SS, !CurMethod);
+
+  // For unqualified lookup in a class template in MSVC mode, look into
+  // dependent base classes where the primary class template is known.
+  if (Result.empty() && SS.isEmpty() && getLangOpts().MSVCCompat) {
+    if (ParsedType TypeInBase =
+            recoverFromTypeInKnownDependentBase(*this, *Name, NameLoc))
+      return TypeInBase;
+  }
 
   // Perform lookup for Objective-C instance variables (including automatically 
   // synthesized instance variables), if we're in an Objective-C method.
@@ -2519,11 +2594,13 @@ bool Sema::MergeFunctionDecl(FunctionDecl *New, NamedDecl *&OldD,
         ResQT = Context.mergeObjCGCQualifiers(NewQType, OldQType);
       if (ResQT.isNull()) {
         if (New->isCXXClassMember() && New->isOutOfLine())
-          Diag(New->getLocation(),
-               diag::err_member_def_does_not_match_ret_type) << New;
+          Diag(New->getLocation(), diag::err_member_def_does_not_match_ret_type)
+              << New << New->getReturnTypeSourceRange();
         else
-          Diag(New->getLocation(), diag::err_ovl_diff_return_type);
-        Diag(OldLocation, PrevDiag) << Old << Old->getType();
+          Diag(New->getLocation(), diag::err_ovl_diff_return_type)
+              << New->getReturnTypeSourceRange();
+        Diag(OldLocation, PrevDiag) << Old << Old->getType()
+                                    << Old->getReturnTypeSourceRange();
         return true;
       }
       else
@@ -7494,8 +7571,10 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     
     // OpenCL v1.2, s6.9 -- Kernels can only have return type void.
     if (!NewFD->getReturnType()->isVoidType()) {
-      Diag(D.getIdentifierLoc(),
-           diag::err_expected_kernel_void_return_type);
+      SourceRange RTRange = NewFD->getReturnTypeSourceRange();
+      Diag(D.getIdentifierLoc(), diag::err_expected_kernel_void_return_type)
+          << (RTRange.isValid() ? FixItHint::CreateReplacement(RTRange, "void")
+                                : FixItHint());
       D.setInvalidType();
     }
 
@@ -7835,23 +7914,6 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
   return Redeclaration;
 }
 
-static SourceRange getResultSourceRange(const FunctionDecl *FD) {
-  const TypeSourceInfo *TSI = FD->getTypeSourceInfo();
-  if (!TSI)
-    return SourceRange();
-
-  TypeLoc TL = TSI->getTypeLoc();
-  FunctionTypeLoc FunctionTL = TL.getAs<FunctionTypeLoc>();
-  if (!FunctionTL)
-    return SourceRange();
-
-  TypeLoc ResultTL = FunctionTL.getReturnLoc();
-  if (ResultTL.getUnqualifiedLoc().getAs<BuiltinTypeLoc>())
-    return ResultTL.getSourceRange();
-
-  return SourceRange();
-}
-
 void Sema::CheckMain(FunctionDecl* FD, const DeclSpec& DS) {
   // C++11 [basic.start.main]p3:
   //   A program that [...] declares main to be inline, static or
@@ -7891,34 +7953,37 @@ void Sema::CheckMain(FunctionDecl* FD, const DeclSpec& DS) {
   assert(T->isFunctionType() && "function decl is not of function type");
   const FunctionType* FT = T->castAs<FunctionType>();
 
-  // All the standards say that main() should should return 'int'.
-  if (Context.hasSameUnqualifiedType(FT->getReturnType(), Context.IntTy)) {
+  if (getLangOpts().GNUMode && !getLangOpts().CPlusPlus) {
+    // In C with GNU extensions we allow main() to have non-integer return
+    // type, but we should warn about the extension, and we disable the
+    // implicit-return-zero rule.
+
+    // GCC in C mode accepts qualified 'int'.
+    if (Context.hasSameUnqualifiedType(FT->getReturnType(), Context.IntTy))
+      FD->setHasImplicitReturnZero(true);
+    else {
+      Diag(FD->getTypeSpecStartLoc(), diag::ext_main_returns_nonint);
+      SourceRange RTRange = FD->getReturnTypeSourceRange();
+      if (RTRange.isValid())
+        Diag(RTRange.getBegin(), diag::note_main_change_return_type)
+            << FixItHint::CreateReplacement(RTRange, "int");
+    }
+  } else {
     // In C and C++, main magically returns 0 if you fall off the end;
     // set the flag which tells us that.
     // This is C++ [basic.start.main]p5 and C99 5.1.2.2.3.
-    FD->setHasImplicitReturnZero(true);
 
-  // In C with GNU extensions we allow main() to have non-integer return
-  // type, but we should warn about the extension, and we disable the
-  // implicit-return-zero rule.
-  } else if (getLangOpts().GNUMode && !getLangOpts().CPlusPlus) {
-    Diag(FD->getTypeSpecStartLoc(), diag::ext_main_returns_nonint);
-
-    SourceRange ResultRange = getResultSourceRange(FD);
-    if (ResultRange.isValid())
-      Diag(ResultRange.getBegin(), diag::note_main_change_return_type)
-          << FixItHint::CreateReplacement(ResultRange, "int");
-
-  // Otherwise, this is just a flat-out error.
-  } else {
-    SourceRange ResultRange = getResultSourceRange(FD);
-    if (ResultRange.isValid())
+    // All the standards say that main() should return 'int'.
+    if (Context.hasSameType(FT->getReturnType(), Context.IntTy))
+      FD->setHasImplicitReturnZero(true);
+    else {
+      // Otherwise, this is just a flat-out error.
+      SourceRange RTRange = FD->getReturnTypeSourceRange();
       Diag(FD->getTypeSpecStartLoc(), diag::err_main_returns_nonint)
-          << FixItHint::CreateReplacement(ResultRange, "int");
-    else
-      Diag(FD->getTypeSpecStartLoc(), diag::err_main_returns_nonint);
-
-    FD->setInvalidDecl(true);
+          << (RTRange.isValid() ? FixItHint::CreateReplacement(RTRange, "int")
+                                : FixItHint());
+      FD->setInvalidDecl(true);
+    }
   }
 
   // Treat protoless main() as nullary.
@@ -8832,11 +8897,13 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl,
     if (Var->isInvalidDecl())
       return;
 
-    if (RequireCompleteType(Var->getLocation(), 
-                            Context.getBaseElementType(Type),
-                            diag::err_typecheck_decl_incomplete_type)) {
-      Var->setInvalidDecl();
-      return;
+    if (!Var->hasAttr<AliasAttr>()) {
+      if (RequireCompleteType(Var->getLocation(),
+                              Context.getBaseElementType(Type),
+                              diag::err_typecheck_decl_incomplete_type)) {
+        Var->setInvalidDecl();
+        return;
+      }
     }
 
     // The variable can not have an abstract class type.
@@ -9277,7 +9344,7 @@ Sema::DeclGroupPtrTy Sema::FinalizeDeclaratorGroup(Scope *S, const DeclSpec &DS,
 /// BuildDeclaratorGroup - convert a list of declarations into a declaration
 /// group, performing any necessary semantic checking.
 Sema::DeclGroupPtrTy
-Sema::BuildDeclaratorGroup(llvm::MutableArrayRef<Decl *> Group,
+Sema::BuildDeclaratorGroup(MutableArrayRef<Decl *> Group,
                            bool TypeMayContainAuto) {
   // C++0x [dcl.spec.auto]p7:
   //   If the type deduced for the template parameter U is not the same in each
@@ -10874,11 +10941,6 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
       while (isa<RecordDecl>(SearchDC) || isa<EnumDecl>(SearchDC))
         SearchDC = SearchDC->getParent();
     }
-  } else if (S->isFunctionPrototypeScope()) {
-    // If this is an enum declaration in function prototype scope, set its
-    // initial context to the translation unit.
-    // FIXME: [citation needed]
-    SearchDC = Context.getTranslationUnitDecl();
   }
 
   if (Previous.isSingleResult() &&
@@ -11351,26 +11413,36 @@ CreateNewDecl:
     else if (!SearchDC->isFunctionOrMethod())
       New->setModulePrivate();
   }
-  
+
   // If this is a specialization of a member class (of a class template),
   // check the specialization.
   if (isExplicitSpecialization && CheckMemberSpecialization(New, Previous))
     Invalid = true;
-           
+
+  // If we're declaring or defining a tag in function prototype scope in C,
+  // note that this type can only be used within the function and add it to
+  // the list of decls to inject into the function definition scope.
+  if ((Name || Kind == TTK_Enum) &&
+      getNonFieldDeclScope(S)->isFunctionPrototypeScope()) {
+    if (getLangOpts().CPlusPlus) {
+      // C++ [dcl.fct]p6:
+      //   Types shall not be defined in return or parameter types.
+      if (TUK == TUK_Definition && !IsTypeSpecifier) {
+        Diag(Loc, diag::err_type_defined_in_param_type)
+            << Name;
+        Invalid = true;
+      }
+    } else {
+      Diag(Loc, diag::warn_decl_in_param_list) << Context.getTagDeclType(New);
+    }
+    DeclsInPrototypeScope.push_back(New);
+  }
+
   if (Invalid)
     New->setInvalidDecl();
 
   if (Attr)
     ProcessDeclAttributeList(S, New, Attr);
-
-  // If we're declaring or defining a tag in function prototype scope in C,
-  // note that this type can only be used within the function and add it to
-  // the list of decls to inject into the function definition scope.
-  if (!getLangOpts().CPlusPlus && (Name || Kind == TTK_Enum) &&
-      getNonFieldDeclScope(S)->isFunctionPrototypeScope()) {
-    Diag(Loc, diag::warn_decl_in_param_list) << Context.getTagDeclType(New);
-    DeclsInPrototypeScope.push_back(New);
-  }
 
   // Set the lexical context. If the tag has a C++ scope specifier, the
   // lexical context will be different from the semantic context.

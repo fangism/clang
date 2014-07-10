@@ -267,13 +267,15 @@ static FullSourceLoc ConvertBackendLocation(const llvm::SMDiagnostic &D,
   LSM.getMemoryBuffer(LSM.FindBufferContainingLoc(D.getLoc()));
 
   // Create the copy and transfer ownership to clang::SourceManager.
+  // TODO: Avoid copying files into memory.
   llvm::MemoryBuffer *CBuf =
   llvm::MemoryBuffer::getMemBufferCopy(LBuf->getBuffer(),
                                        LBuf->getBufferIdentifier());
+  // FIXME: Keep a file ID map instead of creating new IDs for each location.
   FileID FID = CSM.createFileID(CBuf);
 
   // Translate the offset into the file.
-  unsigned Offset = D.getLoc().getPointer()  - LBuf->getBufferStart();
+  unsigned Offset = D.getLoc().getPointer() - LBuf->getBufferStart();
   SourceLocation NewLoc =
   CSM.getLocForStartOfFile(FID).getLocWithOffset(Offset);
   return FullSourceLoc(NewLoc, CSM);
@@ -639,23 +641,23 @@ void CodeGenAction::ExecuteAction() {
 
     bool Invalid;
     SourceManager &SM = CI.getSourceManager();
-    const llvm::MemoryBuffer *MainFile = SM.getBuffer(SM.getMainFileID(),
-                                                      &Invalid);
+    FileID FID = SM.getMainFileID();
+    llvm::MemoryBuffer *MainFile = SM.getBuffer(FID, &Invalid);
     if (Invalid)
       return;
 
-    // FIXME: This is stupid, IRReader shouldn't take ownership.
-    llvm::MemoryBuffer *MainFileCopy =
-      llvm::MemoryBuffer::getMemBufferCopy(MainFile->getBuffer(),
-                                           getCurrentFile());
-
     llvm::SMDiagnostic Err;
-    TheModule.reset(ParseIR(MainFileCopy, Err, *VMContext));
+    TheModule.reset(ParseIR(MainFile, Err, *VMContext));
     if (!TheModule) {
-      // Translate from the diagnostic info to the SourceManager location.
-      SourceLocation Loc = SM.translateFileLineCol(
-        SM.getFileEntryForID(SM.getMainFileID()), Err.getLineNo(),
-        Err.getColumnNo() + 1);
+      // Translate from the diagnostic info to the SourceManager location if
+      // available.
+      // TODO: Unify this with ConvertBackendLocation()
+      SourceLocation Loc;
+      if (Err.getLineNo() > 0) {
+        assert(Err.getColumnNo() >= 0);
+        Loc = SM.translateFileLineCol(SM.getFileEntryForID(FID),
+                                      Err.getLineNo(), Err.getColumnNo() + 1);
+      }
 
       // Strip off a leading diagnostic code if there is one.
       StringRef Msg = Err.getMessage();

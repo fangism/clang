@@ -1600,8 +1600,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   const char *Name = getContext().BuiltinInfo.GetName(BuiltinID);
   Intrinsic::ID IntrinsicID = Intrinsic::not_intrinsic;
   if (const char *Prefix =
-      llvm::Triple::getArchTypePrefix(getTarget().getTriple().getArch()))
+          llvm::Triple::getArchTypePrefix(getTarget().getTriple().getArch())) {
     IntrinsicID = Intrinsic::getIntrinsicForGCCBuiltin(Prefix, Name);
+    // NOTE we dont need to perform a compatibility flag check here since the
+    // intrinsics are declared in Builtins*.def via LANGBUILTIN which filter the
+    // MS builtins via ALL_MS_LANGUAGES and are filtered earlier.
+    if (IntrinsicID == Intrinsic::not_intrinsic)
+      IntrinsicID = Intrinsic::getIntrinsicForMSBuiltin(Prefix, Name);
+  }
 
   if (IntrinsicID != Intrinsic::not_intrinsic) {
     SmallVector<Value*, 16> Args;
@@ -1689,6 +1695,8 @@ Value *CodeGenFunction::EmitTargetBuiltinExpr(unsigned BuiltinID,
   case llvm::Triple::ppc64:
   case llvm::Triple::ppc64le:
     return EmitPPCBuiltinExpr(BuiltinID, E);
+  case llvm::Triple::r600:
+    return EmitR600BuiltinExpr(BuiltinID, E);
   default:
     return nullptr;
   }
@@ -2401,7 +2409,7 @@ static bool AArch64SISDIntrinsicsProvenSorted = false;
 
 
 static const NeonIntrinsicInfo *
-findNeonIntrinsicInMap(llvm::ArrayRef<NeonIntrinsicInfo> IntrinsicMap,
+findNeonIntrinsicInMap(ArrayRef<NeonIntrinsicInfo> IntrinsicMap,
                        unsigned BuiltinID, bool &MapProvenSorted) {
 
 #ifndef NDEBUG
@@ -3031,18 +3039,23 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
   unsigned HintID = static_cast<unsigned>(-1);
   switch (BuiltinID) {
   default: break;
+  case ARM::BI__builtin_arm_yield:
   case ARM::BI__yield:
     HintID = 1;
     break;
+  case ARM::BI__builtin_arm_wfe:
   case ARM::BI__wfe:
     HintID = 2;
     break;
+  case ARM::BI__builtin_arm_wfi:
   case ARM::BI__wfi:
     HintID = 3;
     break;
+  case ARM::BI__builtin_arm_sev:
   case ARM::BI__sev:
     HintID = 4;
     break;
+  case ARM::BI__builtin_arm_sevl:
   case ARM::BI__sevl:
     HintID = 5;
     break;
@@ -3072,9 +3085,23 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
   }
 
   if (BuiltinID == ARM::BI__builtin_arm_ldrexd ||
-      (BuiltinID == ARM::BI__builtin_arm_ldrex &&
-       getContext().getTypeSize(E->getType()) == 64)) {
-    Function *F = CGM.getIntrinsic(Intrinsic::arm_ldrexd);
+      ((BuiltinID == ARM::BI__builtin_arm_ldrex ||
+        BuiltinID == ARM::BI__builtin_arm_ldaex) &&
+       getContext().getTypeSize(E->getType()) == 64) ||
+      BuiltinID == ARM::BI__ldrexd) {
+    Function *F;
+
+    switch (BuiltinID) {
+    default: llvm_unreachable("unexpected builtin");
+    case ARM::BI__builtin_arm_ldaex:
+      F = CGM.getIntrinsic(Intrinsic::arm_ldaexd);
+      break;
+    case ARM::BI__builtin_arm_ldrexd:
+    case ARM::BI__builtin_arm_ldrex:
+    case ARM::BI__ldrexd:
+      F = CGM.getIntrinsic(Intrinsic::arm_ldrexd);
+      break;
+    }
 
     Value *LdPtr = EmitScalarExpr(E->getArg(0));
     Value *Val = Builder.CreateCall(F, Builder.CreateBitCast(LdPtr, Int8PtrTy),
@@ -3091,7 +3118,8 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     return Builder.CreateBitCast(Val, ConvertType(E->getType()));
   }
 
-  if (BuiltinID == ARM::BI__builtin_arm_ldrex) {
+  if (BuiltinID == ARM::BI__builtin_arm_ldrex ||
+      BuiltinID == ARM::BI__builtin_arm_ldaex) {
     Value *LoadAddr = EmitScalarExpr(E->getArg(0));
 
     QualType Ty = E->getType();
@@ -3100,7 +3128,10 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
                                                   getContext().getTypeSize(Ty));
     LoadAddr = Builder.CreateBitCast(LoadAddr, IntResTy->getPointerTo());
 
-    Function *F = CGM.getIntrinsic(Intrinsic::arm_ldrex, LoadAddr->getType());
+    Function *F = CGM.getIntrinsic(BuiltinID == ARM::BI__builtin_arm_ldaex
+                                       ? Intrinsic::arm_ldaex
+                                       : Intrinsic::arm_ldrex,
+                                   LoadAddr->getType());
     Value *Val = Builder.CreateCall(F, LoadAddr, "ldrex");
 
     if (RealResTy->isPointerTy())
@@ -3112,9 +3143,12 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
   }
 
   if (BuiltinID == ARM::BI__builtin_arm_strexd ||
-      (BuiltinID == ARM::BI__builtin_arm_strex &&
+      ((BuiltinID == ARM::BI__builtin_arm_stlex ||
+        BuiltinID == ARM::BI__builtin_arm_strex) &&
        getContext().getTypeSize(E->getArg(0)->getType()) == 64)) {
-    Function *F = CGM.getIntrinsic(Intrinsic::arm_strexd);
+    Function *F = CGM.getIntrinsic(BuiltinID == ARM::BI__builtin_arm_stlex
+                                       ? Intrinsic::arm_stlexd
+                                       : Intrinsic::arm_strexd);
     llvm::Type *STy = llvm::StructType::get(Int32Ty, Int32Ty, NULL);
 
     Value *Tmp = CreateMemTemp(E->getArg(0)->getType());
@@ -3130,7 +3164,8 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     return Builder.CreateCall3(F, Arg0, Arg1, StPtr, "strexd");
   }
 
-  if (BuiltinID == ARM::BI__builtin_arm_strex) {
+  if (BuiltinID == ARM::BI__builtin_arm_strex ||
+      BuiltinID == ARM::BI__builtin_arm_stlex) {
     Value *StoreVal = EmitScalarExpr(E->getArg(0));
     Value *StoreAddr = EmitScalarExpr(E->getArg(1));
 
@@ -3146,7 +3181,10 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
       StoreVal = Builder.CreateZExtOrBitCast(StoreVal, Int32Ty);
     }
 
-    Function *F = CGM.getIntrinsic(Intrinsic::arm_strex, StoreAddr->getType());
+    Function *F = CGM.getIntrinsic(BuiltinID == ARM::BI__builtin_arm_stlex
+                                       ? Intrinsic::arm_stlex
+                                       : Intrinsic::arm_strex,
+                                   StoreAddr->getType());
     return Builder.CreateCall2(F, StoreVal, StoreAddr, "strex");
   }
 
@@ -3347,7 +3385,7 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
 
   // Many NEON builtins have identical semantics and uses in ARM and
   // AArch64. Emit these in a single function.
-  llvm::ArrayRef<NeonIntrinsicInfo> IntrinsicMap(ARMSIMDIntrinsicMap);
+  ArrayRef<NeonIntrinsicInfo> IntrinsicMap(ARMSIMDIntrinsicMap);
   const NeonIntrinsicInfo *Builtin = findNeonIntrinsicInMap(
       IntrinsicMap, BuiltinID, NEONSIMDIntrinsicsProvenSorted);
   if (Builtin)
@@ -3789,9 +3827,12 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     return EmitNounwindRuntimeCall(CGM.CreateRuntimeFunction(FTy, Name), Ops);
   }
 
-  if (BuiltinID == AArch64::BI__builtin_arm_ldrex &&
+  if ((BuiltinID == AArch64::BI__builtin_arm_ldrex ||
+      BuiltinID == AArch64::BI__builtin_arm_ldaex) &&
       getContext().getTypeSize(E->getType()) == 128) {
-    Function *F = CGM.getIntrinsic(Intrinsic::aarch64_ldxp);
+    Function *F = CGM.getIntrinsic(BuiltinID == AArch64::BI__builtin_arm_ldaex
+                                       ? Intrinsic::aarch64_ldaxp
+                                       : Intrinsic::aarch64_ldxp);
 
     Value *LdPtr = EmitScalarExpr(E->getArg(0));
     Value *Val = Builder.CreateCall(F, Builder.CreateBitCast(LdPtr, Int8PtrTy),
@@ -3807,7 +3848,8 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     Val = Builder.CreateShl(Val0, ShiftCst, "shl", true /* nuw */);
     Val = Builder.CreateOr(Val, Val1);
     return Builder.CreateBitCast(Val, ConvertType(E->getType()));
-  } else if (BuiltinID == AArch64::BI__builtin_arm_ldrex) {
+  } else if (BuiltinID == AArch64::BI__builtin_arm_ldrex ||
+             BuiltinID == AArch64::BI__builtin_arm_ldaex) {
     Value *LoadAddr = EmitScalarExpr(E->getArg(0));
 
     QualType Ty = E->getType();
@@ -3816,7 +3858,10 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
                                                   getContext().getTypeSize(Ty));
     LoadAddr = Builder.CreateBitCast(LoadAddr, IntResTy->getPointerTo());
 
-    Function *F = CGM.getIntrinsic(Intrinsic::aarch64_ldxr, LoadAddr->getType());
+    Function *F = CGM.getIntrinsic(BuiltinID == AArch64::BI__builtin_arm_ldaex
+                                       ? Intrinsic::aarch64_ldaxr
+                                       : Intrinsic::aarch64_ldxr,
+                                   LoadAddr->getType());
     Value *Val = Builder.CreateCall(F, LoadAddr, "ldxr");
 
     if (RealResTy->isPointerTy())
@@ -3826,9 +3871,12 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     return Builder.CreateBitCast(Val, RealResTy);
   }
 
-  if (BuiltinID == AArch64::BI__builtin_arm_strex &&
+  if ((BuiltinID == AArch64::BI__builtin_arm_strex ||
+       BuiltinID == AArch64::BI__builtin_arm_stlex) &&
       getContext().getTypeSize(E->getArg(0)->getType()) == 128) {
-    Function *F = CGM.getIntrinsic(Intrinsic::aarch64_stxp);
+    Function *F = CGM.getIntrinsic(BuiltinID == AArch64::BI__builtin_arm_stlex
+                                       ? Intrinsic::aarch64_stlxp
+                                       : Intrinsic::aarch64_stxp);
     llvm::Type *STy = llvm::StructType::get(Int64Ty, Int64Ty, NULL);
 
     Value *One = llvm::ConstantInt::get(Int32Ty, 1);
@@ -3845,7 +3893,8 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     Value *StPtr = Builder.CreateBitCast(EmitScalarExpr(E->getArg(1)),
                                          Int8PtrTy);
     return Builder.CreateCall3(F, Arg0, Arg1, StPtr, "stxp");
-  } else if (BuiltinID == AArch64::BI__builtin_arm_strex) {
+  } else if (BuiltinID == AArch64::BI__builtin_arm_strex ||
+             BuiltinID == AArch64::BI__builtin_arm_stlex) {
     Value *StoreVal = EmitScalarExpr(E->getArg(0));
     Value *StoreAddr = EmitScalarExpr(E->getArg(1));
 
@@ -3861,7 +3910,10 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
       StoreVal = Builder.CreateZExtOrBitCast(StoreVal, Int64Ty);
     }
 
-    Function *F = CGM.getIntrinsic(Intrinsic::aarch64_stxr, StoreAddr->getType());
+    Function *F = CGM.getIntrinsic(BuiltinID == AArch64::BI__builtin_arm_stlex
+                                       ? Intrinsic::aarch64_stlxr
+                                       : Intrinsic::aarch64_stxr,
+                                   StoreAddr->getType());
     return Builder.CreateCall2(F, StoreVal, StoreAddr, "stxr");
   }
 
@@ -3906,7 +3958,7 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
   for (unsigned i = 0, e = E->getNumArgs() - 1; i != e; i++)
     Ops.push_back(EmitScalarExpr(E->getArg(i)));
 
-  llvm::ArrayRef<NeonIntrinsicInfo> SISDMap(AArch64SISDIntrinsicMap);
+  ArrayRef<NeonIntrinsicInfo> SISDMap(AArch64SISDIntrinsicMap);
   const NeonIntrinsicInfo *Builtin = findNeonIntrinsicInMap(
       SISDMap, BuiltinID, AArch64SISDIntrinsicsProvenSorted);
 
@@ -5920,5 +5972,40 @@ Value *CodeGenFunction::EmitPPCBuiltinExpr(unsigned BuiltinID,
     llvm::Function *F = CGM.getIntrinsic(ID);
     return Builder.CreateCall(F, Ops, "");
   }
+  }
+}
+
+Value *CodeGenFunction::EmitR600BuiltinExpr(unsigned BuiltinID,
+                                            const CallExpr *E) {
+  switch (BuiltinID) {
+  case R600::BI__builtin_amdgpu_div_scale:
+  case R600::BI__builtin_amdgpu_div_scalef: {
+    // Translate from the intrinsics's struct return to the builtin's out
+    // argument.
+
+    std::pair<llvm::Value *, unsigned> FlagOutPtr
+      = EmitPointerWithAlignment(E->getArg(3));
+
+    llvm::Value *X = EmitScalarExpr(E->getArg(0));
+    llvm::Value *Y = EmitScalarExpr(E->getArg(1));
+    llvm::Value *Z = EmitScalarExpr(E->getArg(2));
+
+    llvm::Value *Callee = CGM.getIntrinsic(Intrinsic::AMDGPU_div_scale,
+                                           X->getType());
+
+    llvm::Value *Tmp = Builder.CreateCall3(Callee, X, Y, Z);
+
+    llvm::Value *Result = Builder.CreateExtractValue(Tmp, 0);
+    llvm::Value *Flag = Builder.CreateExtractValue(Tmp, 1);
+
+    llvm::Type *RealFlagType
+      = FlagOutPtr.first->getType()->getPointerElementType();
+
+    llvm::Value *FlagExt = Builder.CreateZExt(Flag, RealFlagType);
+    llvm::StoreInst *FlagStore = Builder.CreateStore(FlagExt, FlagOutPtr.first);
+    FlagStore->setAlignment(FlagOutPtr.second);
+    return Result;
+  } default:
+    return nullptr;
   }
 }

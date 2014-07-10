@@ -170,6 +170,7 @@ def CXXUuidofExpr : DStmt<Expr>;
 def SEHTryStmt : Stmt;
 def SEHExceptStmt : Stmt;
 def SEHFinallyStmt : Stmt;
+def SEHLeaveStmt : Stmt;
 def MSDependentExistsStmt : Stmt;
 
 // OpenCL Extensions.
@@ -180,3 +181,8 @@ def OMPExecutableDirective : Stmt<1>;
 def OMPParallelDirective : DStmt<OMPExecutableDirective>;
 def OMPSimdDirective : DStmt<OMPExecutableDirective>;
 def OMPForDirective : DStmt<OMPExecutableDirective>;
+def OMPSectionsDirective : DStmt<OMPExecutableDirective>;
+def OMPSectionDirective : DStmt<OMPExecutableDirective>;
+def OMPSingleDirective : DStmt<OMPExecutableDirective>;
+def OMPParallelForDirective : DStmt<OMPExecutableDirective>;
+def OMPParallelSectionsDirective : DStmt<OMPExecutableDirective>;

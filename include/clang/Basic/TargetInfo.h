@@ -47,7 +47,7 @@ namespace Builtin { struct Info; }
 /// \brief Exposes information about the current target.
 ///
 class TargetInfo : public RefCountedBase<TargetInfo> {
-  IntrusiveRefCntPtr<TargetOptions> TargetOpts;
+  std::shared_ptr<TargetOptions> TargetOpts;
   llvm::Triple Triple;
 protected:
   // Target values set by the ctor of the actual target implementation.  Default
@@ -94,8 +94,9 @@ public:
   /// \param Opts - The options to use to initialize the target. The target may
   /// modify the options to canonicalize the target feature information to match
   /// what the backend expects.
-  static TargetInfo* CreateTargetInfo(DiagnosticsEngine &Diags,
-                                      TargetOptions *Opts);
+  static TargetInfo *
+  CreateTargetInfo(DiagnosticsEngine &Diags,
+                   const std::shared_ptr<TargetOptions> &Opts);
 
   virtual ~TargetInfo();
 
@@ -103,10 +104,6 @@ public:
   TargetOptions &getTargetOpts() const { 
     assert(TargetOpts && "Missing target options");
     return *TargetOpts; 
-  }
-
-  void setTargetOpts(TargetOptions *TargetOpts) {
-    this->TargetOpts = TargetOpts;
   }
 
   ///===---- Target Data Type Query Methods -------------------------------===//
@@ -214,6 +211,9 @@ public:
     return AddrSpace == 0 ? PtrDiffType : getPtrDiffTypeV(AddrSpace);
   }
   IntType getIntPtrType() const { return IntPtrType; }
+  IntType getUIntPtrType() const {
+    return getIntTypeByWidth(getTypeWidth(IntPtrType), false);
+  }
   IntType getWCharType() const { return WCharType; }
   IntType getWIntType() const { return WIntType; }
   IntType getChar16Type() const { return Char16Type; }
@@ -229,6 +229,9 @@ public:
 
   /// \brief Return integer type with specified width.
   IntType getIntTypeByWidth(unsigned BitWidth, bool IsSigned) const;
+
+  /// \brief Return the smallest integer type with at least the specified width.
+  IntType getLeastIntTypeByWidth(unsigned BitWidth, bool IsSigned) const;
 
   /// \brief Return floating point type with specified width.
   RealType getRealTypeByWidth(unsigned BitWidth) const;
@@ -624,7 +627,7 @@ public:
   ///
   /// Apply changes to the target information with respect to certain
   /// language options which change the target configuration.
-  virtual void setForcedLangOptions(LangOptions &Opts);
+  virtual void adjust(const LangOptions &Opts);
 
   /// \brief Get the default set of target features for the CPU;
   /// this should include all legal feature strings on the target.

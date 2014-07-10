@@ -957,8 +957,16 @@ void X86_32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
   else
     State.FreeRegs = DefaultNumRegisterParameters;
 
-  if (!getCXXABI().classifyReturnType(FI))
+  if (!getCXXABI().classifyReturnType(FI)) {
     FI.getReturnInfo() = classifyReturnType(FI.getReturnType(), State);
+  } else if (FI.getReturnInfo().isIndirect()) {
+    // The C++ ABI is not aware of register usage, so we have to check if the
+    // return value was sret and put it in a register ourselves if appropriate.
+    if (State.FreeRegs) {
+      --State.FreeRegs;  // The sret parameter consumes a register.
+      FI.getReturnInfo().setInReg(true);
+    }
+  }
 
   bool UsedInAlloca = false;
   for (auto &I : FI.arguments()) {
@@ -1080,6 +1088,44 @@ llvm::Value *X86_32ABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
   Builder.CreateStore(NextAddr, VAListAddrAsBPP);
 
   return AddrTyped;
+}
+
+bool X86_32TargetCodeGenInfo::isStructReturnInRegABI(
+    const llvm::Triple &Triple, const CodeGenOptions &Opts) {
+  assert(Triple.getArch() == llvm::Triple::x86);
+
+  switch (Opts.getStructReturnConvention()) {
+  case CodeGenOptions::SRCK_Default:
+    break;
+  case CodeGenOptions::SRCK_OnStack:  // -fpcc-struct-return
+    return false;
+  case CodeGenOptions::SRCK_InRegs:  // -freg-struct-return
+    return true;
+  }
+
+  if (Triple.isOSDarwin())
+    return true;
+
+  switch (Triple.getOS()) {
+  case llvm::Triple::AuroraUX:
+  case llvm::Triple::DragonFly:
+  case llvm::Triple::FreeBSD:
+  case llvm::Triple::OpenBSD:
+  case llvm::Triple::Bitrig:
+    return true;
+  case llvm::Triple::Win32:
+    switch (Triple.getEnvironment()) {
+    case llvm::Triple::UnknownEnvironment:
+    case llvm::Triple::Cygnus:
+    case llvm::Triple::GNU:
+    case llvm::Triple::MSVC:
+      return true;
+    default:
+      return false;
+    }
+  default:
+    return false;
+  }
 }
 
 void X86_32TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
@@ -2045,7 +2091,7 @@ GetSSETypeAtOffset(llvm::Type *IRType, unsigned IROffset,
 /// the source type.  IROffset is an offset in bytes into the LLVM IR type that
 /// the 8-byte value references.  PrefType may be null.
 ///
-/// SourceTy is the source level type for the entire argument.  SourceOffset is
+/// SourceTy is the source-level type for the entire argument.  SourceOffset is
 /// an offset into this that we're processing (which is always either 0 or 8).
 ///
 llvm::Type *X86_64ABIInfo::
@@ -2590,8 +2636,8 @@ llvm::Value *X86_64ABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
     llvm::Type *PTyHi = llvm::PointerType::getUnqual(TyHi);
     llvm::Value *GPAddr = CGF.Builder.CreateGEP(RegAddr, gp_offset);
     llvm::Value *FPAddr = CGF.Builder.CreateGEP(RegAddr, fp_offset);
-    llvm::Value *RegLoAddr = TyLo->isFloatingPointTy() ? FPAddr : GPAddr;
-    llvm::Value *RegHiAddr = TyLo->isFloatingPointTy() ? GPAddr : FPAddr;
+    llvm::Value *RegLoAddr = TyLo->isFPOrFPVectorTy() ? FPAddr : GPAddr;
+    llvm::Value *RegHiAddr = TyLo->isFPOrFPVectorTy() ? GPAddr : FPAddr;
     llvm::Value *V =
       CGF.Builder.CreateLoad(CGF.Builder.CreateBitCast(RegLoAddr, PTyLo));
     CGF.Builder.CreateStore(V, CGF.Builder.CreateStructGEP(Tmp, 0));
@@ -2857,6 +2903,7 @@ public:
   PPC64_SVR4_ABIInfo(CodeGen::CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
 
   bool isPromotableTypeForABI(QualType Ty) const;
+  bool isAlignedParamType(QualType Ty) const;
 
   ABIArgInfo classifyReturnType(QualType RetTy) const;
   ABIArgInfo classifyArgumentType(QualType Ty) const;
@@ -2877,7 +2924,8 @@ public:
       const Type *T = isSingleElementStruct(I.type, getContext());
       if (T) {
         const BuiltinType *BT = T->getAs<BuiltinType>();
-        if (T->isVectorType() || (BT && BT->isFloatingPoint())) {
+        if ((T->isVectorType() && getContext().getTypeSize(T) == 128) ||
+            (BT && BT->isFloatingPoint())) {
           QualType QT(T, 0);
           I.info = ABIArgInfo::getDirectInReg(CGT.ConvertType(QT));
           continue;
@@ -2946,16 +2994,68 @@ PPC64_SVR4_ABIInfo::isPromotableTypeForABI(QualType Ty) const {
   return false;
 }
 
+/// isAlignedParamType - Determine whether a type requires 16-byte
+/// alignment in the parameter area.
+bool
+PPC64_SVR4_ABIInfo::isAlignedParamType(QualType Ty) const {
+  // Complex types are passed just like their elements.
+  if (const ComplexType *CTy = Ty->getAs<ComplexType>())
+    Ty = CTy->getElementType();
+
+  // Only vector types of size 16 bytes need alignment (larger types are
+  // passed via reference, smaller types are not aligned).
+  if (Ty->isVectorType())
+    return getContext().getTypeSize(Ty) == 128;
+
+  // For single-element float/vector structs, we consider the whole type
+  // to have the same alignment requirements as its single element.
+  const Type *AlignAsType = nullptr;
+  const Type *EltType = isSingleElementStruct(Ty, getContext());
+  if (EltType) {
+    const BuiltinType *BT = EltType->getAs<BuiltinType>();
+    if ((EltType->isVectorType() &&
+         getContext().getTypeSize(EltType) == 128) ||
+        (BT && BT->isFloatingPoint()))
+      AlignAsType = EltType;
+  }
+
+  // With special case aggregates, only vector base types need alignment.
+  if (AlignAsType)
+    return AlignAsType->isVectorType();
+
+  // Otherwise, we only need alignment for any aggregate type that
+  // has an alignment requirement of >= 16 bytes.
+  if (isAggregateTypeForABI(Ty) && getContext().getTypeAlign(Ty) >= 128)
+    return true;
+
+  return false;
+}
+
 ABIArgInfo
 PPC64_SVR4_ABIInfo::classifyArgumentType(QualType Ty) const {
   if (Ty->isAnyComplexType())
     return ABIArgInfo::getDirect();
 
+  // Non-Altivec vector types are passed in GPRs (smaller than 16 bytes)
+  // or via reference (larger than 16 bytes).
+  if (Ty->isVectorType()) {
+    uint64_t Size = getContext().getTypeSize(Ty);
+    if (Size > 128)
+      return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
+    else if (Size < 128) {
+      llvm::Type *CoerceTy = llvm::IntegerType::get(getVMContext(), Size);
+      return ABIArgInfo::getDirect(CoerceTy);
+    }
+  }
+
   if (isAggregateTypeForABI(Ty)) {
     if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, getCXXABI()))
       return ABIArgInfo::getIndirect(0, RAA == CGCXXABI::RAA_DirectInMemory);
 
-    return ABIArgInfo::getIndirect(0);
+    uint64_t ABIAlign = isAlignedParamType(Ty)? 16 : 8;
+    uint64_t TyAlign = getContext().getTypeAlign(Ty) / 8;
+    return ABIArgInfo::getIndirect(ABIAlign, /*ByVal=*/true,
+                                   /*Realign=*/TyAlign > ABIAlign);
   }
 
   return (isPromotableTypeForABI(Ty) ?
@@ -2969,6 +3069,18 @@ PPC64_SVR4_ABIInfo::classifyReturnType(QualType RetTy) const {
 
   if (RetTy->isAnyComplexType())
     return ABIArgInfo::getDirect();
+
+  // Non-Altivec vector types are returned in GPRs (smaller than 16 bytes)
+  // or via reference (larger than 16 bytes).
+  if (RetTy->isVectorType()) {
+    uint64_t Size = getContext().getTypeSize(RetTy);
+    if (Size > 128)
+      return ABIArgInfo::getIndirect(0);
+    else if (Size < 128) {
+      llvm::Type *CoerceTy = llvm::IntegerType::get(getVMContext(), Size);
+      return ABIArgInfo::getDirect(CoerceTy);
+    }
+  }
 
   if (isAggregateTypeForABI(RetTy))
     return ABIArgInfo::getIndirect(0);
@@ -2987,6 +3099,14 @@ llvm::Value *PPC64_SVR4_ABIInfo::EmitVAArg(llvm::Value *VAListAddr,
   CGBuilderTy &Builder = CGF.Builder;
   llvm::Value *VAListAddrAsBPP = Builder.CreateBitCast(VAListAddr, BPP, "ap");
   llvm::Value *Addr = Builder.CreateLoad(VAListAddrAsBPP, "ap.cur");
+
+  // Handle types that require 16-byte alignment in the parameter save area.
+  if (isAlignedParamType(Ty)) {
+    llvm::Value *AddrAsInt = Builder.CreatePtrToInt(Addr, CGF.Int64Ty);
+    AddrAsInt = Builder.CreateAdd(AddrAsInt, Builder.getInt64(15));
+    AddrAsInt = Builder.CreateAnd(AddrAsInt, Builder.getInt64(-16));
+    Addr = Builder.CreateIntToPtr(AddrAsInt, BP, "ap.align");
+  }
 
   // Update the va_list pointer.  The pointer should be bumped by the
   // size of the object.  We can trust getTypeSize() except for a complex
@@ -4054,7 +4174,7 @@ void ARMABIInfo::markAllocatedVFPs(unsigned Alignment,
 /// which have been allocated. It is valid for AllocatedGPRs to go above 4,
 /// this represents arguments being stored on the stack.
 void ARMABIInfo::markAllocatedGPRs(unsigned Alignment,
-                                          unsigned NumRequired) const {
+                                   unsigned NumRequired) const {
   assert((Alignment == 1 || Alignment == 2) && "Alignment must be 4 or 8 bytes");
 
   if (Alignment == 2 && AllocatedGPRs & 0x1)
@@ -4197,8 +4317,11 @@ ABIArgInfo ARMABIInfo::classifyArgumentType(QualType Ty, bool isVariadic,
       getABIKind() == ARMABIInfo::AAPCS)
     ABIAlign = std::min(std::max(TyAlign, (uint64_t)4), (uint64_t)8);
   if (getContext().getTypeSizeInChars(Ty) > CharUnits::fromQuantity(64)) {
-    // Update Allocated GPRs
-    markAllocatedGPRs(1, 1);
+    // Update Allocated GPRs. Since this is only used when the size of the
+    // argument is greater than 64 bytes, this will always use up any available
+    // registers (of which there are 4). We also don't care about getting the
+    // alignment right, because general-purpose registers cannot be back-filled.
+    markAllocatedGPRs(1, 4);
     return ABIArgInfo::getIndirect(TyAlign, /*ByVal=*/true,
            /*Realign=*/TyAlign > ABIAlign);
   }
@@ -4376,6 +4499,10 @@ ABIArgInfo ARMABIInfo::classifyReturnType(QualType RetTy,
   // are returned indirectly.
   uint64_t Size = getContext().getTypeSize(RetTy);
   if (Size <= 32) {
+    if (getDataLayout().isBigEndian())
+      // Return in 32 bit integer integer type (as if loaded by LDR, AAPCS 5.4)
+      return ABIArgInfo::getDirect(llvm::Type::getInt32Ty(getVMContext()));
+
     // Return in the smallest viable integer type.
     if (Size <= 8)
       return ABIArgInfo::getDirect(llvm::Type::getInt8Ty(getVMContext()));
@@ -4881,44 +5008,6 @@ llvm::Value *SystemZABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
     return CGF.Builder.CreateLoad(ResAddr, "indirect_arg");
 
   return ResAddr;
-}
-
-bool X86_32TargetCodeGenInfo::isStructReturnInRegABI(
-    const llvm::Triple &Triple, const CodeGenOptions &Opts) {
-  assert(Triple.getArch() == llvm::Triple::x86);
-
-  switch (Opts.getStructReturnConvention()) {
-  case CodeGenOptions::SRCK_Default:
-    break;
-  case CodeGenOptions::SRCK_OnStack:  // -fpcc-struct-return
-    return false;
-  case CodeGenOptions::SRCK_InRegs:  // -freg-struct-return
-    return true;
-  }
-
-  if (Triple.isOSDarwin())
-    return true;
-
-  switch (Triple.getOS()) {
-  case llvm::Triple::AuroraUX:
-  case llvm::Triple::DragonFly:
-  case llvm::Triple::FreeBSD:
-  case llvm::Triple::OpenBSD:
-  case llvm::Triple::Bitrig:
-    return true;
-  case llvm::Triple::Win32:
-    switch (Triple.getEnvironment()) {
-    case llvm::Triple::UnknownEnvironment:
-    case llvm::Triple::Cygnus:
-    case llvm::Triple::GNU:
-    case llvm::Triple::MSVC:
-      return true;
-    default:
-      return false;
-    }
-  default:
-    return false;
-  }
 }
 
 ABIArgInfo SystemZABIInfo::classifyReturnType(QualType RetTy) const {

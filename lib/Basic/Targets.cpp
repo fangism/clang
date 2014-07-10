@@ -572,7 +572,7 @@ protected:
   void getVisualStudioDefines(const LangOptions &Opts,
                               MacroBuilder &Builder) const {
     if (Opts.CPlusPlus) {
-      if (Opts.RTTI)
+      if (Opts.RTTIData)
         Builder.defineMacro("_CPPRTTI");
 
       if (Opts.Exceptions)
@@ -706,8 +706,9 @@ public:
     ArchDefinePwr6  = 1 << 9,
     ArchDefinePwr6x = 1 << 10,
     ArchDefinePwr7  = 1 << 11,
-    ArchDefineA2    = 1 << 12,
-    ArchDefineA2q   = 1 << 13
+    ArchDefinePwr8  = 1 << 12,
+    ArchDefineA2    = 1 << 13,
+    ArchDefineA2q   = 1 << 14
   } ArchDefineTypes;
 
   // Note: GCC recognizes the following additional cpus:
@@ -754,6 +755,8 @@ public:
       .Case("pwr6x", true)
       .Case("power7", true)
       .Case("pwr7", true)
+      .Case("power8", true)
+      .Case("pwr8", true)
       .Case("powerpc", true)
       .Case("ppc", true)
       .Case("powerpc64", true)
@@ -1016,7 +1019,10 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
                      | ArchDefinePpcsq)
     .Case("pwr7",  ArchDefineName | ArchDefinePwr6x | ArchDefinePwr6
                      | ArchDefinePwr5x | ArchDefinePwr5 | ArchDefinePwr4
-                     | ArchDefinePwr6 | ArchDefinePpcgr | ArchDefinePpcsq)
+                     | ArchDefinePpcgr | ArchDefinePpcsq)
+    .Case("pwr8",  ArchDefineName | ArchDefinePwr7 | ArchDefinePwr6x
+                     | ArchDefinePwr6 | ArchDefinePwr5x | ArchDefinePwr5
+                     | ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
     .Case("power3",  ArchDefinePpcgr)
     .Case("power4",  ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
     .Case("power5",  ArchDefinePwr5 | ArchDefinePwr4 | ArchDefinePpcgr
@@ -1030,7 +1036,10 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
                        | ArchDefinePpcsq)
     .Case("power7",  ArchDefinePwr7 | ArchDefinePwr6x | ArchDefinePwr6
                        | ArchDefinePwr5x | ArchDefinePwr5 | ArchDefinePwr4
-                       | ArchDefinePwr6 | ArchDefinePpcgr | ArchDefinePpcsq)
+                       | ArchDefinePpcgr | ArchDefinePpcsq)
+    .Case("power8",  ArchDefinePwr8 | ArchDefinePwr7 | ArchDefinePwr6x
+                       | ArchDefinePwr6 | ArchDefinePwr5x | ArchDefinePwr5
+                       | ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
     .Default(ArchDefineNone);
 
   if (defs & ArchDefineName)
@@ -1057,6 +1066,8 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("_ARCH_PWR6X");
   if (defs & ArchDefinePwr7)
     Builder.defineMacro("_ARCH_PWR7");
+  if (defs & ArchDefinePwr8)
+    Builder.defineMacro("_ARCH_PWR8");
   if (defs & ArchDefineA2)
     Builder.defineMacro("_ARCH_A2");
   if (defs & ArchDefineA2q) {
@@ -1105,6 +1116,7 @@ void PPCTargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
     .Case("g5", true)
     .Case("pwr6", true)
     .Case("pwr7", true)
+    .Case("pwr8", true)
     .Case("ppc64", true)
     .Case("ppc64le", true)
     .Default(false);
@@ -1458,6 +1470,8 @@ static const char *DescriptionStringSI =
   "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64";
 
 class R600TargetInfo : public TargetInfo {
+  static const Builtin::Info BuiltinInfo[];
+
   /// \brief The GPU profiles supported by the R600 target.
   enum GPUKind {
     GK_NONE,
@@ -1504,10 +1518,9 @@ public:
 
   void getTargetBuiltins(const Builtin::Info *&Records,
                          unsigned &NumRecords) const override {
-    Records = nullptr;
-    NumRecords = 0;
+    Records = BuiltinInfo;
+    NumRecords = clang::R600::LastTSBuiltin - Builtin::FirstTSBuiltin;
   }
-
 
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -1582,6 +1595,12 @@ public:
 
     return true;
   }
+};
+
+const Builtin::Info R600TargetInfo::BuiltinInfo[] = {
+#define BUILTIN(ID, TYPE, ATTRS)                \
+  { #ID, TYPE, ATTRS, 0, ALL_LANGUAGES },
+#include "clang/Basic/BuiltinsR600.def"
 };
 
 } // end anonymous namespace
@@ -3084,9 +3103,6 @@ public:
     WindowsTargetInfo<X86_32TargetInfo>::getTargetDefines(Opts, Builder);
   }
 };
-} // end anonymous namespace
-
-namespace {
 
 // x86-32 Windows Visual Studio target
 class MicrosoftX86_32TargetInfo : public WindowsX86_32TargetInfo {
@@ -3256,18 +3272,24 @@ namespace {
 class X86_64TargetInfo : public X86TargetInfo {
 public:
   X86_64TargetInfo(const llvm::Triple &Triple) : X86TargetInfo(Triple) {
-    LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
+    const bool IsX32{getTriple().getEnvironment() == llvm::Triple::GNUX32};
+    LongWidth = LongAlign = PointerWidth = PointerAlign = IsX32 ? 32 : 64;
     LongDoubleWidth = 128;
     LongDoubleAlign = 128;
     LargeArrayMinWidth = 128;
     LargeArrayAlign = 128;
     SuitableAlign = 128;
-    IntMaxType = SignedLong;
-    UIntMaxType = UnsignedLong;
-    Int64Type = SignedLong;
+    SizeType    = IsX32 ? UnsignedInt      : UnsignedLong;
+    PtrDiffType = IsX32 ? SignedInt        : SignedLong;
+    IntPtrType  = IsX32 ? SignedInt        : SignedLong;
+    IntMaxType  = IsX32 ? SignedLongLong   : SignedLong;
+    UIntMaxType = IsX32 ? UnsignedLongLong : UnsignedLong;
+    Int64Type   = IsX32 ? SignedLongLong   : SignedLong;
     RegParmMax = 6;
 
-    DescriptionString = "e-m:e-i64:64-f80:128-n8:16:32:64-S128";
+    DescriptionString = (IsX32)
+                            ? "e-m:e-" "p:32:32-" "i64:64-f80:128-n8:16:32:64-S128"
+                            : "e-m:e-"            "i64:64-f80:128-n8:16:32:64-S128";
 
     // Use fpret only for long double.
     RealTypeUsesObjCFPRet = (1 << TargetInfo::LongDouble);
@@ -3276,10 +3298,8 @@ public:
     ComplexLongDoubleUsesFP2Ret = true;
 
     // x86-64 has atomics up to 16 bytes.
-    // FIXME: Once the backend is fixed, increase MaxAtomicInlineWidth to 128
-    // on CPUs with cmpxchg16b
     MaxAtomicPromoteWidth = 128;
-    MaxAtomicInlineWidth = 64;
+    MaxAtomicInlineWidth = 128;
   }
   BuiltinVaListKind getBuiltinVaListKind() const override {
     return TargetInfo::X86_64ABIBuiltinVaList;
@@ -3461,27 +3481,14 @@ class ARMTargetInfo : public TargetInfo {
   static const Builtin::Info BuiltinInfo[];
 
   static bool shouldUseInlineAtomic(const llvm::Triple &T) {
-    if (T.isOSWindows())
-      return true;
-
-    // On linux, binaries targeting old cpus call functions in libgcc to
-    // perform atomic operations. The implementation in libgcc then calls into
-    // the kernel which on armv6 and newer uses ldrex and strex. The net result
-    // is that if we assume the kernel is at least as recent as the hardware,
-    // it is safe to use atomic instructions on armv6 and newer.
-    if (!T.isOSLinux() &&
-        T.getOS() != llvm::Triple::FreeBSD &&
-        T.getOS() != llvm::Triple::NetBSD &&
-        T.getOS() != llvm::Triple::Bitrig)
-      return false;
     StringRef ArchName = T.getArchName();
     if (T.getArch() == llvm::Triple::arm ||
         T.getArch() == llvm::Triple::armeb) {
       StringRef VersionStr;
       if (ArchName.startswith("armv"))
-        VersionStr = ArchName.substr(4);
+        VersionStr = ArchName.substr(4, 1);
       else if (ArchName.startswith("armebv"))
-        VersionStr = ArchName.substr(6);
+        VersionStr = ArchName.substr(6, 1);
       else
         return false;
       unsigned Version;
@@ -3493,9 +3500,9 @@ class ARMTargetInfo : public TargetInfo {
            T.getArch() == llvm::Triple::thumbeb);
     StringRef VersionStr;
     if (ArchName.startswith("thumbv"))
-      VersionStr = ArchName.substr(6);
+      VersionStr = ArchName.substr(6, 1);
     else if (ArchName.startswith("thumbebv"))
-      VersionStr = ArchName.substr(8);
+      VersionStr = ArchName.substr(8, 1);
     else
       return false;
     unsigned Version;
@@ -3821,7 +3828,8 @@ public:
       .Cases("cortex-r4", "cortex-r5", "7R")
       .Case("swift", "7S")
       .Case("cyclone", "8A")
-      .Cases("cortex-m3", "cortex-m4", "7M")
+      .Case("cortex-m3", "7M")
+      .Case("cortex-m4", "7EM")
       .Case("cortex-m0", "6M")
       .Cases("cortex-a53", "cortex-a57", "8A")
       .Default(nullptr);
@@ -3838,6 +3846,13 @@ public:
   bool setCPU(const std::string &Name) override {
     if (!getCPUDefineSuffix(Name))
       return false;
+
+    // Cortex M does not support 8 byte atomics, while general Thumb2 does.
+    StringRef Profile = getCPUProfile(Name);
+    if (Profile == "M" && MaxAtomicInlineWidth) {
+      MaxAtomicPromoteWidth = 32;
+      MaxAtomicInlineWidth = 32;
+    }
 
     CPU = Name;
     return true;
@@ -3901,6 +3916,9 @@ public:
     // __ARM_ARCH_PROFILE is defined as 'A', 'R', 'M' or 'S', or unset.
     if (!CPUProfile.empty())
       Builder.defineMacro("__ARM_ARCH_PROFILE", "'" + CPUProfile + "'");
+
+    // ACLE predefines.
+    Builder.defineMacro("__ARM_ACLE", "200");
 
     // Subtarget options.
 
@@ -4152,6 +4170,7 @@ const Builtin::Info ARMTargetInfo::BuiltinInfo[] = {
 #include "clang/Basic/BuiltinsNEON.def"
 
 #define BUILTIN(ID, TYPE, ATTRS) { #ID, TYPE, ATTRS, 0, ALL_LANGUAGES },
+#define LANGBUILTIN(ID, TYPE, ATTRS, LANG) { #ID, TYPE, ATTRS, 0, LANG },
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER) { #ID, TYPE, ATTRS, HEADER,\
                                               ALL_LANGUAGES },
 #include "clang/Basic/BuiltinsARM.def"
@@ -4210,6 +4229,9 @@ public:
     // TODO map the complete set of values
     // 31: VFPv3 40: VFPv4
     Builder.defineMacro("_M_ARM_FP", "31");
+  }
+  BuiltinVaListKind getBuiltinVaListKind() const override {
+    return TargetInfo::CharPtrBuiltinVaList;
   }
 };
 
@@ -5281,11 +5303,33 @@ public:
         IsNan2008(false), IsSingleFloat(false), FloatABI(HardFloat),
         DspRev(NoDSP), HasMSA(false), HasFP64(false), ABI(ABIStr) {}
 
+  bool isNaN2008Default() const {
+    return CPU == "mips32r6" || CPU == "mips64r6";
+  }
+
+  bool isFP64Default() const {
+    return CPU == "mips32r6" || ABI == "n32" || ABI == "n64" || ABI == "64";
+  }
+
   StringRef getABI() const override { return ABI; }
-  bool setABI(const std::string &Name) override = 0;
   bool setCPU(const std::string &Name) override {
+    bool IsMips32 = getTriple().getArch() == llvm::Triple::mips ||
+                    getTriple().getArch() == llvm::Triple::mipsel;
     CPU = Name;
-    return true;
+    return llvm::StringSwitch<bool>(Name)
+        .Case("mips1", IsMips32)
+        .Case("mips2", IsMips32)
+        .Case("mips3", true)
+        .Case("mips4", true)
+        .Case("mips5", true)
+        .Case("mips32", IsMips32)
+        .Case("mips32r2", IsMips32)
+        .Case("mips32r6", IsMips32)
+        .Case("mips64", true)
+        .Case("mips64r2", true)
+        .Case("mips64r6", true)
+        .Case("octeon", true)
+        .Default(false);
   }
   const std::string& getCPU() const { return CPU; }
   void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {
@@ -5297,7 +5341,10 @@ public:
     Features["n64"] = false;
 
     Features[ABI] = true;
-    Features[CPU] = true;
+    if (CPU == "octeon")
+      Features["mips64r2"] = Features["cnmips"] = true;
+    else
+      Features[CPU] = true;
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -5434,11 +5481,11 @@ public:
                             DiagnosticsEngine &Diags) override {
     IsMips16 = false;
     IsMicromips = false;
-    IsNan2008 = false;
+    IsNan2008 = isNaN2008Default();
     IsSingleFloat = false;
     FloatABI = HardFloat;
     DspRev = NoDSP;
-    HasFP64 = ABI == "n32" || ABI == "n64" || ABI == "64";
+    HasFP64 = isFP64Default();
 
     for (std::vector<std::string>::iterator it = Features.begin(),
          ie = Features.end(); it != ie; ++it) {
@@ -5462,6 +5509,8 @@ public:
         HasFP64 = false;
       else if (*it == "+nan2008")
         IsNan2008 = true;
+      else if (*it == "-nan2008")
+        IsNan2008 = false;
     }
 
     // Remove front-end specific options.
@@ -5480,6 +5529,8 @@ public:
     if (RegNo == 1) return 5;
     return -1;
   }
+
+  bool isCLZForZeroUndef() const override { return false; }
 };
 
 const Builtin::Info MipsTargetInfoBase::BuiltinInfo[] = {
@@ -5498,14 +5549,11 @@ public:
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 32;
   }
   bool setABI(const std::string &Name) override {
-    if ((Name == "o32") || (Name == "eabi")) {
+    if (Name == "o32" || Name == "eabi") {
       ABI = Name;
       return true;
-    } else if (Name == "32") {
-      ABI = "o32";
-      return true;
-    } else
-      return false;
+    }
+    return false;
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
@@ -5639,9 +5687,10 @@ public:
       setN32ABITypes();
       ABI = Name;
       return true;
-    } else if (Name == "n64" || Name == "64") {
+    }
+    if (Name == "n64") {
       setN64ABITypes();
-      ABI = "n64";
+      ABI = Name;
       return true;
     }
     return false;
@@ -6280,6 +6329,7 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
         return new CygwinX86_32TargetInfo(Triple);
       case llvm::Triple::GNU:
         return new MinGWX86_32TargetInfo(Triple);
+      case llvm::Triple::Itanium:
       case llvm::Triple::MSVC:
         return new MicrosoftX86_32TargetInfo(Triple);
       }
@@ -6350,8 +6400,9 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
 
 /// CreateTargetInfo - Return the target info object for the specified target
 /// triple.
-TargetInfo *TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
-                                         TargetOptions *Opts) {
+TargetInfo *
+TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
+                             const std::shared_ptr<TargetOptions> &Opts) {
   llvm::Triple Triple(Opts->Triple);
 
   // Construct the target
@@ -6360,7 +6411,7 @@ TargetInfo *TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
     Diags.Report(diag::err_target_unknown_triple) << Triple.str();
     return nullptr;
   }
-  Target->setTargetOpts(Opts);
+  Target->TargetOpts = Opts;
 
   // Set the target CPU if specified.
   if (!Opts->CPU.empty() && !Target->setCPU(Opts->CPU)) {

@@ -214,6 +214,10 @@ void StmtProfiler::VisitSEHExceptStmt(const SEHExceptStmt *S) {
   VisitStmt(S);
 }
 
+void StmtProfiler::VisitSEHLeaveStmt(const SEHLeaveStmt *S) {
+  VisitStmt(S);
+}
+
 void StmtProfiler::VisitCapturedStmt(const CapturedStmt *S) {
   VisitStmt(S);
 }
@@ -335,6 +339,10 @@ void OMPClauseProfiler::VisitOMPAlignedClause(const OMPAlignedClause *C) {
 void OMPClauseProfiler::VisitOMPCopyinClause(const OMPCopyinClause *C) {
   VisitOMPClauseList(C);
 }
+void
+OMPClauseProfiler::VisitOMPCopyprivateClause(const OMPCopyprivateClause *C) {
+  VisitOMPClauseList(C);
+}
 }
 
 void
@@ -357,6 +365,28 @@ void StmtProfiler::VisitOMPSimdDirective(const OMPSimdDirective *S) {
 }
 
 void StmtProfiler::VisitOMPForDirective(const OMPForDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPSectionsDirective(const OMPSectionsDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPSectionDirective(const OMPSectionDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPSingleDirective(const OMPSingleDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void
+StmtProfiler::VisitOMPParallelForDirective(const OMPParallelForDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPParallelSectionsDirective(
+    const OMPParallelSectionsDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 

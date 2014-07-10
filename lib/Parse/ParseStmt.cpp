@@ -273,12 +273,25 @@ Retry:
     break;
   }
 
+  case tok::kw___if_exists:
+  case tok::kw___if_not_exists:
+    ProhibitAttributes(Attrs);
+    ParseMicrosoftIfExistsStatement(Stmts);
+    // An __if_exists block is like a compound statement, but it doesn't create
+    // a new scope.
+    return StmtEmpty();
+
   case tok::kw_try:                 // C++ 15: try-block
     return ParseCXXTryBlock();
 
   case tok::kw___try:
     ProhibitAttributes(Attrs); // TODO: is it correct?
     return ParseSEHTryBlock();
+
+  case tok::kw___leave:
+    Res = ParseSEHLeaveStatement();
+    SemiError = "__leave";
+    break;
 
   case tok::annot_pragma_vis:
     ProhibitAttributes(Attrs);
@@ -414,7 +427,8 @@ StmtResult Parser::ParseSEHTryBlockCommon(SourceLocation TryLoc) {
   if(Tok.isNot(tok::l_brace))
     return StmtError(Diag(Tok, diag::err_expected) << tok::l_brace);
 
-  StmtResult TryBlock(ParseCompoundStatement());
+  StmtResult TryBlock(ParseCompoundStatement(/*isStmtExpr=*/false,
+                      Scope::DeclScope | Scope::SEHTryScope));
   if(TryBlock.isInvalid())
     return TryBlock;
 
@@ -496,6 +510,16 @@ StmtResult Parser::ParseSEHFinallyBlock(SourceLocation FinallyBlock) {
     return Block;
 
   return Actions.ActOnSEHFinallyBlock(FinallyBlock,Block.get());
+}
+
+/// Handle __leave
+///
+/// seh-leave-statement:
+///   '__leave' ';'
+///
+StmtResult Parser::ParseSEHLeaveStatement() {
+  SourceLocation LeaveLoc = ConsumeToken();  // eat the '__leave'.
+  return Actions.ActOnSEHLeaveStmt(LeaveLoc, getCurScope());
 }
 
 /// ParseLabeledStatement - We have an identifier and a ':' after it.
@@ -911,12 +935,6 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
   while (Tok.isNot(tok::r_brace) && !isEofOrEom()) {
     if (Tok.is(tok::annot_pragma_unused)) {
       HandlePragmaUnused();
-      continue;
-    }
-
-    if (getLangOpts().MicrosoftExt && (Tok.is(tok::kw___if_exists) ||
-        Tok.is(tok::kw___if_not_exists))) {
-      ParseMicrosoftIfExistsStatement(Stmts);
       continue;
     }
 
