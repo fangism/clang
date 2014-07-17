@@ -170,7 +170,7 @@ public:
   };
 
 protected:
-  IntType SizeType, IntMaxType, UIntMaxType, PtrDiffType, IntPtrType, WCharType,
+  IntType SizeType, IntMaxType, PtrDiffType, IntPtrType, WCharType,
           WIntType, Char16Type, Char32Type, Int64Type, SigAtomicType,
           ProcessIDType;
 
@@ -206,21 +206,43 @@ protected:
 public:
   IntType getSizeType() const { return SizeType; }
   IntType getIntMaxType() const { return IntMaxType; }
-  IntType getUIntMaxType() const { return UIntMaxType; }
+  IntType getUIntMaxType() const {
+    return getCorrespondingUnsignedType(IntMaxType);
+  }
   IntType getPtrDiffType(unsigned AddrSpace) const {
     return AddrSpace == 0 ? PtrDiffType : getPtrDiffTypeV(AddrSpace);
   }
   IntType getIntPtrType() const { return IntPtrType; }
   IntType getUIntPtrType() const {
-    return getIntTypeByWidth(getTypeWidth(IntPtrType), false);
+    return getCorrespondingUnsignedType(IntPtrType);
   }
   IntType getWCharType() const { return WCharType; }
   IntType getWIntType() const { return WIntType; }
   IntType getChar16Type() const { return Char16Type; }
   IntType getChar32Type() const { return Char32Type; }
   IntType getInt64Type() const { return Int64Type; }
+  IntType getUInt64Type() const {
+    return getCorrespondingUnsignedType(Int64Type);
+  }
   IntType getSigAtomicType() const { return SigAtomicType; }
   IntType getProcessIDType() const { return ProcessIDType; }
+
+  static IntType getCorrespondingUnsignedType(IntType T) {
+    switch (T) {
+    case SignedChar:
+      return UnsignedChar;
+    case SignedShort:
+      return UnsignedShort;
+    case SignedInt:
+      return UnsignedInt;
+    case SignedLong:
+      return UnsignedLong;
+    case SignedLongLong:
+      return UnsignedLongLong;
+    default:
+      llvm_unreachable("Unexpected signed integer type");
+    }
+  }
 
   /// \brief Return the width (in bits) of the specified integer type enum.
   ///
@@ -424,7 +446,13 @@ public:
   /// \brief Return the constant suffix for the specified integer type enum.
   ///
   /// For example, SignedLong -> "L".
-  static const char *getTypeConstantSuffix(IntType T);
+  const char *getTypeConstantSuffix(IntType T) const;
+
+  /// \brief Return the printf format modifier for the specified
+  /// integer type enum.
+  ///
+  /// For example, SignedLong -> "l".
+  static const char *getTypeFormatModifier(IntType T);
 
   /// \brief Check whether the given real type should use the "fpret" flavor of
   /// Objective-C message passing on this target.

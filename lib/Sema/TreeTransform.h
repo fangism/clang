@@ -1318,6 +1318,17 @@ public:
                                          LParenLoc, EndLoc);
   }
 
+  /// \brief Build a new OpenMP 'final' clause.
+  ///
+  /// By default, performs semantic analysis to build the new OpenMP clause.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPFinalClause(Expr *Condition, SourceLocation StartLoc,
+                                   SourceLocation LParenLoc,
+                                   SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPFinalClause(Condition, StartLoc, LParenLoc,
+                                            EndLoc);
+  }
+
   /// \brief Build a new OpenMP 'num_threads' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -2375,6 +2386,7 @@ public:
                                      MultiExprArg Args,
                                      bool HadMultipleCandidates,
                                      bool ListInitialization,
+                                     bool StdInitListInitialization,
                                      bool RequiresZeroInit,
                              CXXConstructExpr::ConstructionKind ConstructKind,
                                      SourceRange ParenRange) {
@@ -2387,6 +2399,7 @@ public:
                                            ConvertedArgs,
                                            HadMultipleCandidates,
                                            ListInitialization,
+                                           StdInitListInitialization,
                                            RequiresZeroInit, ConstructKind,
                                            ParenRange);
   }
@@ -2877,6 +2890,11 @@ ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
   if (!Construct || isa<CXXTemporaryObjectExpr>(Construct))
     return getDerived().TransformExpr(Init);
 
+  // If the initialization implicitly converted an initializer list to a
+  // std::initializer_list object, unwrap the std::initializer_list too.
+  if (Construct && Construct->isStdInitListInitialization())
+    return TransformInitializer(Construct->getArg(0), CXXDirectInit);
+
   SmallVector<Expr*, 8> NewArgs;
   bool ArgChanged = false;
   if (getDerived().TransformExprs(Construct->getArgs(), Construct->getNumArgs(),
@@ -2891,6 +2909,13 @@ ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
 
   // Build a ParenListExpr to represent anything else.
   SourceRange Parens = Construct->getParenOrBraceRange();
+  if (Parens.isInvalid()) {
+    // This was a variable declaration's initialization for which no initializer
+    // was specified.
+    assert(NewArgs.empty() &&
+           "no parens or braces but have direct init with arguments?");
+    return ExprEmpty();
+  }
   return getDerived().RebuildParenListExpr(Parens.getBegin(), NewArgs,
                                            Parens.getEnd());
 }
@@ -6484,6 +6509,17 @@ TreeTransform<Derived>::TransformOMPSingleDirective(OMPSingleDirective *D) {
 }
 
 template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPMasterDirective(OMPMasterDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_master, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
 StmtResult TreeTransform<Derived>::TransformOMPParallelForDirective(
     OMPParallelForDirective *D) {
   DeclarationNameInfo DirName;
@@ -6505,6 +6541,17 @@ StmtResult TreeTransform<Derived>::TransformOMPParallelSectionsDirective(
   return Res;
 }
 
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPTaskDirective(OMPTaskDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_task, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
 //===----------------------------------------------------------------------===//
 // OpenMP clause transformation
 //===----------------------------------------------------------------------===//
@@ -6515,6 +6562,15 @@ OMPClause *TreeTransform<Derived>::TransformOMPIfClause(OMPIfClause *C) {
     return nullptr;
   return getDerived().RebuildOMPIfClause(Cond.get(), C->getLocStart(),
                                          C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPFinalClause(OMPFinalClause *C) {
+  ExprResult Cond = getDerived().TransformExpr(C->getCondition());
+  if (Cond.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPFinalClause(Cond.get(), C->getLocStart(),
+                                            C->getLParenLoc(), C->getLocEnd());
 }
 
 template <typename Derived>
@@ -6584,6 +6640,20 @@ TreeTransform<Derived>::TransformOMPOrderedClause(OMPOrderedClause *C) {
 template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPNowaitClause(OMPNowaitClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPUntiedClause(OMPUntiedClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPMergeableClause(OMPMergeableClause *C) {
   // No need to rebuild this clause, no template-dependent parameters.
   return C;
 }
@@ -8553,6 +8623,7 @@ TreeTransform<Derived>::TransformCXXConstructExpr(CXXConstructExpr *E) {
                                               Args,
                                               E->hadMultipleCandidates(),
                                               E->isListInitialization(),
+                                              E->isStdInitListInitialization(),
                                               E->requiresZeroInitialization(),
                                               E->getConstructionKind(),
                                               E->getParenOrBraceRange());

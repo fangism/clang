@@ -1196,6 +1196,7 @@ void ASTStmtReader::VisitCXXConstructExpr(CXXConstructExpr *E) {
   E->setElidable(Record[Idx++]);
   E->setHadMultipleCandidates(Record[Idx++]);
   E->setListInitialization(Record[Idx++]);
+  E->setStdInitListInitialization(Record[Idx++]);
   E->setRequiresZeroInitialization(Record[Idx++]);
   E->setConstructionKind((CXXConstructExpr::ConstructionKind)Record[Idx++]);
   E->ParenOrBraceRange = ReadSourceRange(Record, Idx);
@@ -1681,6 +1682,9 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_if:
     C = new (Context) OMPIfClause();
     break;
+  case OMPC_final:
+    C = new (Context) OMPFinalClause();
+    break;
   case OMPC_num_threads:
     C = new (Context) OMPNumThreadsClause();
     break;
@@ -1704,6 +1708,12 @@ OMPClause *OMPClauseReader::readClause() {
     break;
   case OMPC_nowait:
     C = new (Context) OMPNowaitClause();
+    break;
+  case OMPC_untied:
+    C = new (Context) OMPUntiedClause();
+    break;
+  case OMPC_mergeable:
+    C = new (Context) OMPMergeableClause();
     break;
   case OMPC_private:
     C = OMPPrivateClause::CreateEmpty(Context, Record[Idx++]);
@@ -1741,6 +1751,11 @@ OMPClause *OMPClauseReader::readClause() {
 }
 
 void OMPClauseReader::VisitOMPIfClause(OMPIfClause *C) {
+  C->setCondition(Reader->Reader.ReadSubExpr());
+  C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
+}
+
+void OMPClauseReader::VisitOMPFinalClause(OMPFinalClause *C) {
   C->setCondition(Reader->Reader.ReadSubExpr());
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
 }
@@ -1786,6 +1801,10 @@ void OMPClauseReader::VisitOMPScheduleClause(OMPScheduleClause *C) {
 void OMPClauseReader::VisitOMPOrderedClause(OMPOrderedClause *) {}
 
 void OMPClauseReader::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
+void OMPClauseReader::VisitOMPUntiedClause(OMPUntiedClause *) {}
+
+void OMPClauseReader::VisitOMPMergeableClause(OMPMergeableClause *) {}
 
 void OMPClauseReader::VisitOMPPrivateClause(OMPPrivateClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
@@ -1943,6 +1962,11 @@ void ASTStmtReader::VisitOMPSingleDirective(OMPSingleDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
+void ASTStmtReader::VisitOMPMasterDirective(OMPMasterDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+}
+
 void ASTStmtReader::VisitOMPParallelForDirective(OMPParallelForDirective *D) {
   VisitStmt(D);
   // Two fields (NumClauses and CollapsedNum) were read in ReadStmtFromStream.
@@ -1952,6 +1976,13 @@ void ASTStmtReader::VisitOMPParallelForDirective(OMPParallelForDirective *D) {
 
 void ASTStmtReader::VisitOMPParallelSectionsDirective(
     OMPParallelSectionsDirective *D) {
+  VisitStmt(D);
+  // The NumClauses field was read in ReadStmtFromStream.
+  ++Idx;
+  VisitOMPExecutableDirective(D);
+}
+
+void ASTStmtReader::VisitOMPTaskDirective(OMPTaskDirective *D) {
   VisitStmt(D);
   // The NumClauses field was read in ReadStmtFromStream.
   ++Idx;
@@ -2470,6 +2501,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 
+    case STMT_OMP_MASTER_DIRECTIVE:
+      S = OMPMasterDirective::CreateEmpty(Context, Empty);
+      break;
+
     case STMT_OMP_PARALLEL_FOR_DIRECTIVE: {
       unsigned NumClauses = Record[ASTStmtReader::NumStmtFields];
       unsigned CollapsedNum = Record[ASTStmtReader::NumStmtFields + 1];
@@ -2480,6 +2515,11 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case STMT_OMP_PARALLEL_SECTIONS_DIRECTIVE:
       S = OMPParallelSectionsDirective::CreateEmpty(
+          Context, Record[ASTStmtReader::NumStmtFields], Empty);
+      break;
+
+    case STMT_OMP_TASK_DIRECTIVE:
+      S = OMPTaskDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 

@@ -30,8 +30,8 @@ using namespace clang;
 // AST Consumer Actions
 //===----------------------------------------------------------------------===//
 
-ASTConsumer *HTMLPrintAction::CreateASTConsumer(CompilerInstance &CI,
-                                                StringRef InFile) {
+std::unique_ptr<ASTConsumer>
+HTMLPrintAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   if (raw_ostream *OS = CI.createDefaultOutputFile(false, InFile))
     return CreateHTMLPrinter(OS, CI.getPreprocessor());
   return nullptr;
@@ -40,9 +40,9 @@ ASTConsumer *HTMLPrintAction::CreateASTConsumer(CompilerInstance &CI,
 FixItAction::FixItAction() {}
 FixItAction::~FixItAction() {}
 
-ASTConsumer *FixItAction::CreateASTConsumer(CompilerInstance &CI,
-                                            StringRef InFile) {
-  return new ASTConsumer();
+std::unique_ptr<ASTConsumer>
+FixItAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
+  return llvm::make_unique<ASTConsumer>();
 }
 
 namespace {
@@ -146,12 +146,10 @@ bool FixItRecompile::BeginInvocation(CompilerInstance &CI) {
   return true;
 }
 
-//===----------------------------------------------------------------------===//
-// Preprocessor Actions
-//===----------------------------------------------------------------------===//
+#ifdef CLANG_ENABLE_OBJC_REWRITER
 
-ASTConsumer *RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI,
-                                                  StringRef InFile) {
+std::unique_ptr<ASTConsumer>
+RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   if (raw_ostream *OS = CI.createDefaultOutputFile(false, InFile, "cpp")) {
     if (CI.getLangOpts().ObjCRuntime.isNonFragile())
       return CreateModernObjCRewriter(InFile, OS,
@@ -165,6 +163,12 @@ ASTConsumer *RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI,
   }
   return nullptr;
 }
+
+#endif
+
+//===----------------------------------------------------------------------===//
+// Preprocessor Actions
+//===----------------------------------------------------------------------===//
 
 void RewriteMacrosAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();

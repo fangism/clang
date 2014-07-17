@@ -527,6 +527,53 @@ public:
   }
 };
 
+/// \brief This represents '#pragma omp master' directive.
+///
+/// \code
+/// #pragma omp master
+/// \endcode
+///
+class OMPMasterDirective : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  /// \brief Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  ///
+  OMPMasterDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(this, OMPMasterDirectiveClass, OMPD_master,
+                               StartLoc, EndLoc, 0, 1) {}
+
+  /// \brief Build an empty directive.
+  ///
+  explicit OMPMasterDirective()
+      : OMPExecutableDirective(this, OMPMasterDirectiveClass, OMPD_master,
+                               SourceLocation(), SourceLocation(), 0, 1) {}
+
+public:
+  /// \brief Creates directive.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  ///
+  static OMPMasterDirective *Create(const ASTContext &C,
+                                    SourceLocation StartLoc,
+                                    SourceLocation EndLoc,
+                                    Stmt *AssociatedStmt);
+
+  /// \brief Creates an empty directive.
+  ///
+  /// \param C AST context.
+  ///
+  static OMPMasterDirective *CreateEmpty(const ASTContext &C, EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPMasterDirectiveClass;
+  }
+};
+
 /// \brief This represents '#pragma omp parallel for' directive.
 ///
 /// \code
@@ -655,6 +702,64 @@ public:
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPParallelSectionsDirectiveClass;
+  }
+};
+
+/// \brief This represents '#pragma omp task' directive.
+///
+/// \code
+/// #pragma omp task private(a,b) final(d)
+/// \endcode
+/// In this example directive '#pragma omp task' has clauses 'private' with the
+/// variables 'a' and 'b' and 'final' with condition 'd'.
+///
+class OMPTaskDirective : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  /// \brief Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param NumClauses Number of clauses.
+  ///
+  OMPTaskDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                   unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPTaskDirectiveClass, OMPD_task, StartLoc,
+                               EndLoc, NumClauses, 1) {}
+
+  /// \brief Build an empty directive.
+  ///
+  /// \param NumClauses Number of clauses.
+  ///
+  explicit OMPTaskDirective(unsigned NumClauses)
+      : OMPExecutableDirective(this, OMPTaskDirectiveClass, OMPD_task,
+                               SourceLocation(), SourceLocation(), NumClauses,
+                               1) {}
+
+public:
+  /// \brief Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  ///
+  static OMPTaskDirective *Create(const ASTContext &C, SourceLocation StartLoc,
+                                  SourceLocation EndLoc,
+                                  ArrayRef<OMPClause *> Clauses,
+                                  Stmt *AssociatedStmt);
+
+  /// \brief Creates an empty directive with the place for \a NumClauses
+  /// clauses.
+  ///
+  /// \param C AST context.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPTaskDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
+                                       EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPTaskDirectiveClass;
   }
 };
 

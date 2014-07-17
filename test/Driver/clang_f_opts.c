@@ -127,7 +127,7 @@
 // CHECK-MAX-O: -O3
 
 // RUN: %clang -S -O20 -o /dev/null %s 2>&1 | FileCheck -check-prefix=CHECK-INVALID-O %s
-// CHECK-INVALID-O: warning: optimization level '-O20' is unsupported; using '-O3' instead
+// CHECK-INVALID-O: warning: optimization level '-O20' is not supported; using '-O3' instead
 
 // RUN: %clang -### -S -finput-charset=iso-8859-1 -o /dev/null %s 2>&1 | FileCheck -check-prefix=CHECK-INVALID-CHARSET %s
 // CHECK-INVALID-CHARSET: error: invalid value 'iso-8859-1' in '-finput-charset=iso-8859-1'
@@ -164,8 +164,25 @@
 // RUN:     -fno-unsigned-char                                                \
 // RUN:     -fno-signed-char                                                  \
 // RUN:     -fstrength-reduce -fno-strength-reduce                            \
+// RUN:     -finline-limit=1000                                               \
+// RUN:     -finline-limit                                                    \
 // RUN:     %s 2>&1 | FileCheck --check-prefix=IGNORE %s
 // IGNORE-NOT: error: unknown argument
+
+// Test that the warning is displayed on these.
+// RUN: %clang -### -finline-limit=1000 %s 2>&1 | FileCheck --check-prefix=CHECK-WARNING1 %s
+// RUN: %clang -### -finline-limit %s 2>&1 | FileCheck --check-prefix=CHECK-WARNING2 %s
+// CHECK-WARNING1: optimization flag '-finline-limit=1000' is not supported
+// CHECK-WARNING2: optimization flag '-finline-limit' is not supported
+
+// Test that we mute the warning on these
+// RUN: %clang -### -finline-limit=1000 -Wno-invalid-command-line-argument              \
+// RUN:     %s 2>&1 | FileCheck --check-prefix=CHECK-NO-WARNING1 %s
+// RUN: %clang -### -finline-limit -Wno-invalid-command-line-argument                   \
+// RUN:     %s 2>&1 | FileCheck --check-prefix=CHECK-NO-WARNING2 %s
+// CHECK-NO-WARNING1-NOT: optimization flag '-finline-limit=1000' is not supported
+// CHECK-NO-WARNING2-NOT: optimization flag '-finline-limit' is not supported
+
 
 // RUN: %clang -### -fshort-wchar -fno-short-wchar %s 2>&1 | FileCheck -check-prefix=CHECK-WCHAR1 %s
 // RUN: %clang -### -fno-short-wchar -fshort-wchar %s 2>&1 | FileCheck -check-prefix=CHECK-WCHAR2 %s

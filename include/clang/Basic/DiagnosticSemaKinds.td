@@ -349,7 +349,7 @@ def err_invalid_thread : Error<
 def err_thread_non_global : Error<
   "'%0' variables must have global storage">;
 def err_thread_unsupported : Error<
-  "thread-local storage is unsupported for the current target">;
+  "thread-local storage is not supported for the current target">;
 
 def warn_maybe_falloff_nonvoid_function : Warning<
   "control may reach end of non-void function">,
@@ -387,21 +387,11 @@ def note_unreachable_silence : Note<
 /// Built-in functions.
 def ext_implicit_lib_function_decl : ExtWarn<
   "implicitly declaring library function '%0' with type %1">;
-def note_please_include_header : Note<
-  "please include the header <%0> or explicitly provide a "
-  "declaration for '%1'">;
+def note_include_header_or_declare : Note<
+  "include the header <%0> or explicitly provide a declaration for '%1'">;
 def note_previous_builtin_declaration : Note<"%0 is a builtin with type %1">;
-def warn_implicit_decl_requires_stdio : Warning<
-  "declaration of built-in function '%0' requires inclusion of the header "
-  "<stdio.h>">,
-  InGroup<BuiltinRequiresHeader>;
-def warn_implicit_decl_requires_setjmp : Warning<
-  "declaration of built-in function '%0' requires inclusion of the header "
-  "<setjmp.h>">,
-  InGroup<BuiltinRequiresHeader>;
-def warn_implicit_decl_requires_ucontext : Warning<
-  "declaration of built-in function '%0' requires inclusion of the header "
-  "<ucontext.h>">,
+def warn_implicit_decl_requires_sysheader : Warning<
+  "declaration of built-in function '%1' requires inclusion of the header <%0>">,
   InGroup<BuiltinRequiresHeader>;
 def warn_redecl_library_builtin : Warning<
   "incompatible redeclaration of library function %0">,
@@ -453,6 +443,10 @@ def warn_strncat_wrong_size : Warning<
 def note_strncat_wrong_size : Note<
   "change the argument to be the free space in the destination buffer minus " 
   "the terminating null byte">;
+
+def warn_assume_side_effects : Warning<
+  "the argument to __assume has side effects that will be discarded">,
+  InGroup<DiagGroup<"assume">>;
 
 /// main()
 // static main() is not an error in C, just in C++.
@@ -997,7 +991,11 @@ def warn_template_qualified_friend_ignored : Warning<
   "dependent nested name specifier '%0' for friend template declaration is "
   "not supported; ignoring this friend declaration">,
   InGroup<UnsupportedFriend>;
-  
+def ext_friend_tag_redecl_outside_namespace : ExtWarn<
+  "unqualified friend declaration referring to type outside of the nearest "
+  "enclosing namespace is a Microsoft extension; add a nested name specifier">,
+  InGroup<Microsoft>;
+
 def err_invalid_member_in_interface : Error<
   "%select{data member |non-public member function |static member function |"
           "user-declared constructor|user-declared destructor|operator |"
@@ -2137,7 +2135,7 @@ def err_attribute_dll_member_of_dll_class : Error<
 def warn_attribute_dll_instantiated_base_class : Warning<
   "propagating dll attribute to %select{already instantiated|explicitly specialized}0 "
   "base class template "
-  "%select{without dll attribute|with different dll attribute}1 is unsupported">,
+  "%select{without dll attribute|with different dll attribute}1 is not supported">,
   InGroup<DiagGroup<"unsupported-dll-base-class-template">>;
 def err_attribute_weakref_not_static : Error<
   "weakref declaration must have internal linkage">;
@@ -2171,7 +2169,8 @@ def warn_attribute_wrong_decl_type : Warning<
   "struct or union|struct, union or class|types|"
   "Objective-C instance methods|init methods of interface or class extension declarations|"
   "variables, functions and classes|Objective-C protocols|"
-  "functions and global variables|structs or typedefs}1">,
+  "functions and global variables|structs or typedefs|"
+  "interface or protocol declarations}1">,
   InGroup<IgnoredAttributes>;
 def err_attribute_wrong_decl_type : Error<warn_attribute_wrong_decl_type.Text>;
 def warn_type_attribute_wrong_type : Warning<
@@ -6920,7 +6919,7 @@ def err_uncasted_send_to_unknown_any_method : Error<
   "no known method %select{%objcinstance1|%objcclass1}0; cast the "
   "message send to the method's return type">;
 def err_unsupported_unknown_any_decl : Error<
-  "%0 has unknown type, which is unsupported for this kind of declaration">;
+  "%0 has unknown type, which is not supported for this kind of declaration">;
 def err_unsupported_unknown_any_expr : Error<
   "unsupported expression with unknown type">;
 def err_unsupported_unknown_any_call : Error<
@@ -7013,8 +7012,12 @@ def err_omp_expected_var_name : Error<
   "expected variable name">;
 def err_omp_required_method : Error<
   "%0 variable must have an accessible, unambiguous %select{default constructor|copy constructor|copy assignment operator|'%2'|destructor}1">;
+def err_omp_task_predetermined_firstprivate_required_method : Error<
+  "predetermined as a firstprivate in a task construct variable must have an accessible, unambiguous %select{copy constructor|destructor}0">;
 def err_omp_clause_ref_type_arg : Error<
   "arguments of OpenMP clause '%0' cannot be of reference type %1">;
+def err_omp_task_predetermined_firstprivate_ref_type_arg : Error<
+  "predetermined as a firstprivate in a task construct variable cannot be of reference type %0">;
 def err_omp_threadprivate_incomplete_type : Error<
   "threadprivate variable with incomplete type %0">;
 def err_omp_no_dsa_for_variable : Error<
@@ -7031,6 +7034,7 @@ def note_omp_predetermined_dsa : Note<
   "loop iteration variable is predetermined as lastprivate|"
   "constant variable is predetermined as shared|"
   "global variable is predetermined as shared|"
+  "non-shared variable in a task construct is predetermined as firstprivate|"
   "variable with automatic storage duration is predetermined as private}0"
   "%select{|; perhaps you forget to enclose 'omp %2' directive into a parallel or another task region?}1">;
 def note_omp_implicit_dsa : Note<
@@ -7133,6 +7137,8 @@ def err_omp_sections_substmt_not_section : Error<
   "statement in 'omp sections' directive must be enclosed into a section region">;
 def err_omp_parallel_sections_substmt_not_section : Error<
   "statement in 'omp parallel sections' directive must be enclosed into a section region">;
+def err_omp_parallel_reduction_in_task_firstprivate : Error<
+  "argument of a reduction clause of a %0 construct must not appear in a firstprivate clause on a task construct">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {

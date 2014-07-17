@@ -499,7 +499,6 @@ public:
     this->LongWidth = this->LongAlign = 32;
     this->PointerWidth = this->PointerAlign = 32;
     this->IntMaxType = TargetInfo::SignedLongLong;
-    this->UIntMaxType = TargetInfo::UnsignedLongLong;
     this->Int64Type = TargetInfo::SignedLongLong;
     this->SizeType = TargetInfo::UnsignedInt;
     this->DescriptionString = "E-m:e-p:32:32-i64:64-n32:64";
@@ -587,9 +586,10 @@ protected:
     if (Opts.POSIXThreads)
       Builder.defineMacro("_MT");
 
-    if (Opts.MSCVersion != 0) {
-      Builder.defineMacro("_MSC_VER", Twine(Opts.MSCVersion / 100000));
-      Builder.defineMacro("_MSC_FULL_VER", Twine(Opts.MSCVersion));
+    if (Opts.MSCompatibilityVersion) {
+      Builder.defineMacro("_MSC_VER",
+                          Twine(Opts.MSCompatibilityVersion / 100000));
+      Builder.defineMacro("_MSC_FULL_VER", Twine(Opts.MSCompatibilityVersion));
       // FIXME We cannot encode the revision information into 32-bits
       Builder.defineMacro("_MSC_BUILD", Twine(1));
     }
@@ -635,7 +635,6 @@ public:
     this->PointerAlign = 32;
     this->PointerWidth = 32;
     this->IntMaxType = TargetInfo::SignedLongLong;
-    this->UIntMaxType = TargetInfo::UnsignedLongLong;
     this->Int64Type = TargetInfo::SignedLongLong;
     this->DoubleAlign = 64;
     this->LongDoubleWidth = 64;
@@ -1275,7 +1274,6 @@ public:
   PPC64TargetInfo(const llvm::Triple &Triple) : PPCTargetInfo(Triple) {
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
     IntMaxType = SignedLong;
-    UIntMaxType = UnsignedLong;
     Int64Type = SignedLong;
 
     if (getTriple().getOS() == llvm::Triple::FreeBSD) {
@@ -1430,7 +1428,8 @@ namespace {
   public:
     NVPTX32TargetInfo(const llvm::Triple &Triple) : NVPTXTargetInfo(Triple) {
       PointerWidth = PointerAlign = 32;
-      SizeType     = PtrDiffType = IntPtrType = TargetInfo::UnsignedInt;
+      SizeType     = PtrDiffType = TargetInfo::UnsignedInt;
+      IntPtrType = TargetInfo::SignedInt;
       DescriptionString = "e-p:32:32-i64:64-v16:16-v32:32-n16:32:64";
   }
   };
@@ -1439,7 +1438,8 @@ namespace {
   public:
     NVPTX64TargetInfo(const llvm::Triple &Triple) : NVPTXTargetInfo(Triple) {
       PointerWidth = PointerAlign = 64;
-      SizeType     = PtrDiffType = IntPtrType = TargetInfo::UnsignedLongLong;
+      SizeType     = PtrDiffType = TargetInfo::UnsignedLongLong;
+      IntPtrType = TargetInfo::SignedLongLong;
       DescriptionString = "e-i64:64-v16:16-v32:32-n16:32:64";
   }
   };
@@ -3272,7 +3272,7 @@ namespace {
 class X86_64TargetInfo : public X86TargetInfo {
 public:
   X86_64TargetInfo(const llvm::Triple &Triple) : X86TargetInfo(Triple) {
-    const bool IsX32{getTriple().getEnvironment() == llvm::Triple::GNUX32};
+    const bool IsX32 = getTriple().getEnvironment() == llvm::Triple::GNUX32;
     LongWidth = LongAlign = PointerWidth = PointerAlign = IsX32 ? 32 : 64;
     LongDoubleWidth = 128;
     LongDoubleAlign = 128;
@@ -3283,7 +3283,6 @@ public:
     PtrDiffType = IsX32 ? SignedInt        : SignedLong;
     IntPtrType  = IsX32 ? SignedInt        : SignedLong;
     IntMaxType  = IsX32 ? SignedLongLong   : SignedLong;
-    UIntMaxType = IsX32 ? UnsignedLongLong : UnsignedLong;
     Int64Type   = IsX32 ? SignedLongLong   : SignedLong;
     RegParmMax = 6;
 
@@ -3334,7 +3333,6 @@ public:
     LongWidth = LongAlign = 32;
     DoubleAlign = LongLongAlign = 64;
     IntMaxType = SignedLongLong;
-    UIntMaxType = UnsignedLongLong;
     Int64Type = SignedLongLong;
     SizeType = UnsignedLongLong;
     PtrDiffType = SignedLongLong;
@@ -3414,7 +3412,6 @@ public:
   OpenBSDX86_64TargetInfo(const llvm::Triple &Triple)
       : OpenBSDTargetInfo<X86_64TargetInfo>(Triple) {
     IntMaxType = SignedLongLong;
-    UIntMaxType = UnsignedLongLong;
     Int64Type = SignedLongLong;
   }
 };
@@ -3426,7 +3423,6 @@ public:
   BitrigX86_64TargetInfo(const llvm::Triple &Triple)
       : BitrigTargetInfo<X86_64TargetInfo>(Triple) {
     IntMaxType = SignedLongLong;
-    UIntMaxType = UnsignedLongLong;
     Int64Type = SignedLongLong;
   }
 };
@@ -4324,12 +4320,10 @@ public:
       // across 64-bit targets.
       Int64Type = SignedLongLong;
       IntMaxType = SignedLongLong;
-      UIntMaxType = UnsignedLongLong;
     } else {
       WCharType = UnsignedInt;
       Int64Type = SignedLong;
       IntMaxType = SignedLong;
-      UIntMaxType = UnsignedLong;
     }
 
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
@@ -4951,13 +4945,10 @@ public:
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
 
     // OpenBSD uses long long for int64_t and intmax_t.
-    if (getTriple().getOS() == llvm::Triple::OpenBSD) {
+    if (getTriple().getOS() == llvm::Triple::OpenBSD)
       IntMaxType = SignedLongLong;
-      UIntMaxType = UnsignedLongLong;
-    } else {
+    else
       IntMaxType = SignedLong;
-      UIntMaxType = UnsignedLong;
-    }
     Int64Type = IntMaxType;
 
     // The SPARCv8 System V ABI has long double 128-bits in size, but 64-bit
@@ -5139,7 +5130,6 @@ namespace {
       SuitableAlign = 16;
       SizeType = UnsignedInt;
       IntMaxType = SignedLongLong;
-      UIntMaxType = UnsignedLongLong;
       IntPtrType = SignedInt;
       PtrDiffType = SignedInt;
       SigAtomicType = SignedLong;
@@ -5227,7 +5217,6 @@ namespace {
       SuitableAlign = 32;
       SizeType = UnsignedInt;
       IntMaxType = SignedLong;
-      UIntMaxType = UnsignedLong;
       IntPtrType = SignedInt;
       PtrDiffType = SignedInt;
       FloatWidth = 32;
@@ -5459,7 +5448,7 @@ public:
         
     case 'r': // CPU registers.
     case 'd': // Equivalent to "r" unless generating MIPS16 code.
-    case 'y': // Equivalent to "r", backwards compatibility only.
+    case 'y': // Equivalent to "r", backward compatibility only.
     case 'f': // floating-point registers.
     case 'c': // $25 for indirect jumps
     case 'l': // lo register
@@ -5819,7 +5808,6 @@ public:
     this->PointerAlign = 32;
     this->PointerWidth = 32;
     this->IntMaxType = TargetInfo::SignedLongLong;
-    this->UIntMaxType = TargetInfo::UnsignedLongLong;
     this->Int64Type = TargetInfo::SignedLongLong;
     this->DoubleAlign = 64;
     this->LongDoubleWidth = 64;

@@ -196,6 +196,59 @@ public:
   StmtRange children() { return StmtRange(&Condition, &Condition + 1); }
 };
 
+/// \brief This represents 'final' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp task final(a > 5)
+/// \endcode
+/// In this example directive '#pragma omp task' has simple 'final'
+/// clause with condition 'a > 5'.
+///
+class OMPFinalClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief Condition of the 'if' clause.
+  Stmt *Condition;
+
+  /// \brief Set condition.
+  ///
+  void setCondition(Expr *Cond) { Condition = Cond; }
+
+public:
+  /// \brief Build 'final' clause with condition \a Cond.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param Cond Condition of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPFinalClause(Expr *Cond, SourceLocation StartLoc, SourceLocation LParenLoc,
+                 SourceLocation EndLoc)
+      : OMPClause(OMPC_final, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Condition(Cond) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPFinalClause()
+      : OMPClause(OMPC_final, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), Condition(nullptr) {}
+
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// \brief Returns condition.
+  Expr *getCondition() const { return cast_or_null<Expr>(Condition); }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_final;
+  }
+
+  StmtRange children() { return StmtRange(&Condition, &Condition + 1); }
+};
+
 /// \brief This represents 'num_threads' clause in the '#pragma omp ...'
 /// directive.
 ///
@@ -653,6 +706,65 @@ public:
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_nowait;
+  }
+
+  StmtRange children() { return StmtRange(); }
+};
+
+/// \brief This represents 'untied' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp task untied
+/// \endcode
+/// In this example directive '#pragma omp task' has 'untied' clause.
+///
+class OMPUntiedClause : public OMPClause {
+public:
+  /// \brief Build 'untied' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPUntiedClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_untied, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPUntiedClause()
+      : OMPClause(OMPC_untied, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_untied;
+  }
+
+  StmtRange children() { return StmtRange(); }
+};
+
+/// \brief This represents 'mergeable' clause in the '#pragma omp ...'
+/// directive.
+///
+/// \code
+/// #pragma omp task mergeable
+/// \endcode
+/// In this example directive '#pragma omp task' has 'mergeable' clause.
+///
+class OMPMergeableClause : public OMPClause {
+public:
+  /// \brief Build 'mergeable' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPMergeableClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_mergeable, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPMergeableClause()
+      : OMPClause(OMPC_mergeable, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_mergeable;
   }
 
   StmtRange children() { return StmtRange(); }

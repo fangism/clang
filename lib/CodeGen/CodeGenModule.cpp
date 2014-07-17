@@ -1256,7 +1256,8 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
     const auto *VD = cast<VarDecl>(Global);
     assert(VD->isFileVarDecl() && "Cannot emit local var decl as global.");
 
-    if (VD->isThisDeclarationADefinition() != VarDecl::Definition)
+    if (VD->isThisDeclarationADefinition() != VarDecl::Definition &&
+        !Context.isMSStaticDataMemberInlineDefinition(VD))
       return;
   }
 
@@ -1592,18 +1593,6 @@ bool CodeGenModule::isTypeConstant(QualType Ty, bool ExcludeCtor) {
   return true;
 }
 
-static bool isVarDeclInlineInitializedStaticDataMember(const VarDecl *VD) {
-  if (!VD->isStaticDataMember())
-    return false;
-  const VarDecl *InitDecl;
-  const Expr *InitExpr = VD->getAnyInitializer(InitDecl);
-  if (!InitExpr)
-    return false;
-  if (InitDecl->isThisDeclarationADefinition())
-    return false;
-  return true;
-}
-
 /// GetOrCreateLLVMGlobal - If the specified mangled name is not in the module,
 /// create and return an llvm GlobalVariable with the specified type.  If there
 /// is something in the module with the specified name, return it potentially
@@ -1666,9 +1655,9 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
 
     // If required by the ABI, treat declarations of static data members with
     // inline initializers as definitions.
-    if (getCXXABI().isInlineInitializedStaticDataMemberLinkOnce() &&
-        isVarDeclInlineInitializedStaticDataMember(D))
+    if (getContext().isMSStaticDataMemberInlineDefinition(D)) {
       EmitGlobalVarDefinition(D);
+    }
 
     // Handle XCore specific ABI requirements.
     if (getTarget().getTriple().getArch() == llvm::Triple::xcore &&
@@ -1952,7 +1941,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   if (NeedsGlobalCtor || NeedsGlobalDtor)
     EmitCXXGlobalVarDeclInitFunc(D, GV, NeedsGlobalCtor);
 
-  reportGlobalToASan(GV, D->getLocation(), NeedsGlobalCtor);
+  reportGlobalToASan(GV, *D, NeedsGlobalCtor);
 
   // Emit global variable debug information.
   if (CGDebugInfo *DI = getModuleDebugInfo())
@@ -1961,24 +1950,25 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
 }
 
 void CodeGenModule::reportGlobalToASan(llvm::GlobalVariable *GV,
-                                       SourceLocation Loc, bool IsDynInit) {
+                                       SourceLocation Loc, StringRef Name,
+                                       bool IsDynInit) {
   if (!LangOpts.Sanitize.Address)
     return;
   IsDynInit &= !SanitizerBL.isIn(*GV, "init");
   bool IsBlacklisted = SanitizerBL.isIn(*GV);
 
-  llvm::LLVMContext &LLVMCtx = TheModule.getContext();
-
   llvm::GlobalVariable *LocDescr = nullptr;
+  llvm::GlobalVariable *GlobalName = nullptr;
   if (!IsBlacklisted) {
-    // Don't generate source location if a global is blacklisted - it won't
-    // be instrumented anyway.
+    // Don't generate source location and global name if it is blacklisted -
+    // it won't be instrumented anyway.
     PresumedLoc PLoc = Context.getSourceManager().getPresumedLoc(Loc);
     if (PLoc.isValid()) {
       llvm::Constant *LocData[] = {
           GetAddrOfConstantCString(PLoc.getFilename()),
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(LLVMCtx), PLoc.getLine()),
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(LLVMCtx),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext),
+                                 PLoc.getLine()),
+          llvm::ConstantInt::get(llvm::Type::getInt32Ty(VMContext),
                                  PLoc.getColumn()),
       };
       auto LocStruct = llvm::ConstantStruct::getAnon(LocData);
@@ -1990,19 +1980,32 @@ void CodeGenModule::reportGlobalToASan(llvm::GlobalVariable *GV,
       // the optimizer before the ASan instrumentation pass.
       addCompilerUsedGlobal(LocDescr);
     }
+    if (!Name.empty()) {
+      GlobalName = GetAddrOfConstantCString(Name);
+      // GlobalName shouldn't be removed by the optimizer.
+      addCompilerUsedGlobal(GlobalName);
+    }
   }
 
   llvm::Value *GlobalMetadata[] = {
-      GV,
-      LocDescr,
-      llvm::ConstantInt::get(llvm::Type::getInt1Ty(LLVMCtx), IsDynInit),
-      llvm::ConstantInt::get(llvm::Type::getInt1Ty(LLVMCtx), IsBlacklisted)
-  };
+      GV, LocDescr, GlobalName,
+      llvm::ConstantInt::get(llvm::Type::getInt1Ty(VMContext), IsDynInit),
+      llvm::ConstantInt::get(llvm::Type::getInt1Ty(VMContext), IsBlacklisted)};
 
   llvm::MDNode *ThisGlobal = llvm::MDNode::get(VMContext, GlobalMetadata);
   llvm::NamedMDNode *AsanGlobals =
       TheModule.getOrInsertNamedMetadata("llvm.asan.globals");
   AsanGlobals->addOperand(ThisGlobal);
+}
+
+void CodeGenModule::reportGlobalToASan(llvm::GlobalVariable *GV,
+                                       const VarDecl &D, bool IsDynInit) {
+  if (!LangOpts.Sanitize.Address)
+    return;
+  std::string QualName;
+  llvm::raw_string_ostream OS(QualName);
+  D.printQualifiedName(OS);
+  reportGlobalToASan(GV, D.getLocation(), OS.str(), IsDynInit);
 }
 
 static bool isVarDeclStrongDefinition(const VarDecl *D, bool NoCommon) {
@@ -2072,18 +2075,6 @@ llvm::GlobalValue::LinkageTypes CodeGenModule::getLLVMLinkageForDeclarator(
   if (Linkage == GVA_StrongODR)
     return !Context.getLangOpts().AppleKext ? llvm::Function::WeakODRLinkage
                                             : llvm::Function::ExternalLinkage;
-
-  // If required by the ABI, give definitions of static data members with inline
-  // initializers at least linkonce_odr linkage.
-  auto const VD = dyn_cast<VarDecl>(D);
-  if (getCXXABI().isInlineInitializedStaticDataMemberLinkOnce() &&
-      VD && isVarDeclInlineInitializedStaticDataMember(VD)) {
-    if (VD->hasAttr<DLLImportAttr>())
-      return llvm::GlobalValue::AvailableExternallyLinkage;
-    if (VD->hasAttr<DLLExportAttr>())
-      return llvm::GlobalValue::WeakODRLinkage;
-    return llvm::GlobalValue::LinkOnceODRLinkage;
-  }
 
   // C++ doesn't have tentative definitions and thus cannot have common
   // linkage.
@@ -2770,7 +2761,7 @@ GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
 
 /// GetAddrOfConstantStringFromLiteral - Return a pointer to a
 /// constant array for the given string literal.
-llvm::Constant *
+llvm::GlobalVariable *
 CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S) {
   auto Alignment =
       getContext().getAlignOfGlobalVarInChars(S->getType()).getQuantity();
@@ -2810,13 +2801,13 @@ CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S) {
   if (Entry)
     Entry->setValue(GV);
 
-  reportGlobalToASan(GV, S->getStrTokenLoc(0));
+  reportGlobalToASan(GV, S->getStrTokenLoc(0), "<string literal>");
   return GV;
 }
 
 /// GetAddrOfConstantStringFromObjCEncode - Return a pointer to a constant
 /// array for the given ObjCEncodeExpr node.
-llvm::Constant *
+llvm::GlobalVariable *
 CodeGenModule::GetAddrOfConstantStringFromObjCEncode(const ObjCEncodeExpr *E) {
   std::string Str;
   getContext().getObjCEncodingForType(E->getEncodedType(), Str);
@@ -2847,9 +2838,8 @@ llvm::StringMapEntry<llvm::GlobalVariable *> *CodeGenModule::getConstantStringMa
 /// GetAddrOfConstantCString - Returns a pointer to a character array containing
 /// the literal and a terminating '\0' character.
 /// The result has pointer to array type.
-llvm::Constant *CodeGenModule::GetAddrOfConstantCString(const std::string &Str,
-                                                        const char *GlobalName,
-                                                        unsigned Alignment) {
+llvm::GlobalVariable *CodeGenModule::GetAddrOfConstantCString(
+    const std::string &Str, const char *GlobalName, unsigned Alignment) {
   StringRef StrWithNull(Str.c_str(), Str.size() + 1);
   if (Alignment == 0) {
     Alignment = getContext()

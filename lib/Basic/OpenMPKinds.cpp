@@ -88,6 +88,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
+  case OMPC_final:
   case OMPC_num_threads:
   case OMPC_safelen:
   case OMPC_collapse:
@@ -102,6 +103,8 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_untied:
+  case OMPC_mergeable:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -143,6 +146,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
+  case OMPC_final:
   case OMPC_num_threads:
   case OMPC_safelen:
   case OMPC_collapse:
@@ -157,6 +161,8 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_untied:
+  case OMPC_mergeable:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -237,10 +243,20 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
       break;
     }
     break;
+  case OMPD_task:
+    switch (CKind) {
+#define OPENMP_TASK_CLAUSE(Name)                                               \
+  case OMPC_##Name:                                                            \
+    return true;
+#include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    break;
   case OMPD_unknown:
   case OMPD_threadprivate:
-  case OMPD_task:
   case OMPD_section:
+  case OMPD_master:
     break;
   }
   return false;

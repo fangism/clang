@@ -1150,6 +1150,7 @@ void ASTStmtWriter::VisitCXXConstructExpr(CXXConstructExpr *E) {
   Record.push_back(E->isElidable());
   Record.push_back(E->hadMultipleCandidates());
   Record.push_back(E->isListInitialization());
+  Record.push_back(E->isStdInitListInitialization());
   Record.push_back(E->requiresZeroInitialization());
   Record.push_back(E->getConstructionKind()); // FIXME: stable encoding
   Writer.AddSourceRange(E->getParenOrBraceRange(), Record);
@@ -1686,6 +1687,11 @@ void OMPClauseWriter::VisitOMPIfClause(OMPIfClause *C) {
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
 }
 
+void OMPClauseWriter::VisitOMPFinalClause(OMPFinalClause *C) {
+  Writer->Writer.AddStmt(C->getCondition());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+}
+
 void OMPClauseWriter::VisitOMPNumThreadsClause(OMPNumThreadsClause *C) {
   Writer->Writer.AddStmt(C->getNumThreads());
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
@@ -1724,6 +1730,10 @@ void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
 void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *) {}
 
 void OMPClauseWriter::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
+void OMPClauseWriter::VisitOMPUntiedClause(OMPUntiedClause *) {}
+
+void OMPClauseWriter::VisitOMPMergeableClause(OMPMergeableClause *) {}
 
 void OMPClauseWriter::VisitOMPPrivateClause(OMPPrivateClause *C) {
   Record.push_back(C->varlist_size());
@@ -1851,6 +1861,12 @@ void ASTStmtWriter::VisitOMPSingleDirective(OMPSingleDirective *D) {
   Code = serialization::STMT_OMP_SINGLE_DIRECTIVE;
 }
 
+void ASTStmtWriter::VisitOMPMasterDirective(OMPMasterDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_MASTER_DIRECTIVE;
+}
+
 void ASTStmtWriter::VisitOMPParallelForDirective(OMPParallelForDirective *D) {
   VisitStmt(D);
   Record.push_back(D->getNumClauses());
@@ -1865,6 +1881,13 @@ void ASTStmtWriter::VisitOMPParallelSectionsDirective(
   Record.push_back(D->getNumClauses());
   VisitOMPExecutableDirective(D);
   Code = serialization::STMT_OMP_PARALLEL_SECTIONS_DIRECTIVE;
+}
+
+void ASTStmtWriter::VisitOMPTaskDirective(OMPTaskDirective *D) {
+  VisitStmt(D);
+  Record.push_back(D->getNumClauses());
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_TASK_DIRECTIVE;
 }
 
 //===----------------------------------------------------------------------===//

@@ -239,7 +239,7 @@ namespace clang {
     /// Note that these handlers only accept remarks and they always handle
     /// them.
     void
-    EmitOptimizationRemark(const llvm::DiagnosticInfoOptimizationRemarkBase &D,
+    EmitOptimizationRemark(const llvm::DiagnosticInfoOptimizationBase &D,
                            unsigned DiagID);
     void
     OptimizationRemarkHandler(const llvm::DiagnosticInfoOptimizationRemark &D);
@@ -417,7 +417,7 @@ BackendConsumer::StackSizeDiagHandler(const llvm::DiagnosticInfoStackSize &D) {
 }
 
 void BackendConsumer::EmitOptimizationRemark(
-    const llvm::DiagnosticInfoOptimizationRemarkBase &D, unsigned DiagID) {
+    const llvm::DiagnosticInfoOptimizationBase &D, unsigned DiagID) {
   // We only support remarks.
   assert(D.getSeverity() == llvm::DS_Remark);
 
@@ -590,8 +590,8 @@ static raw_ostream *GetOutputStream(CompilerInstance &CI,
   llvm_unreachable("Invalid action!");
 }
 
-ASTConsumer *CodeGenAction::CreateASTConsumer(CompilerInstance &CI,
-                                              StringRef InFile) {
+std::unique_ptr<ASTConsumer>
+CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   BackendAction BA = static_cast<BackendAction>(Act);
   std::unique_ptr<raw_ostream> OS(GetOutputStream(CI, InFile, BA));
   if (BA != Backend_EmitNothing && !OS)
@@ -623,11 +623,12 @@ ASTConsumer *CodeGenAction::CreateASTConsumer(CompilerInstance &CI,
     LinkModuleToUse = ModuleOrErr.get();
   }
 
-  BEConsumer = new BackendConsumer(BA, CI.getDiagnostics(), CI.getCodeGenOpts(),
-                                   CI.getTargetOpts(), CI.getLangOpts(),
-                                   CI.getFrontendOpts().ShowTimers, InFile,
-                                   LinkModuleToUse, OS.release(), *VMContext);
-  return BEConsumer;
+  auto Result = llvm::make_unique<BackendConsumer>(
+      BA, CI.getDiagnostics(), CI.getCodeGenOpts(), CI.getTargetOpts(),
+      CI.getLangOpts(), (bool)CI.getFrontendOpts().ShowTimers, InFile,
+      LinkModuleToUse, OS.release(), *VMContext);
+  BEConsumer = Result.get();
+  return std::move(Result);
 }
 
 void CodeGenAction::ExecuteAction() {

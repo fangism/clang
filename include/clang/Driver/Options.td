@@ -73,7 +73,7 @@ def g_flags_Group         : OptionGroup<"<g flags group>">;
 def i_Group               : OptionGroup<"<i group>">, Group<CompileOnly_Group>;
 def clang_i_Group         : OptionGroup<"<clang i group>">, Group<i_Group>;
 def m_Group               : OptionGroup<"<m group>">, Group<CompileOnly_Group>;
-def m_x86_Features_Group  : OptionGroup<"<m x86 features group>">, Group<m_Group>;
+def m_x86_Features_Group  : OptionGroup<"<m x86 features group>">, Group<m_Group>, Flags<[CoreOption]>;
 def m_hexagon_Features_Group  : OptionGroup<"<m hexagon features group>">, Group<m_Group>;
 def m_arm_Features_Group  : OptionGroup<"<m arm features group>">, Group<m_Group>;
 def m_aarch64_Features_Group  : OptionGroup<"<m aarch64 features group>">, Group<m_Group>;
@@ -90,6 +90,10 @@ def clang_ignored_f_Group : OptionGroup<"<clang ignored f group>">,
   Group<f_Group>;
 def clang_ignored_m_Group : OptionGroup<"<clang ignored m group>">,
   Group<m_Group>;
+
+// Group that ignores all gcc optimizations that won't be implemented
+def clang_ignored_gcc_optimization_f_Group : OptionGroup<
+  "<clang_ignored_gcc_optimization_f_Group>">, Group<f_Group>;
 
 /////////
 // Options
@@ -306,6 +310,8 @@ def Xassembler : Separate<["-"], "Xassembler">,
 def Xclang : Separate<["-"], "Xclang">,
   HelpText<"Pass <arg> to the clang compiler">, MetaVarName<"<arg>">,
   Flags<[DriverOption, CoreOption]>;
+def z : Separate<["-"], "z">, Flags<[LinkerInput, RenderAsInput]>,
+  HelpText<"Pass -z <arg> to the linker">, MetaVarName<"<arg>">;
 def Xlinker : Separate<["-"], "Xlinker">, Flags<[LinkerInput, RenderAsInput]>,
   HelpText<"Pass <arg> to the linker">, MetaVarName<"<arg>">;
 def Xpreprocessor : Separate<["-"], "Xpreprocessor">,
@@ -582,8 +588,15 @@ def fms_extensions : Flag<["-"], "fms-extensions">, Group<f_Group>, Flags<[CC1Op
   HelpText<"Accept some non-standard constructs supported by the Microsoft compiler">;
 def fms_compatibility : Flag<["-"], "fms-compatibility">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable full Microsoft Visual C++ compatibility">;
-def fmsc_version : Joined<["-"], "fmsc-version=">, Group<f_Group>, Flags<[CC1Option, CoreOption]>,
+def fmsc_version : Joined<["-"], "fmsc-version=">, Group<f_Group>, Flags<[DriverOption, CoreOption]>,
   HelpText<"Microsoft compiler version number to report in _MSC_VER (0 = don't define it (default))">;
+def fms_compatibility_version
+    : Joined<["-"], "fms-compatibility-version=">,
+      Group<f_Group>,
+      Flags<[ CC1Option, CoreOption ]>,
+      HelpText<"Dot-separated value representing the Microsoft compiler "
+               "version number to report in _MSC_VER (0 = don't define it "
+               "(default))">;
 def fdelayed_template_parsing : Flag<["-"], "fdelayed-template-parsing">, Group<f_Group>,
   HelpText<"Parse templated function definitions at the end of the "
            "translation unit">,  Flags<[CC1Option]>;
@@ -959,6 +972,7 @@ def gno_record_gcc_switches : Flag<["-"], "gno-record-gcc-switches">,
 def gstrict_dwarf : Flag<["-"], "gstrict-dwarf">, Group<g_flags_Group>;
 def gno_strict_dwarf : Flag<["-"], "gno-strict-dwarf">, Group<g_flags_Group>;
 def gcolumn_info : Flag<["-"], "gcolumn-info">, Group<g_flags_Group>;
+def gno_column_info : Flag<["-"], "gno-column-info">, Group<g_flags_Group>;
 def gsplit_dwarf : Flag<["-"], "gsplit-dwarf">, Group<g_flags_Group>;
 def ggnu_pubnames : Flag<["-"], "ggnu-pubnames">, Group<g_flags_Group>;
 def gdwarf_aranges : Flag<["-"], "gdwarf-aranges">, Group<g_flags_Group>;
@@ -1019,6 +1033,7 @@ def mqdsp6_compat : Flag<["-"], "mqdsp6-compat">, Group<m_Group>, Flags<[DriverO
 def m3dnowa : Flag<["-"], "m3dnowa">, Group<m_x86_Features_Group>;
 def m3dnow : Flag<["-"], "m3dnow">, Group<m_x86_Features_Group>;
 def m64 : Flag<["-"], "m64">, Group<m_Group>, Flags<[DriverOption, CoreOption]>;
+def mx32 : Flag<["-"], "mx32">, Group<m_Group>, Flags<[DriverOption, CoreOption]>;
 def mabi_EQ : Joined<["-"], "mabi=">, Group<m_Group>;
 def march_EQ : Joined<["-"], "march=">, Group<m_Group>;
 def masm_EQ : Joined<["-"], "masm=">, Group<m_Group>, Flags<[DriverOption]>;
@@ -1249,6 +1264,9 @@ def mips64r2 : Flag<["-"], "mips64r2">,
 def mips64r6 : Flag<["-"], "mips64r6">,
   Alias<march_EQ>, AliasArgs<["mips64r6"]>,
   HelpText<"Equivalent to -march=mips64r6">, Flags<[HelpHidden]>;
+def mfpxx : Flag<["-"], "mfpxx">, Group<m_Group>,
+  HelpText<"Avoid FPU mode dependent operations when used with the O32 ABI">,
+  Flags<[HelpHidden]>;
 def modd_spreg : Flag<["-"], "modd-spreg">, Group<m_Group>,
   HelpText<"Enable odd single-precision floating point registers">,
   Flags<[HelpHidden]>;
@@ -1374,7 +1392,7 @@ def no_system_header_prefix : Joined<["--"], "no-system-header-prefix=">,
            "system header.">;
 def : Separate<["--"], "no-system-header-prefix">, Alias<no_system_header_prefix>;
 def s : Flag<["-"], "s">;
-def target : Joined<["--"], "target=">, Flags<[DriverOption]>,
+def target : Joined<["--"], "target=">, Flags<[DriverOption, CoreOption]>,
   HelpText<"Generate code for the given target">;
 def gcc_toolchain : Joined<["--"], "gcc-toolchain=">, Flags<[DriverOption]>,
   HelpText<"Use the gcc toolchain at the given directory">;
@@ -1591,7 +1609,8 @@ defm gcse : BooleanFFlag<"gcse">, Group<clang_ignored_f_Group>;
 defm gnu : BooleanFFlag<"gnu">, Group<clang_ignored_f_Group>;
 defm ident : BooleanFFlag<"ident">, Group<clang_ignored_f_Group>;
 defm implicit_templates : BooleanFFlag<"implicit-templates">, Group<clang_ignored_f_Group>;
-defm inline_limit : BooleanFFlag<"inline-limit">, Group<clang_ignored_f_Group>;
+def finline_limit_EQ : Joined<["-"], "finline-limit=">, Group<clang_ignored_gcc_optimization_f_Group>;
+defm finline_limit : BooleanFFlag<"inline-limit">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm ivopts : BooleanFFlag<"ivopts">, Group<clang_ignored_f_Group>;
 defm non_call_exceptions : BooleanFFlag<"non-call-exceptions">, Group<clang_ignored_f_Group>;
 defm permissive : BooleanFFlag<"permissive">, Group<clang_ignored_f_Group>;

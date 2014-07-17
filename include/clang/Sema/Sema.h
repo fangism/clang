@@ -3858,16 +3858,18 @@ public:
   BuildCXXConstructExpr(SourceLocation ConstructLoc, QualType DeclInitType,
                         CXXConstructorDecl *Constructor, MultiExprArg Exprs,
                         bool HadMultipleCandidates, bool IsListInitialization,
+                        bool IsStdInitListInitialization,
                         bool RequiresZeroInit, unsigned ConstructKind,
                         SourceRange ParenRange);
 
-  // FIXME: Can re remove this and have the above BuildCXXConstructExpr check if
+  // FIXME: Can we remove this and have the above BuildCXXConstructExpr check if
   // the constructor can be elidable?
   ExprResult
   BuildCXXConstructExpr(SourceLocation ConstructLoc, QualType DeclInitType,
                         CXXConstructorDecl *Constructor, bool Elidable,
                         MultiExprArg Exprs, bool HadMultipleCandidates,
-                        bool IsListInitialization, bool RequiresZeroInit,
+                        bool IsListInitialization,
+                        bool IsStdInitListInitialization, bool RequiresZeroInit,
                         unsigned ConstructKind, SourceRange ParenRange);
 
   /// BuildCXXDefaultArgExpr - Creates a CXXDefaultArgExpr, instantiating
@@ -5254,6 +5256,7 @@ public:
                                 TemplateParameterList *TemplateParams,
                                 AccessSpecifier AS,
                                 SourceLocation ModulePrivateLoc,
+                                SourceLocation FriendLoc,
                                 unsigned NumOuterTemplateParamLists,
                             TemplateParameterList **OuterTemplateParamLists);
 
@@ -7344,6 +7347,10 @@ public:
   StmtResult ActOnOpenMPSingleDirective(ArrayRef<OMPClause *> Clauses,
                                         Stmt *AStmt, SourceLocation StartLoc,
                                         SourceLocation EndLoc);
+  /// \brief Called on well-formed '\#pragma omp master' after parsing of the
+  /// associated statement.
+  StmtResult ActOnOpenMPMasterDirective(Stmt *AStmt, SourceLocation StartLoc,
+                                        SourceLocation EndLoc);
   /// \brief Called on well-formed '\#pragma omp parallel for' after parsing
   /// of the  associated statement.
   StmtResult ActOnOpenMPParallelForDirective(
@@ -7356,6 +7363,11 @@ public:
                                                   Stmt *AStmt,
                                                   SourceLocation StartLoc,
                                                   SourceLocation EndLoc);
+  /// \brief Called on well-formed '\#pragma omp task' after parsing of the
+  /// associated statement.
+  StmtResult ActOnOpenMPTaskDirective(ArrayRef<OMPClause *> Clauses,
+                                      Stmt *AStmt, SourceLocation StartLoc,
+                                      SourceLocation EndLoc);
 
   OMPClause *ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind,
                                          Expr *Expr,
@@ -7366,6 +7378,10 @@ public:
   OMPClause *ActOnOpenMPIfClause(Expr *Condition, SourceLocation StartLoc,
                                  SourceLocation LParenLoc,
                                  SourceLocation EndLoc);
+  /// \brief Called on well-formed 'final' clause.
+  OMPClause *ActOnOpenMPFinalClause(Expr *Condition, SourceLocation StartLoc,
+                                    SourceLocation LParenLoc,
+                                    SourceLocation EndLoc);
   /// \brief Called on well-formed 'num_threads' clause.
   OMPClause *ActOnOpenMPNumThreadsClause(Expr *NumThreads,
                                          SourceLocation StartLoc,
@@ -7424,6 +7440,12 @@ public:
   /// \brief Called on well-formed 'nowait' clause.
   OMPClause *ActOnOpenMPNowaitClause(SourceLocation StartLoc,
                                      SourceLocation EndLoc);
+  /// \brief Called on well-formed 'untied' clause.
+  OMPClause *ActOnOpenMPUntiedClause(SourceLocation StartLoc,
+                                     SourceLocation EndLoc);
+  /// \brief Called on well-formed 'mergeable' clause.
+  OMPClause *ActOnOpenMPMergeableClause(SourceLocation StartLoc,
+                                        SourceLocation EndLoc);
 
   OMPClause *
   ActOnOpenMPVarListClause(OpenMPClauseKind Kind, ArrayRef<Expr *> Vars,
@@ -8239,6 +8261,7 @@ public:
 
 private:
   bool SemaBuiltinPrefetch(CallExpr *TheCall);
+  bool SemaBuiltinAssume(CallExpr *TheCall);
   bool SemaBuiltinLongjmp(CallExpr *TheCall);
   ExprResult SemaBuiltinAtomicOverloaded(ExprResult TheCallResult);
   ExprResult SemaAtomicOpsOverloaded(ExprResult TheCallResult,

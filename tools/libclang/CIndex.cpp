@@ -1860,8 +1860,10 @@ public:
   void VisitOMPSectionsDirective(const OMPSectionsDirective *D);
   void VisitOMPSectionDirective(const OMPSectionDirective *D);
   void VisitOMPSingleDirective(const OMPSingleDirective *D);
+  void VisitOMPMasterDirective(const OMPMasterDirective *D);
   void VisitOMPParallelForDirective(const OMPParallelForDirective *D);
   void VisitOMPParallelSectionsDirective(const OMPParallelSectionsDirective *D);
+  void VisitOMPTaskDirective(const OMPTaskDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -1938,6 +1940,10 @@ void OMPClauseEnqueue::VisitOMPIfClause(const OMPIfClause *C) {
   Visitor->AddStmt(C->getCondition());
 }
 
+void OMPClauseEnqueue::VisitOMPFinalClause(const OMPFinalClause *C) {
+  Visitor->AddStmt(C->getCondition());
+}
+
 void OMPClauseEnqueue::VisitOMPNumThreadsClause(const OMPNumThreadsClause *C) {
   Visitor->AddStmt(C->getNumThreads());
 }
@@ -1961,6 +1967,10 @@ void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
 void OMPClauseEnqueue::VisitOMPOrderedClause(const OMPOrderedClause *) {}
 
 void OMPClauseEnqueue::VisitOMPNowaitClause(const OMPNowaitClause *) {}
+
+void OMPClauseEnqueue::VisitOMPUntiedClause(const OMPUntiedClause *) {}
+
+void OMPClauseEnqueue::VisitOMPMergeableClause(const OMPMergeableClause *) {}
 
 template<typename T>
 void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
@@ -2313,6 +2323,10 @@ void EnqueueVisitor::VisitOMPSingleDirective(const OMPSingleDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
+void EnqueueVisitor::VisitOMPMasterDirective(const OMPMasterDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
 void
 EnqueueVisitor::VisitOMPParallelForDirective(const OMPParallelForDirective *D) {
   VisitOMPExecutableDirective(D);
@@ -2320,6 +2334,10 @@ EnqueueVisitor::VisitOMPParallelForDirective(const OMPParallelForDirective *D) {
 
 void EnqueueVisitor::VisitOMPParallelSectionsDirective(
     const OMPParallelSectionsDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTaskDirective(const OMPTaskDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -4007,10 +4025,14 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPSectionDirective");
   case CXCursor_OMPSingleDirective:
     return cxstring::createRef("OMPSingleDirective");
+  case CXCursor_OMPMasterDirective:
+    return cxstring::createRef("OMPMasterDirective");
   case CXCursor_OMPParallelForDirective:
     return cxstring::createRef("OMPParallelForDirective");
   case CXCursor_OMPParallelSectionsDirective:
     return cxstring::createRef("OMPParallelSectionsDirective");
+  case CXCursor_OMPTaskDirective:
+    return cxstring::createRef("OMPTaskDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");

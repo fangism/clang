@@ -323,7 +323,7 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
   SmallVector<Token, 4> AsmToks;
 
   unsigned BraceNesting = 0;
-  unsigned short savedBraceCount = 0;
+  unsigned short savedBraceCount = BraceCount;
   bool InAsmComment = false;
   FileID FID;
   unsigned LineNo = 0;
@@ -334,7 +334,6 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
   if (Tok.is(tok::l_brace)) {
     // Braced inline asm: consume the opening brace.
     BraceNesting = 1;
-    savedBraceCount = BraceCount;
     EndLoc = ConsumeBrace();
     LBraceLocs.push_back(EndLoc);
     ++NumTokensRead;
@@ -397,7 +396,8 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
       SkippedStartOfLine = Tok.isAtStartOfLine();
       EndLoc = ConsumeBrace();
       BraceNesting--;
-      // Finish if all of the opened braces in the inline asm section were consumed.
+      // Finish if all of the opened braces in the inline asm section were
+      // consumed.
       if (BraceNesting == 0)
         break;
       else {
