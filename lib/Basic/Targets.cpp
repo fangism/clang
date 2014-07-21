@@ -2927,6 +2927,13 @@ X86TargetInfo::validateAsmConstraint(const char *&Name,
     case 'm':  // any MMX register, when inter-unit moves enabled.
       break;   // falls through to setAllowsRegister.
   }
+  case 'f': // any x87 floating point stack register.
+    // Constraint 'f' cannot be used for output operands.
+    if (Info.ConstraintStr[0] == '=')
+      return false;
+
+    Info.setAllowsRegister();
+    return true;
   case 'a': // eax.
   case 'b': // ebx.
   case 'c': // ecx.
@@ -2934,7 +2941,6 @@ X86TargetInfo::validateAsmConstraint(const char *&Name,
   case 'S': // esi.
   case 'D': // edi.
   case 'A': // edx:eax.
-  case 'f': // any x87 floating point stack register.
   case 't': // top of floating point stack.
   case 'u': // second from top of floating point stack.
   case 'q': // Any register accessible as [r]l: a, b, c, and d.
@@ -4300,7 +4306,6 @@ class AArch64TargetInfo : public TargetInfo {
     NeonMode
   };
 
-  std::string CPU;
   unsigned FPU;
   unsigned CRC;
   unsigned Crypto;
@@ -4358,8 +4363,6 @@ public:
                         .Cases("cortex-a53", "cortex-a57", true)
                         .Case("cyclone", true)
                         .Default(false);
-    if (CPUKnown)
-      CPU = Name;
     return CPUKnown;
   }
 
@@ -4430,23 +4433,6 @@ public:
       Feature == "arm64" ||
       (Feature == "neon" && FPU == NeonMode);
   }
-
-  void getDefaultFeatures(llvm::StringMap<bool> &Features) const override {
-
-  if (CPU == "cyclone") {
-    Features["fp-armv8"] = true;
-    Features["neon"] = true;
-    Features["crypto"] = true;
-    Features["crc"] = true;
-    Features["zcm"] = true;
-    Features["zcz"] = true;
-  } else if (CPU == "cortex-a53" || CPU == "cortex-a57") {
-    Features["fp-armv8"] = true;
-    Features["neon"] = true;
-    Features["crypto"] = true;
-    Features["crc"] = true;
-  }
-}
 
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {

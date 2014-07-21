@@ -1784,6 +1784,8 @@ public:
       return cast<CXXDependentScopeMemberExpr>(S)->getMemberNameInfo();
     case Stmt::DependentScopeDeclRefExprClass:
       return cast<DependentScopeDeclRefExpr>(S)->getNameInfo();
+    case Stmt::OMPCriticalDirectiveClass:
+      return cast<OMPCriticalDirective>(S)->getDirectiveName();
     }
   }
 };
@@ -1861,9 +1863,14 @@ public:
   void VisitOMPSectionDirective(const OMPSectionDirective *D);
   void VisitOMPSingleDirective(const OMPSingleDirective *D);
   void VisitOMPMasterDirective(const OMPMasterDirective *D);
+  void VisitOMPCriticalDirective(const OMPCriticalDirective *D);
   void VisitOMPParallelForDirective(const OMPParallelForDirective *D);
   void VisitOMPParallelSectionsDirective(const OMPParallelSectionsDirective *D);
   void VisitOMPTaskDirective(const OMPTaskDirective *D);
+  void VisitOMPTaskyieldDirective(const OMPTaskyieldDirective *D);
+  void VisitOMPBarrierDirective(const OMPBarrierDirective *D);
+  void VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *D);
+  void VisitOMPFlushDirective(const OMPFlushDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -2008,6 +2015,9 @@ void OMPClauseEnqueue::VisitOMPCopyinClause(const OMPCopyinClause *C) {
 }
 void
 OMPClauseEnqueue::VisitOMPCopyprivateClause(const OMPCopyprivateClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPFlushClause(const OMPFlushClause *C) {
   VisitOMPClauseList(C);
 }
 }
@@ -2327,6 +2337,11 @@ void EnqueueVisitor::VisitOMPMasterDirective(const OMPMasterDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
+void EnqueueVisitor::VisitOMPCriticalDirective(const OMPCriticalDirective *D) {
+  VisitOMPExecutableDirective(D);
+  AddDeclarationNameInfo(D);
+}
+
 void
 EnqueueVisitor::VisitOMPParallelForDirective(const OMPParallelForDirective *D) {
   VisitOMPExecutableDirective(D);
@@ -2338,6 +2353,23 @@ void EnqueueVisitor::VisitOMPParallelSectionsDirective(
 }
 
 void EnqueueVisitor::VisitOMPTaskDirective(const OMPTaskDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void
+EnqueueVisitor::VisitOMPTaskyieldDirective(const OMPTaskyieldDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPBarrierDirective(const OMPBarrierDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPFlushDirective(const OMPFlushDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -4027,12 +4059,22 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPSingleDirective");
   case CXCursor_OMPMasterDirective:
     return cxstring::createRef("OMPMasterDirective");
+  case CXCursor_OMPCriticalDirective:
+    return cxstring::createRef("OMPCriticalDirective");
   case CXCursor_OMPParallelForDirective:
     return cxstring::createRef("OMPParallelForDirective");
   case CXCursor_OMPParallelSectionsDirective:
     return cxstring::createRef("OMPParallelSectionsDirective");
   case CXCursor_OMPTaskDirective:
     return cxstring::createRef("OMPTaskDirective");
+  case CXCursor_OMPTaskyieldDirective:
+    return cxstring::createRef("OMPTaskyieldDirective");
+  case CXCursor_OMPBarrierDirective:
+    return cxstring::createRef("OMPBarrierDirective");
+  case CXCursor_OMPTaskwaitDirective:
+    return cxstring::createRef("OMPTaskwaitDirective");
+  case CXCursor_OMPFlushDirective:
+    return cxstring::createRef("OMPFlushDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");

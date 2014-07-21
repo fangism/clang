@@ -1202,8 +1202,14 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
     llvm_unreachable("Invalid ABI kind for return argument");
   }
 
-  if (RetTy->isReferenceType())
-    RetAttrs.addAttribute(llvm::Attribute::NonNull);
+  if (const auto *RefTy = RetTy->getAs<ReferenceType>()) {
+    QualType PTy = RefTy->getPointeeType();
+    if (!PTy->isIncompleteType() && PTy->isConstantSizeType())
+      RetAttrs.addDereferenceableAttr(getContext().getTypeSizeInChars(PTy)
+                                        .getQuantity());
+    else if (getContext().getTargetAddressSpace(PTy) == 0)
+      RetAttrs.addAttribute(llvm::Attribute::NonNull);
+  }
 
   if (RetAttrs.hasAttributes())
     PAL.push_back(llvm::
@@ -1293,8 +1299,14 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
     }
     }
 
-    if (ParamType->isReferenceType())
-      Attrs.addAttribute(llvm::Attribute::NonNull);
+    if (const auto *RefTy = ParamType->getAs<ReferenceType>()) {
+      QualType PTy = RefTy->getPointeeType();
+      if (!PTy->isIncompleteType() && PTy->isConstantSizeType())
+        Attrs.addDereferenceableAttr(getContext().getTypeSizeInChars(PTy)
+                                       .getQuantity());
+      else if (getContext().getTargetAddressSpace(PTy) == 0)
+        Attrs.addAttribute(llvm::Attribute::NonNull);
+    }
 
     if (Attrs.hasAttributes())
       PAL.push_back(llvm::AttributeSet::get(getLLVMContext(), Index, Attrs));
@@ -1474,12 +1486,48 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
         assert(AI != Fn->arg_end() && "Argument mismatch!");
         llvm::Value *V = AI;
 
-        if (const ParmVarDecl *PVD = dyn_cast<ParmVarDecl>(Arg))
+        if (const ParmVarDecl *PVD = dyn_cast<ParmVarDecl>(Arg)) {
           if ((NNAtt && NNAtt->isNonNull(PVD->getFunctionScopeIndex())) ||
               PVD->hasAttr<NonNullAttr>())
             AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),
                                                 AI->getArgNo() + 1,
                                                 llvm::Attribute::NonNull));
+
+          QualType OTy = PVD->getOriginalType();
+          if (const auto *ArrTy =
+              getContext().getAsConstantArrayType(OTy)) {
+            // A C99 array parameter declaration with the static keyword also
+            // indicates dereferenceability, and if the size is constant we can
+            // use the dereferenceable attribute (which requires the size in
+            // bytes).
+            if (ArrTy->getSizeModifier() == ArrayType::Static) {
+              QualType ETy = ArrTy->getElementType();
+              uint64_t ArrSize = ArrTy->getSize().getZExtValue();
+              if (!ETy->isIncompleteType() && ETy->isConstantSizeType() &&
+                  ArrSize) {
+                llvm::AttrBuilder Attrs;
+                Attrs.addDereferenceableAttr(
+                  getContext().getTypeSizeInChars(ETy).getQuantity()*ArrSize);
+                AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),
+                                                    AI->getArgNo() + 1, Attrs));
+              } else if (getContext().getTargetAddressSpace(ETy) == 0) {
+                AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),
+                                                    AI->getArgNo() + 1,
+                                                    llvm::Attribute::NonNull));
+              }
+            }
+          } else if (const auto *ArrTy =
+                     getContext().getAsVariableArrayType(OTy)) {
+            // For C99 VLAs with the static keyword, we don't know the size so
+            // we can't use the dereferenceable attribute, but in addrspace(0)
+            // we know that it must be nonnull.
+            if (ArrTy->getSizeModifier() == VariableArrayType::Static &&
+                !getContext().getTargetAddressSpace(ArrTy->getElementType()))
+              AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),
+                                                  AI->getArgNo() + 1,
+                                                  llvm::Attribute::NonNull));
+          }
+        }
 
         if (Arg->getType().isRestrictQualified())
           AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),

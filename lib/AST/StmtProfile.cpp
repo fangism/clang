@@ -352,6 +352,9 @@ void
 OMPClauseProfiler::VisitOMPCopyprivateClause(const OMPCopyprivateClause *C) {
   VisitOMPClauseList(C);
 }
+void OMPClauseProfiler::VisitOMPFlushClause(const OMPFlushClause *C) {
+  VisitOMPClauseList(C);
+}
 }
 
 void
@@ -393,6 +396,11 @@ void StmtProfiler::VisitOMPMasterDirective(const OMPMasterDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 
+void StmtProfiler::VisitOMPCriticalDirective(const OMPCriticalDirective *S) {
+  VisitOMPExecutableDirective(S);
+  VisitName(S->getDirectiveName().getName());
+}
+
 void
 StmtProfiler::VisitOMPParallelForDirective(const OMPParallelForDirective *S) {
   VisitOMPExecutableDirective(S);
@@ -404,6 +412,22 @@ void StmtProfiler::VisitOMPParallelSectionsDirective(
 }
 
 void StmtProfiler::VisitOMPTaskDirective(const OMPTaskDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTaskyieldDirective(const OMPTaskyieldDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPBarrierDirective(const OMPBarrierDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPFlushDirective(const OMPFlushDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 
