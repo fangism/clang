@@ -344,7 +344,7 @@ public:
   /// TransformExpr or TransformExprs.
   ///
   /// \returns the transformed initializer.
-  ExprResult TransformInitializer(Expr *Init, bool CXXDirectInit);
+  ExprResult TransformInitializer(Expr *Init, bool NotCopyInit);
 
   /// \brief Transform the given list of expressions.
   ///
@@ -560,10 +560,9 @@ public:
                                                TemplateName Template,
                                                CXXScopeSpec &SS);
 
-  QualType
-  TransformDependentTemplateSpecializationType(TypeLocBuilder &TLB,
-                                               DependentTemplateSpecializationTypeLoc TL,
-                                         NestedNameSpecifierLoc QualifierLoc);
+  QualType TransformDependentTemplateSpecializationType(
+      TypeLocBuilder &TLB, DependentTemplateSpecializationTypeLoc TL,
+      NestedNameSpecifierLoc QualifierLoc);
 
   /// \brief Transforms the parameters of a function type into the
   /// given vectors.
@@ -1665,10 +1664,8 @@ public:
   }
 
   StmtResult RebuildSEHTryStmt(bool IsCXXTry, SourceLocation TryLoc,
-                               Stmt *TryBlock, Stmt *Handler, int HandlerIndex,
-                               int HandlerParentIndex) {
-    return getSema().ActOnSEHTryBlock(IsCXXTry, TryLoc, TryBlock, Handler,
-                                      HandlerIndex, HandlerParentIndex);
+                               Stmt *TryBlock, Stmt *Handler) {
+    return getSema().ActOnSEHTryBlock(IsCXXTry, TryLoc, TryBlock, Handler);
   }
 
   StmtResult RebuildSEHExceptStmt(SourceLocation Loc, Expr *FilterExpr,
@@ -2858,7 +2855,7 @@ ExprResult TreeTransform<Derived>::TransformExpr(Expr *E) {
 
 template<typename Derived>
 ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
-                                                        bool CXXDirectInit) {
+                                                        bool NotCopyInit) {
   // Initializers are instantiated like expressions, except that various outer
   // layers are stripped.
   if (!Init)
@@ -2878,13 +2875,13 @@ ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
 
   if (CXXStdInitializerListExpr *ILE =
           dyn_cast<CXXStdInitializerListExpr>(Init))
-    return TransformInitializer(ILE->getSubExpr(), CXXDirectInit);
+    return TransformInitializer(ILE->getSubExpr(), NotCopyInit);
 
-  // If this is not a direct-initializer, we only need to reconstruct
+  // If this is copy-initialization, we only need to reconstruct
   // InitListExprs. Other forms of copy-initialization will be a no-op if
   // the initializer is already the right type.
   CXXConstructExpr *Construct = dyn_cast<CXXConstructExpr>(Init);
-  if (!CXXDirectInit && !(Construct && Construct->isListInitialization()))
+  if (!NotCopyInit && !(Construct && Construct->isListInitialization()))
     return getDerived().TransformExpr(Init);
 
   // Revert value-initialization back to empty parens.
@@ -2907,12 +2904,12 @@ ExprResult TreeTransform<Derived>::TransformInitializer(Expr *Init,
   // If the initialization implicitly converted an initializer list to a
   // std::initializer_list object, unwrap the std::initializer_list too.
   if (Construct && Construct->isStdInitListInitialization())
-    return TransformInitializer(Construct->getArg(0), CXXDirectInit);
+    return TransformInitializer(Construct->getArg(0), NotCopyInit);
 
   SmallVector<Expr*, 8> NewArgs;
   bool ArgChanged = false;
   if (getDerived().TransformExprs(Construct->getArgs(), Construct->getNumArgs(),
-                     /*IsCall*/true, NewArgs, &ArgChanged))
+                                  /*IsCall*/true, NewArgs, &ArgChanged))
     return ExprError();
 
   // If this was list initialization, revert to list form.
@@ -5147,8 +5144,8 @@ TreeTransform<Derived>::TransformElaboratedType(TypeLocBuilder &TLB,
     if (const TemplateSpecializationType *TST =
           NamedT->getAs<TemplateSpecializationType>()) {
       TemplateName Template = TST->getTemplateName();
-      if (TypeAliasTemplateDecl *TAT =
-          dyn_cast_or_null<TypeAliasTemplateDecl>(Template.getAsTemplateDecl())) {
+      if (TypeAliasTemplateDecl *TAT = dyn_cast_or_null<TypeAliasTemplateDecl>(
+              Template.getAsTemplateDecl())) {
         SemaRef.Diag(TL.getNamedTypeLoc().getBeginLoc(),
                      diag::err_tag_reference_non_tag) << 4;
         SemaRef.Diag(TAT->getLocation(), diag::note_declared_at);
@@ -6380,9 +6377,8 @@ StmtResult TreeTransform<Derived>::TransformSEHTryStmt(SEHTryStmt *S) {
       Handler.get() == S->getHandler())
     return S;
 
-  return getDerived().RebuildSEHTryStmt(
-      S->getIsCXXTry(), S->getTryLoc(), TryBlock.get(), Handler.get(),
-      S->getHandlerIndex(), S->getHandlerParentIndex());
+  return getDerived().RebuildSEHTryStmt(S->getIsCXXTry(), S->getTryLoc(),
+                                        TryBlock.get(), Handler.get());
 }
 
 template <typename Derived>
@@ -6633,6 +6629,28 @@ TreeTransform<Derived>::TransformOMPFlushDirective(OMPFlushDirective *D) {
   return Res;
 }
 
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPOrderedDirective(OMPOrderedDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_ordered, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformOMPAtomicDirective(OMPAtomicDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_atomic, DirName, nullptr,
+                                             D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
 //===----------------------------------------------------------------------===//
 // OpenMP clause transformation
 //===----------------------------------------------------------------------===//
@@ -6735,6 +6753,39 @@ TreeTransform<Derived>::TransformOMPUntiedClause(OMPUntiedClause *C) {
 template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPMergeableClause(OMPMergeableClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPReadClause(OMPReadClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPWriteClause(OMPWriteClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPUpdateClause(OMPUpdateClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPCaptureClause(OMPCaptureClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPSeqCstClause(OMPSeqCstClause *C) {
   // No need to rebuild this clause, no template-dependent parameters.
   return C;
 }
@@ -7873,15 +7924,11 @@ TreeTransform<Derived>::TransformCXXNamedCastExpr(CXXNamedCastExpr *E) {
       Type == E->getTypeInfoAsWritten() &&
       SubExpr.get() == E->getSubExpr())
     return E;
-  return getDerived().RebuildCXXNamedCastExpr(E->getOperatorLoc(),
-                                              E->getStmtClass(),
-                                              E->getAngleBrackets().getBegin(),
-                                              Type,
-                                              E->getAngleBrackets().getEnd(),
-                                              // FIXME. this should be '(' location
-                                              E->getAngleBrackets().getEnd(),
-                                              SubExpr.get(),
-                                              E->getRParenLoc());
+  return getDerived().RebuildCXXNamedCastExpr(
+      E->getOperatorLoc(), E->getStmtClass(), E->getAngleBrackets().getBegin(),
+      Type, E->getAngleBrackets().getEnd(),
+      // FIXME. this should be '(' location
+      E->getAngleBrackets().getEnd(), SubExpr.get(), E->getRParenLoc());
 }
 
 template<typename Derived>
@@ -8124,7 +8171,7 @@ TreeTransform<Derived>::TransformCXXNewExpr(CXXNewExpr *E) {
   Expr *OldInit = E->getInitializer();
   ExprResult NewInit;
   if (OldInit)
-    NewInit = getDerived().TransformExpr(OldInit);
+    NewInit = getDerived().TransformInitializer(OldInit, true);
   if (NewInit.isInvalid())
     return ExprError();
 

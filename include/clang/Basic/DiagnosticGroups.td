@@ -383,7 +383,9 @@ def UnnamedTypeTemplateArgs : DiagGroup<"unnamed-type-template-args",
 def UnsupportedFriend : DiagGroup<"unsupported-friend">;
 def UnusedArgument : DiagGroup<"unused-argument">;
 def UnusedCommandLineArgument : DiagGroup<"unused-command-line-argument">;
-def InvalidCommandLineArgument : DiagGroup<"invalid-command-line-argument">;
+def IgnoredOptimizationArgument : DiagGroup<"ignored-optimization-argument">;
+def InvalidCommandLineArgument : DiagGroup<"invalid-command-line-argument",
+                                           [IgnoredOptimizationArgument]>;
 def UnusedComparison : DiagGroup<"unused-comparison">;
 def UnusedExceptionParameter : DiagGroup<"unused-exception-parameter">;
 def UnneededInternalDecl : DiagGroup<"unneeded-internal-declaration">;
@@ -426,6 +428,8 @@ def DeallocInCategory:DiagGroup<"dealloc-in-category">;
 def SelectorTypeMismatch : DiagGroup<"selector-type-mismatch">;
 def Selector : DiagGroup<"selector", [SelectorTypeMismatch]>;
 def Protocol : DiagGroup<"protocol">;
+def AtProtocol : DiagGroup<"at-protocol">;
+def PropertyAttr : DiagGroup<"property-attribute-mismatch">;
 def SuperSubClassMismatch : DiagGroup<"super-class-method-mismatch">;
 def OverridingMethodMismatch : DiagGroup<"overriding-method-mismatch">;
 def VariadicMacros : DiagGroup<"variadic-macros">;

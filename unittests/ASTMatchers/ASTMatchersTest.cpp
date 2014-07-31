@@ -643,6 +643,12 @@ TEST(DeclarationMatcher, HasDescendant) {
       "};", ZDescendantClassXDescendantClassY));
 }
 
+TEST(DeclarationMatcher, HasDescendantMemoization) {
+  DeclarationMatcher CannotMemoize =
+      decl(hasDescendant(typeLoc().bind("x")), has(decl()));
+  EXPECT_TRUE(matches("void f() { int i; }", CannotMemoize));
+}
+
 // Implements a run method that returns whether BoundNodes contains a
 // Decl bound to Id that can be dynamically cast to T.
 // Optionally checks that the check succeeded a specific number of times.
@@ -4163,8 +4169,8 @@ public:
 
   virtual bool run(const BoundNodes *Nodes, ASTContext *Context) {
     const T *Node = Nodes->getNodeAs<T>(Id);
-    return selectFirst<const T>(InnerId,
-                                match(InnerMatcher, *Node, *Context)) !=nullptr;
+    return selectFirst<T>(InnerId, match(InnerMatcher, *Node, *Context)) !=
+           nullptr;
   }
 private:
   std::string Id;
@@ -4221,7 +4227,7 @@ public:
     // Use the original typed pointer to verify we can pass pointers to subtypes
     // to equalsNode.
     const T *TypedNode = cast<T>(Node);
-    return selectFirst<const T>(
+    return selectFirst<T>(
                "", match(stmt(hasParent(
                              stmt(has(stmt(equalsNode(TypedNode)))).bind(""))),
                          *Node, Context)) != nullptr;
@@ -4230,7 +4236,7 @@ public:
     // Use the original typed pointer to verify we can pass pointers to subtypes
     // to equalsNode.
     const T *TypedNode = cast<T>(Node);
-    return selectFirst<const T>(
+    return selectFirst<T>(
                "", match(decl(hasParent(
                              decl(has(decl(equalsNode(TypedNode)))).bind(""))),
                          *Node, Context)) != nullptr;

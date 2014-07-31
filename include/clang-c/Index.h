@@ -2195,7 +2195,15 @@ enum CXCursorKind {
    */
   CXCursor_SEHLeaveStmt                  = 247,
 
-  CXCursor_LastStmt                      = CXCursor_SEHLeaveStmt,
+  /** \brief OpenMP ordered directive.
+   */
+  CXCursor_OMPOrderedDirective           = 248,
+
+  /** \brief OpenMP atomic directive.
+   */
+  CXCursor_OMPAtomicDirective            = 249,
+
+  CXCursor_LastStmt                      = CXCursor_OMPAtomicDirective,
 
   /**
    * \brief Cursor that represents the translation unit itself.
@@ -3626,6 +3634,20 @@ CINDEX_LINKAGE CXString clang_Cursor_getRawCommentText(CXCursor C);
  * first paragraph.
  */
 CINDEX_LINKAGE CXString clang_Cursor_getBriefCommentText(CXCursor C);
+
+/**
+ * @}
+ */
+
+/** \defgroup CINDEX_MANGLE Name Mangling API Functions
+ *
+ * @{
+ */
+
+/**
+ * \brief Retrieve the CXString representing the mangled name of the cursor.
+ */
+CINDEX_LINKAGE CXString clang_Cursor_getMangling(CXCursor);
 
 /**
  * @}

@@ -258,6 +258,10 @@ public:
     ~SanitizerScope();
   };
 
+  /// In C++, whether we are code generating a thunk.  This controls whether we
+  /// should emit cleanups.
+  bool CurFuncIsThunk;
+
   /// In ARC, whether we should autorelease the return value.
   bool AutoreleaseResult;
 
@@ -1204,8 +1208,11 @@ public:
 
   void StartThunk(llvm::Function *Fn, GlobalDecl GD, const CGFunctionInfo &FnInfo);
 
-  void EmitCallAndReturnForThunk(GlobalDecl GD, llvm::Value *Callee,
-                                 const ThunkInfo *Thunk);
+  void EmitCallAndReturnForThunk(llvm::Value *Callee, const ThunkInfo *Thunk);
+
+  /// Emit a musttail call for a thunk with a potentially adjusted this pointer.
+  void EmitMustTailThunk(const CXXMethodDecl *MD, llvm::Value *AdjustedThisPtr,
+                         llvm::Value *Callee);
 
   /// GenerateThunk - Generate a thunk for the given method.
   void GenerateThunk(llvm::Function *Fn, const CGFunctionInfo &FnInfo,
@@ -1936,6 +1943,8 @@ public:
   void EmitOMPBarrierDirective(const OMPBarrierDirective &S);
   void EmitOMPTaskwaitDirective(const OMPTaskwaitDirective &S);
   void EmitOMPFlushDirective(const OMPFlushDirective &S);
+  void EmitOMPOrderedDirective(const OMPOrderedDirective &S);
+  void EmitOMPAtomicDirective(const OMPAtomicDirective &S);
 
   //===--------------------------------------------------------------------===//
   //                         LValue Expression Emission

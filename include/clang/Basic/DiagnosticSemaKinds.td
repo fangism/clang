@@ -84,6 +84,9 @@ def note_ice_conversion_here : Note<
 def err_ice_ambiguous_conversion : Error<
   "ambiguous conversion from type %0 to an integral or unscoped "
   "enumeration type">;
+def err_ice_too_large : Error<
+  "integer constant expression evaluates to value %0 that cannot be "
+  "represented in a %1-bit %select{signed|unsigned}2 integer type">;
 
 // Semantic analysis of constant literals.
 def ext_predef_outside_function : Warning<
@@ -538,8 +541,6 @@ def note_surrounding_namespace_starts_here : Note<
   "surrounding namespace with visibility attribute starts here">;
 def err_pragma_loop_invalid_value : Error<
   "invalid argument; expected a positive integer value">;
-def err_pragma_loop_invalid_keyword : Error<
-  "invalid argument; expected 'enable' or 'disable'">;
 def err_pragma_loop_compatibility : Error<
   "%select{incompatible|duplicate}0 directives '%1' and '%2'">;
 def err_pragma_loop_precedes_nonloop : Error<
@@ -563,12 +564,15 @@ def err_protocol_has_circular_dependency : Error<
   "protocol has circular dependency">;
 def err_undeclared_protocol : Error<"cannot find protocol declaration for %0">;
 def warn_undef_protocolref : Warning<"cannot find protocol definition for %0">;
+def warn_atprotocol_protocol : Warning<
+  "@protocol is using a forward protocol declaration of %0">, InGroup<AtProtocol>;
 def warn_readonly_property : Warning<
   "attribute 'readonly' of property %0 restricts attribute "
   "'readwrite' of property inherited from %1">;
 
 def warn_property_attribute : Warning<
-  "'%1' attribute on property %0 does not match the property inherited from %2">;
+  "'%1' attribute on property %0 does not match the property inherited from %2">,
+  InGroup<PropertyAttr>;
 def warn_property_types_are_incompatible : Warning<
   "property type %0 is incompatible with type %1 inherited from %2">;
 def warn_protocol_property_mismatch : Warning<
@@ -738,7 +742,8 @@ def warn_objc_property_default_assign_on_object : Warning<
   "default property attribute 'assign' not appropriate for non-GC object">,
   InGroup<ObjCPropertyNoAttribute>;
 def warn_property_attr_mismatch : Warning<
-  "property attribute in class extension does not match the primary class">;
+  "property attribute in class extension does not match the primary class">,
+  InGroup<PropertyAttr>;
 def warn_property_implicitly_mismatched : Warning <
   "primary property declaration is implicitly strong while redeclaration "
   "in class extension is weak">,
@@ -777,6 +782,10 @@ def warn_no_autosynthesis_property : Warning<
   "auto property synthesis will not synthesize property "
   "%0 because it is 'readwrite' but it will be synthesized 'readonly' "
   "via another property">,
+  InGroup<ObjCNoPropertyAutoSynthesis>;
+def warn_autosynthesis_property_in_superclass : Warning<
+  "auto property synthesis will not synthesize property "
+  "%0 because it will be implemented by its superclass">,
   InGroup<ObjCNoPropertyAutoSynthesis>;
 def warn_autosynthesis_property_ivar_match :Warning<
   "autosynthesized property %0 will use %select{|synthesized}1 instance variable "
@@ -1940,6 +1949,10 @@ def err_attribute_invalid_implicit_this_argument : Error<
   "%0 attribute is invalid for the implicit this argument">;
 def err_ownership_type : Error<
   "%0 attribute only applies to %select{pointer|integer}1 arguments">;
+def err_ownership_returns_index_mismatch : Error<
+  "'ownership_returns' attribute index does not match; here it is %0">;
+def note_ownership_returns_index_mismatch : Note<
+  "declared with index %0 here">;
 def err_format_strftime_third_parameter : Error<
   "strftime format attribute requires 3rd parameter to be 0">;
 def err_format_attribute_requires_variadic : Error<
@@ -5203,7 +5216,9 @@ def err_address_space_qualified_delete : Error<
 
 def err_default_init_const : Error<
   "default initialization of an object of const type %0"
-  "%select{| requires a user-provided default constructor}1">;
+  "%select{| without a user-provided default constructor}1">;
+def note_add_initializer : Note<
+  "add an explicit initializer to initialize %0">;
 def err_delete_operand : Error<"cannot delete expression of type %0">;
 def ext_delete_void_ptr_operand : ExtWarn<
   "cannot delete expression with pointer-to-'void' type %0">;
@@ -7123,9 +7138,12 @@ def err_omp_reduction_id_not_compatible : Error<
   "variable of type %0 is not valid for specified reduction operation">;
 def err_omp_prohibited_region : Error<
   "region cannot be%select{| closely}0 nested inside '%1' region"
-  "%select{|; perhaps you forget to enclose 'omp %3' directive into a parallel region?}2">;
+  "%select{|; perhaps you forget to enclose 'omp %3' directive into a parallel region?|"
+  "; perhaps you forget to enclose 'omp %3' directive into a for or a parallel for region with 'ordered' clause?}2">;
 def err_omp_prohibited_region_simd : Error<
   "OpenMP constructs may not be nested inside a simd region">;
+def err_omp_prohibited_region_atomic : Error<
+  "OpenMP constructs may not be nested inside an atomic region">;
 def err_omp_prohibited_region_critical_same_name : Error<
   "cannot nest 'critical' regions having the same name %0">;
 def note_omp_previous_critical_region : Note<
@@ -7143,6 +7161,27 @@ def err_omp_parallel_sections_substmt_not_section : Error<
   "statement in 'omp parallel sections' directive must be enclosed into a section region">;
 def err_omp_parallel_reduction_in_task_firstprivate : Error<
   "argument of a reduction clause of a %0 construct must not appear in a firstprivate clause on a task construct">;
+def err_omp_atomic_read_not_expression_statement : Error<
+  "the statement for 'atomic read' must be an expression statement of form 'v = x;',"
+  " where v and x are both l-value expressions with scalar type">;
+def err_omp_atomic_write_not_expression_statement : Error<
+  "the statement for 'atomic write' must be an expression statement of form 'x = expr;',"
+  " where x is an l-value expression with scalar type">;
+def err_omp_atomic_update_not_expression_statement : Error<
+  "the statement for 'atomic%select{| update}0' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
+  " where x is an l-value expression with scalar type">;
+def err_omp_atomic_capture_not_expression_statement : Error<
+  "the statement for 'atomic capture' must be an expression statement of form 'v = ++x;', 'v = --x;', 'v = x++;', 'v = x--;', 'v = x binop= expr;', 'v = x = x binop expr' or 'v = x = expr binop x',"
+  " where x and v are both l-value expressions with scalar type">;
+def err_omp_atomic_capture_not_compound_statement : Error<
+  "the statement for 'atomic capture' must be a compound statement of form '{v = x; x binop= expr;}', '{x binop= expr; v = x;}',"
+  " '{v = x; x = x binop expr;}', '{v = x; x = expr binop x;}', '{x = x binop expr; v = x;}', '{x = expr binop x; v = x;}' or '{v = x; x = expr;}',"
+  " '{v = x; x++;}', '{v = x; ++x;}', '{++x; v = x;}', '{x++; v = x;}', '{v = x; x--;}', '{v = x; --x;}', '{--x; v = x;}', '{x--; v = x;}'"
+  " where x is an l-value expression with scalar type">;
+def err_omp_atomic_several_clauses : Error<
+  "directive '#pragma omp atomic' cannot contain more than one 'read', 'write', 'update' or 'capture' clause">;
+def note_omp_atomic_previous_clause : Note<
+  "'%0' clause used here">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {
@@ -7194,6 +7233,8 @@ def err_module_import_not_at_top_level : Error<
 def note_module_import_not_at_top_level : Note<"%0 begins here">;
 def err_module_self_import : Error<
   "import of module '%0' appears within same top-level module '%1'">;
+def err_module_import_in_implementation : Error<
+  "@import of module '%0' in implementation of '%1'; use #import">;
 }
 
 let CategoryName = "Documentation Issue" in {

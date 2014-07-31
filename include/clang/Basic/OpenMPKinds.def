@@ -45,6 +45,9 @@
 #ifndef OPENMP_TASK_CLAUSE
 #  define OPENMP_TASK_CLAUSE(Name)
 #endif
+#ifndef OPENMP_ATOMIC_CLAUSE
+#  define OPENMP_ATOMIC_CLAUSE(Name)
+#endif
 #ifndef OPENMP_DEFAULT_KIND
 #  define OPENMP_DEFAULT_KIND(Name)
 #endif
@@ -70,6 +73,8 @@ OPENMP_DIRECTIVE(taskyield)
 OPENMP_DIRECTIVE(barrier)
 OPENMP_DIRECTIVE(taskwait)
 OPENMP_DIRECTIVE(flush)
+OPENMP_DIRECTIVE(ordered)
+OPENMP_DIRECTIVE(atomic)
 OPENMP_DIRECTIVE_EXT(parallel_for, "parallel for")
 OPENMP_DIRECTIVE_EXT(parallel_sections, "parallel sections")
 
@@ -96,6 +101,11 @@ OPENMP_CLAUSE(nowait, OMPNowaitClause)
 OPENMP_CLAUSE(untied, OMPUntiedClause)
 OPENMP_CLAUSE(mergeable, OMPMergeableClause)
 OPENMP_CLAUSE(flush, OMPFlushClause)
+OPENMP_CLAUSE(read, OMPReadClause)
+OPENMP_CLAUSE(write, OMPWriteClause)
+OPENMP_CLAUSE(update, OMPUpdateClause)
+OPENMP_CLAUSE(capture, OMPCaptureClause)
+OPENMP_CLAUSE(seq_cst, OMPSeqCstClause)
 
 // Clauses allowed for OpenMP directive 'parallel'.
 OPENMP_PARALLEL_CLAUSE(if)
@@ -193,6 +203,13 @@ OPENMP_TASK_CLAUSE(shared)
 OPENMP_TASK_CLAUSE(untied)
 OPENMP_TASK_CLAUSE(mergeable)
 
+// Clauses allowed for OpenMP directive 'atomic'.
+OPENMP_ATOMIC_CLAUSE(read)
+OPENMP_ATOMIC_CLAUSE(write)
+OPENMP_ATOMIC_CLAUSE(update)
+OPENMP_ATOMIC_CLAUSE(capture)
+OPENMP_ATOMIC_CLAUSE(seq_cst)
+
 #undef OPENMP_SCHEDULE_KIND
 #undef OPENMP_PROC_BIND_KIND
 #undef OPENMP_DEFAULT_KIND
@@ -205,6 +222,7 @@ OPENMP_TASK_CLAUSE(mergeable)
 #undef OPENMP_PARALLEL_FOR_CLAUSE
 #undef OPENMP_PARALLEL_SECTIONS_CLAUSE
 #undef OPENMP_TASK_CLAUSE
+#undef OPENMP_ATOMIC_CLAUSE
 #undef OPENMP_SIMD_CLAUSE
 #undef OPENMP_FOR_CLAUSE
 

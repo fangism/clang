@@ -635,6 +635,10 @@ ASTStmtWriter::VisitBinaryConditionalOperator(BinaryConditionalOperator *E) {
 
 void ASTStmtWriter::VisitImplicitCastExpr(ImplicitCastExpr *E) {
   VisitCastExpr(E);
+
+  if (E->path_size() == 0)
+    AbbrevToUse = Writer.getExprImplicitCastAbbrev();
+
   Code = serialization::EXPR_IMPLICIT_CAST;
 }
 
@@ -1735,6 +1739,16 @@ void OMPClauseWriter::VisitOMPUntiedClause(OMPUntiedClause *) {}
 
 void OMPClauseWriter::VisitOMPMergeableClause(OMPMergeableClause *) {}
 
+void OMPClauseWriter::VisitOMPReadClause(OMPReadClause *) {}
+
+void OMPClauseWriter::VisitOMPWriteClause(OMPWriteClause *) {}
+
+void OMPClauseWriter::VisitOMPUpdateClause(OMPUpdateClause *) {}
+
+void OMPClauseWriter::VisitOMPCaptureClause(OMPCaptureClause *) {}
+
+void OMPClauseWriter::VisitOMPSeqCstClause(OMPSeqCstClause *) {}
+
 void OMPClauseWriter::VisitOMPPrivateClause(OMPPrivateClause *C) {
   Record.push_back(C->varlist_size());
   Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
@@ -1905,6 +1919,13 @@ void ASTStmtWriter::VisitOMPTaskDirective(OMPTaskDirective *D) {
   Code = serialization::STMT_OMP_TASK_DIRECTIVE;
 }
 
+void ASTStmtWriter::VisitOMPAtomicDirective(OMPAtomicDirective *D) {
+  VisitStmt(D);
+  Record.push_back(D->getNumClauses());
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_ATOMIC_DIRECTIVE;
+}
+
 void ASTStmtWriter::VisitOMPTaskyieldDirective(OMPTaskyieldDirective *D) {
   VisitStmt(D);
   VisitOMPExecutableDirective(D);
@@ -1928,6 +1949,12 @@ void ASTStmtWriter::VisitOMPFlushDirective(OMPFlushDirective *D) {
   Record.push_back(D->getNumClauses());
   VisitOMPExecutableDirective(D);
   Code = serialization::STMT_OMP_FLUSH_DIRECTIVE;
+}
+
+void ASTStmtWriter::VisitOMPOrderedDirective(OMPOrderedDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_ORDERED_DIRECTIVE;
 }
 
 //===----------------------------------------------------------------------===//

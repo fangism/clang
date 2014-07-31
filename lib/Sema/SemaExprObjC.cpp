@@ -1105,6 +1105,8 @@ ExprResult Sema::ParseObjCProtocolExpression(IdentifierInfo *ProtocolId,
     Diag(ProtoLoc, diag::err_undeclared_protocol) << ProtocolId;
     return true;
   }
+  if (PDecl->hasDefinition())
+    PDecl = PDecl->getDefinition();
 
   QualType Ty = Context.getObjCProtoType();
   if (Ty.isNull())
@@ -1400,7 +1402,7 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
 
     InitializedEntity Entity = InitializedEntity::InitializeParameter(Context,
                                                                       param);
-    ExprResult ArgE = PerformCopyInitialization(Entity, SelLoc, argExpr);
+    ExprResult ArgE = PerformCopyInitialization(Entity, SourceLocation(), argExpr);
     if (ArgE.isInvalid())
       IsError = true;
     else

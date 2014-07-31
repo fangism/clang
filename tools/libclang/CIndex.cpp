@@ -22,6 +22,7 @@
 #include "CXType.h"
 #include "CursorVisitor.h"
 #include "clang/AST/Attr.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticCategories.h"
@@ -1871,6 +1872,8 @@ public:
   void VisitOMPBarrierDirective(const OMPBarrierDirective *D);
   void VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *D);
   void VisitOMPFlushDirective(const OMPFlushDirective *D);
+  void VisitOMPOrderedDirective(const OMPOrderedDirective *D);
+  void VisitOMPAtomicDirective(const OMPAtomicDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -1978,6 +1981,16 @@ void OMPClauseEnqueue::VisitOMPNowaitClause(const OMPNowaitClause *) {}
 void OMPClauseEnqueue::VisitOMPUntiedClause(const OMPUntiedClause *) {}
 
 void OMPClauseEnqueue::VisitOMPMergeableClause(const OMPMergeableClause *) {}
+
+void OMPClauseEnqueue::VisitOMPReadClause(const OMPReadClause *) {}
+
+void OMPClauseEnqueue::VisitOMPWriteClause(const OMPWriteClause *) {}
+
+void OMPClauseEnqueue::VisitOMPUpdateClause(const OMPUpdateClause *) {}
+
+void OMPClauseEnqueue::VisitOMPCaptureClause(const OMPCaptureClause *) {}
+
+void OMPClauseEnqueue::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
 
 template<typename T>
 void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
@@ -2370,6 +2383,14 @@ void EnqueueVisitor::VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *D) {
 }
 
 void EnqueueVisitor::VisitOMPFlushDirective(const OMPFlushDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPOrderedDirective(const OMPOrderedDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPAtomicDirective(const OMPAtomicDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -3647,6 +3668,31 @@ CXSourceRange clang_Cursor_getSpellingNameRange(CXCursor C,
   return cxloc::translateSourceRange(Ctx, Loc);
 }
 
+CXString clang_Cursor_getMangling(CXCursor C) {
+  if (clang_isInvalid(C.kind) || !clang_isDeclaration(C.kind))
+    return cxstring::createEmpty();
+
+  const Decl *D = getCursorDecl(C);
+  // Mangling only works for functions and variables.
+  if (!D || !(isa<FunctionDecl>(D) || isa<VarDecl>(D)))
+    return cxstring::createEmpty();
+
+  const NamedDecl *ND = cast<NamedDecl>(D);
+  std::unique_ptr<MangleContext> MC(ND->getASTContext().createMangleContext());
+
+  std::string Buf;
+  llvm::raw_string_ostream OS(Buf);
+  MC->mangleName(ND, OS);
+  OS.flush();
+
+  // The Microsoft mangler may insert a special character in the beginning to
+  // prevent further mangling. We can strip that for display purposes.
+  if (Buf[0] == '\x01') {
+    Buf.erase(0, 1);
+  }
+  return cxstring::createDup(Buf);
+}
+
 CXString clang_getCursorDisplayName(CXCursor C) {
   if (!clang_isDeclaration(C.kind))
     return clang_getCursorSpelling(C);
@@ -4075,6 +4121,10 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTaskwaitDirective");
   case CXCursor_OMPFlushDirective:
     return cxstring::createRef("OMPFlushDirective");
+  case CXCursor_OMPOrderedDirective:
+    return cxstring::createRef("OMPOrderedDirective");
+  case CXCursor_OMPAtomicDirective:
+    return cxstring::createRef("OMPAtomicDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");

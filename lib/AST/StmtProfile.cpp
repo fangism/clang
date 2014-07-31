@@ -310,6 +310,16 @@ void OMPClauseProfiler::VisitOMPUntiedClause(const OMPUntiedClause *) {}
 
 void OMPClauseProfiler::VisitOMPMergeableClause(const OMPMergeableClause *) {}
 
+void OMPClauseProfiler::VisitOMPReadClause(const OMPReadClause *) {}
+
+void OMPClauseProfiler::VisitOMPWriteClause(const OMPWriteClause *) {}
+
+void OMPClauseProfiler::VisitOMPUpdateClause(const OMPUpdateClause *) {}
+
+void OMPClauseProfiler::VisitOMPCaptureClause(const OMPCaptureClause *) {}
+
+void OMPClauseProfiler::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
+
 template<typename T>
 void OMPClauseProfiler::VisitOMPClauseList(T *Node) {
   for (auto *I : Node->varlists())
@@ -428,6 +438,14 @@ void StmtProfiler::VisitOMPTaskwaitDirective(const OMPTaskwaitDirective *S) {
 }
 
 void StmtProfiler::VisitOMPFlushDirective(const OMPFlushDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPOrderedDirective(const OMPOrderedDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPAtomicDirective(const OMPAtomicDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 

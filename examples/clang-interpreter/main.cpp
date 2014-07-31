@@ -18,7 +18,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/JIT.h"
+#include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
@@ -42,12 +42,21 @@ std::string GetExecutablePath(const char *Argv0) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
+static llvm::ExecutionEngine *createExecutionEngine(llvm::Module *M,
+                                                    std::string *ErrorStr) {
+  llvm::EngineBuilder EB = llvm::EngineBuilder(M)
+                               .setUseMCJIT(true)
+                               .setEngineKind(llvm::EngineKind::Either)
+                               .setErrorStr(ErrorStr);
+  return EB.create();
+}
+
 static int Execute(llvm::Module *Mod, char * const *envp) {
   llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
 
   std::string Error;
-  std::unique_ptr<llvm::ExecutionEngine> EE(
-      llvm::ExecutionEngine::create(Mod, /*ForceInterpreter*/ false, &Error));
+  std::unique_ptr<llvm::ExecutionEngine> EE(createExecutionEngine(Mod, &Error));
   if (!EE) {
     llvm::errs() << "unable to make execution engine: " << Error << "\n";
     return 255;
@@ -63,6 +72,7 @@ static int Execute(llvm::Module *Mod, char * const *envp) {
   std::vector<std::string> Args;
   Args.push_back(Mod->getModuleIdentifier());
 
+  EE->finalizeObject();
   return EE->runFunctionAsMain(EntryFn, Args, envp);
 }
 
@@ -75,7 +85,14 @@ int main(int argc, const char **argv, char * const *envp) {
 
   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
   DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagClient);
-  Driver TheDriver(Path, llvm::sys::getProcessTriple(), Diags);
+
+  // Use ELF on windows for now.
+  std::string TripleStr = llvm::sys::getProcessTriple();
+  llvm::Triple T(TripleStr);
+  if (T.isOSBinFormatCOFF())
+    T.setObjectFormat(llvm::Triple::ELF);
+
+  Driver TheDriver(Path, T.str(), Diags);
   TheDriver.setTitle("clang interpreter");
   TheDriver.setCheckInputsExist(false);
 

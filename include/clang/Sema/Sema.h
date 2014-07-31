@@ -3169,9 +3169,9 @@ public:
 
   StmtResult ActOnSEHTryBlock(bool IsCXXTry, // try (true) or __try (false) ?
                               SourceLocation TryLoc, Stmt *TryBlock,
-                              Stmt *Handler, int HandlerIndex,
-                              int HandlerParentIndex);
-  StmtResult ActOnSEHExceptBlock(SourceLocation Loc, Expr *FilterExpr,
+                              Stmt *Handler);
+  StmtResult ActOnSEHExceptBlock(SourceLocation Loc,
+                                 Expr *FilterExpr,
                                  Stmt *Block);
   StmtResult ActOnSEHFinallyBlock(SourceLocation Loc, Stmt *Block);
   StmtResult ActOnSEHLeaveStmt(SourceLocation Loc, Scope *CurScope);
@@ -7395,6 +7395,15 @@ public:
   StmtResult ActOnOpenMPFlushDirective(ArrayRef<OMPClause *> Clauses,
                                        SourceLocation StartLoc,
                                        SourceLocation EndLoc);
+  /// \brief Called on well-formed '\#pragma omp ordered' after parsing of the
+  /// associated statement.
+  StmtResult ActOnOpenMPOrderedDirective(Stmt *AStmt, SourceLocation StartLoc,
+                                         SourceLocation EndLoc);
+  /// \brief Called on well-formed '\#pragma omp atomic' after parsing of the
+  /// associated statement.
+  StmtResult ActOnOpenMPAtomicDirective(ArrayRef<OMPClause *> Clauses,
+                                        Stmt *AStmt, SourceLocation StartLoc,
+                                        SourceLocation EndLoc);
 
   OMPClause *ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind,
                                          Expr *Expr,
@@ -7473,6 +7482,21 @@ public:
   /// \brief Called on well-formed 'mergeable' clause.
   OMPClause *ActOnOpenMPMergeableClause(SourceLocation StartLoc,
                                         SourceLocation EndLoc);
+  /// \brief Called on well-formed 'read' clause.
+  OMPClause *ActOnOpenMPReadClause(SourceLocation StartLoc,
+                                   SourceLocation EndLoc);
+  /// \brief Called on well-formed 'write' clause.
+  OMPClause *ActOnOpenMPWriteClause(SourceLocation StartLoc,
+                                    SourceLocation EndLoc);
+  /// \brief Called on well-formed 'update' clause.
+  OMPClause *ActOnOpenMPUpdateClause(SourceLocation StartLoc,
+                                     SourceLocation EndLoc);
+  /// \brief Called on well-formed 'capture' clause.
+  OMPClause *ActOnOpenMPCaptureClause(SourceLocation StartLoc,
+                                      SourceLocation EndLoc);
+  /// \brief Called on well-formed 'seq_cst' clause.
+  OMPClause *ActOnOpenMPSeqCstClause(SourceLocation StartLoc,
+                                     SourceLocation EndLoc);
 
   OMPClause *
   ActOnOpenMPVarListClause(OpenMPClauseKind Kind, ArrayRef<Expr *> Vars,

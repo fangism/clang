@@ -665,6 +665,22 @@ void OMPClausePrinter::VisitOMPMergeableClause(OMPMergeableClause *) {
   OS << "mergeable";
 }
 
+void OMPClausePrinter::VisitOMPReadClause(OMPReadClause *) { OS << "read"; }
+
+void OMPClausePrinter::VisitOMPWriteClause(OMPWriteClause *) { OS << "write"; }
+
+void OMPClausePrinter::VisitOMPUpdateClause(OMPUpdateClause *) {
+  OS << "update";
+}
+
+void OMPClausePrinter::VisitOMPCaptureClause(OMPCaptureClause *) {
+  OS << "capture";
+}
+
+void OMPClausePrinter::VisitOMPSeqCstClause(OMPSeqCstClause *) {
+  OS << "seq_cst";
+}
+
 template<typename T>
 void OMPClausePrinter::VisitOMPClauseList(T *Node, char StartSym) {
   for (typename T::varlist_iterator I = Node->varlist_begin(),
@@ -883,6 +899,16 @@ void StmtPrinter::VisitOMPTaskwaitDirective(OMPTaskwaitDirective *Node) {
 
 void StmtPrinter::VisitOMPFlushDirective(OMPFlushDirective *Node) {
   Indent() << "#pragma omp flush ";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPOrderedDirective(OMPOrderedDirective *Node) {
+  Indent() << "#pragma omp ordered";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPAtomicDirective(OMPAtomicDirective *Node) {
+  Indent() << "#pragma omp atomic ";
   PrintOMPExecutableDirective(Node);
 }
 

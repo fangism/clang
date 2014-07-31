@@ -63,6 +63,8 @@ template<> struct MergeSpecializations<double> {
   typedef int explicitly_specialized_in_b;
 };
 
+template<typename U> using AliasTemplate = U;
+
 @import cxx_templates_a;
 template<typename T> void UseDefinedInBImplIndirectly(T &v) {
   PerformDelayedLookup(v);
@@ -71,4 +73,5 @@ template<typename T> void UseDefinedInBImplIndirectly(T &v) {
 void TriggerInstantiation() {
   UseDefinedInBImpl<void>();
   Std::f<int>();
+  PartiallyInstantiatePartialSpec<int*>::foo();
 }

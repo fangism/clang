@@ -1846,6 +1846,7 @@ TEST_F(FormatTest, FormatsClasses) {
   verifyFormat("template <class R, class C>\n"
                "struct Aaaaaaaaaaaaaaaaa<R (C::*)(int) const>\n"
                "    : Aaaaaaaaaaaaaaaaa<R (C::*)(int)> {};");
+  verifyFormat("class ::A::B {};");
 }
 
 TEST_F(FormatTest, FormatsVariableDeclarationsAfterStructOrClass) {
@@ -3513,6 +3514,7 @@ TEST_F(FormatTest, BreaksFunctionDeclarationsWithTrailingTokens) {
                "    LOCKS_EXCLUDED(aaaaaaaaaaaaa) {}");
   verifyGoogleFormat("void aaaaaaaaaaaaaa(aaaaaaaa aaa) override\n"
                      "    AAAAAAAAAAAAAAAAAAAAAAAA(aaaaaaaaaaaaaaa);");
+  verifyFormat("SomeFunction([](int i) LOCKS_EXCLUDED(a) {});");
 
   verifyFormat(
       "void aaaaaaaaaaaaaaaaaa()\n"
@@ -4079,13 +4081,13 @@ TEST_F(FormatTest, DeclarationsOfMultipleVariables) {
   // line. Also fix indent for breaking after the type, this looks bad.
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa*\n"
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa = aaaaaaaaaaaaaaaaaaa,\n"
-               "    *b = bbbbbbbbbbbbbbbbbbb;",
+               "    * b = bbbbbbbbbbbbbbbbbbb;",
                getGoogleStyle());
 
   // Not ideal, but pointer-with-type does not allow much here.
   verifyGoogleFormat(
-      "aaaaaaaaa* a = aaaaaaaaaaaaaaaaaaa, *b = bbbbbbbbbbbbbbbbbbb,\n"
-      "           *b = bbbbbbbbbbbbbbbbbbb, *d = ddddddddddddddddddd;");
+      "aaaaaaaaa* a = aaaaaaaaaaaaaaaaaaa, * b = bbbbbbbbbbbbbbbbbbb,\n"
+      "           * b = bbbbbbbbbbbbbbbbbbb, * d = ddddddddddddddddddd;");
 }
 
 TEST_F(FormatTest, ConditionalExpressionsInBrackets) {
@@ -4577,6 +4579,7 @@ TEST_F(FormatTest, UnderstandsTemplateParameters) {
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa >> aaaaa);",
                getLLVMStyleWithColumns(60));
+  verifyFormat("static_assert(is_convertible<A &&, B>::value, \"AAA\");");
 }
 
 TEST_F(FormatTest, UnderstandsBinaryOperators) {
@@ -4712,6 +4715,8 @@ TEST_F(FormatTest, UnderstandsNewAndDelete) {
                "  delete a;\n"
                "  delete (A *)a;\n"
                "}");
+  verifyFormat("new (aaaaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaa))\n"
+               "    typename aaaaaaaaaaaaaaaaaaaaaaaa();");
 }
 
 TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
@@ -4765,6 +4770,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyIndependentOfContext("typedef void (*f)(int *a);");
   verifyIndependentOfContext("int i{a * b};");
   verifyIndependentOfContext("aaa && aaa->f();");
+  verifyIndependentOfContext("int x = ~*p;");
 
   verifyIndependentOfContext("InvalidRegions[*R] = 0;");
 
@@ -4798,6 +4804,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyGoogleFormat("Type* t = x++ * y;");
   verifyGoogleFormat(
       "const char* const p = reinterpret_cast<const char* const>(q);");
+  verifyGoogleFormat("void f(int i = 0, SomeType** temps = NULL);");
 
   verifyIndependentOfContext("a = *(x + y);");
   verifyIndependentOfContext("a = &(x + y);");
@@ -4880,7 +4887,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
 
   // FIXME: We cannot handle this case yet; we might be able to figure out that
   // foo<x> d > v; doesn't make sense.
-  verifyFormat("foo<a < b && c> d > v;");
+  verifyFormat("foo<a<b && c> d> v;");
 
   FormatStyle PointerMiddle = getLLVMStyle();
   PointerMiddle.PointerAlignment = FormatStyle::PAS_Middle;

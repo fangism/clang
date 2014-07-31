@@ -1715,6 +1715,21 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_mergeable:
     C = new (Context) OMPMergeableClause();
     break;
+  case OMPC_read:
+    C = new (Context) OMPReadClause();
+    break;
+  case OMPC_write:
+    C = new (Context) OMPWriteClause();
+    break;
+  case OMPC_update:
+    C = new (Context) OMPUpdateClause();
+    break;
+  case OMPC_capture:
+    C = new (Context) OMPCaptureClause();
+    break;
+  case OMPC_seq_cst:
+    C = new (Context) OMPSeqCstClause();
+    break;
   case OMPC_private:
     C = OMPPrivateClause::CreateEmpty(Context, Record[Idx++]);
     break;
@@ -1808,6 +1823,16 @@ void OMPClauseReader::VisitOMPNowaitClause(OMPNowaitClause *) {}
 void OMPClauseReader::VisitOMPUntiedClause(OMPUntiedClause *) {}
 
 void OMPClauseReader::VisitOMPMergeableClause(OMPMergeableClause *) {}
+
+void OMPClauseReader::VisitOMPReadClause(OMPReadClause *) {}
+
+void OMPClauseReader::VisitOMPWriteClause(OMPWriteClause *) {}
+
+void OMPClauseReader::VisitOMPUpdateClause(OMPUpdateClause *) {}
+
+void OMPClauseReader::VisitOMPCaptureClause(OMPCaptureClause *) {}
+
+void OMPClauseReader::VisitOMPSeqCstClause(OMPSeqCstClause *) {}
 
 void OMPClauseReader::VisitOMPPrivateClause(OMPPrivateClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
@@ -2025,6 +2050,18 @@ void ASTStmtReader::VisitOMPTaskwaitDirective(OMPTaskwaitDirective *D) {
 }
 
 void ASTStmtReader::VisitOMPFlushDirective(OMPFlushDirective *D) {
+  VisitStmt(D);
+  // The NumClauses field was read in ReadStmtFromStream.
+  ++Idx;
+  VisitOMPExecutableDirective(D);
+}
+
+void ASTStmtReader::VisitOMPOrderedDirective(OMPOrderedDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+}
+
+void ASTStmtReader::VisitOMPAtomicDirective(OMPAtomicDirective *D) {
   VisitStmt(D);
   // The NumClauses field was read in ReadStmtFromStream.
   ++Idx;
@@ -2583,6 +2620,15 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case STMT_OMP_FLUSH_DIRECTIVE:
       S = OMPFlushDirective::CreateEmpty(
+          Context, Record[ASTStmtReader::NumStmtFields], Empty);
+      break;
+
+    case STMT_OMP_ORDERED_DIRECTIVE:
+      S = OMPOrderedDirective::CreateEmpty(Context, Empty);
+      break;
+
+    case STMT_OMP_ATOMIC_DIRECTIVE:
+      S = OMPAtomicDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 

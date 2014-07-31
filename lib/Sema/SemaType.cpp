@@ -4564,23 +4564,12 @@ static bool handleFunctionTypeAttr(TypeProcessingState &state,
     }
   }
 
-  // Diagnose the use of X86 fastcall on unprototyped functions.
-  if (CC == CC_X86FastCall) {
-    if (isa<FunctionNoProtoType>(fn)) {
-      S.Diag(attr.getLoc(), diag::err_cconv_knr)
-        << FunctionType::getNameForCallConv(CC);
-      attr.setInvalid();
-      return true;
-    }
-
-    // Also diagnose fastcall with regparm.
-    if (fn->getHasRegParm()) {
-      S.Diag(attr.getLoc(), diag::err_attributes_are_not_compatible)
-        << "regparm"
-        << FunctionType::getNameForCallConv(CC);
-      attr.setInvalid();
-      return true;
-    }
+  // Also diagnose fastcall with regparm.
+  if (CC == CC_X86FastCall && fn->getHasRegParm()) {
+    S.Diag(attr.getLoc(), diag::err_attributes_are_not_compatible)
+        << "regparm" << FunctionType::getNameForCallConv(CC_X86FastCall);
+    attr.setInvalid();
+    return true;
   }
 
   // Modify the CC from the wrapped function type, wrap it all back, and then
@@ -4739,9 +4728,7 @@ static bool isPermittedNeonBaseType(QualType &Ty,
   // Signed poly is mathematically wrong, but has been baked into some ABIs by
   // now.
   bool IsPolyUnsigned = Triple.getArch() == llvm::Triple::aarch64 ||
-                        Triple.getArch() == llvm::Triple::aarch64_be ||
-                        Triple.getArch() == llvm::Triple::arm64 ||
-                        Triple.getArch() == llvm::Triple::arm64_be;
+                        Triple.getArch() == llvm::Triple::aarch64_be;
   if (VecKind == VectorType::NeonPolyVector) {
     if (IsPolyUnsigned) {
       // AArch64 polynomial vectors are unsigned and support poly64.
@@ -4759,9 +4746,7 @@ static bool isPermittedNeonBaseType(QualType &Ty,
   // Non-polynomial vector types: the usual suspects are allowed, as well as
   // float64_t on AArch64.
   bool Is64Bit = Triple.getArch() == llvm::Triple::aarch64 ||
-                 Triple.getArch() == llvm::Triple::aarch64_be ||
-                 Triple.getArch() == llvm::Triple::arm64 ||
-                 Triple.getArch() == llvm::Triple::arm64_be;
+                 Triple.getArch() == llvm::Triple::aarch64_be;
 
   if (Is64Bit && BTy->getKind() == BuiltinType::Double)
     return true;

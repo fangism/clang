@@ -221,6 +221,12 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::OMPFlushDirectiveClass:
     EmitOMPFlushDirective(cast<OMPFlushDirective>(*S));
     break;
+  case Stmt::OMPOrderedDirectiveClass:
+    EmitOMPOrderedDirective(cast<OMPOrderedDirective>(*S));
+    break;
+  case Stmt::OMPAtomicDirectiveClass:
+    EmitOMPAtomicDirective(cast<OMPAtomicDirective>(*S));
+    break;
   }
 }
 
@@ -582,6 +588,7 @@ void CodeGenFunction::EmitCondBrHints(llvm::LLVMContext &Context,
       continue;
 
     LoopHintAttr::OptionType Option = LH->getOption();
+    LoopHintAttr::LoopHintState State = LH->getState();
     int ValueInt = LH->getValue();
 
     const char *MetadataName;
@@ -595,19 +602,20 @@ void CodeGenFunction::EmitCondBrHints(llvm::LLVMContext &Context,
       MetadataName = "llvm.loop.interleave.count";
       break;
     case LoopHintAttr::Unroll:
-      MetadataName = "llvm.loop.unroll.enable";
+      // With the unroll loop hint, a non-zero value indicates full unrolling.
+      MetadataName = State == LoopHintAttr::Disable ? "llvm.loop.unroll.disable"
+                                                    : "llvm.loop.unroll.full";
       break;
     case LoopHintAttr::UnrollCount:
       MetadataName = "llvm.loop.unroll.count";
       break;
     }
-
     llvm::Value *Value;
     llvm::MDString *Name;
     switch (Option) {
     case LoopHintAttr::Vectorize:
     case LoopHintAttr::Interleave:
-      if (ValueInt == 1) {
+      if (State != LoopHintAttr::Disable) {
         // FIXME: In the future I will modifiy the behavior of the metadata
         // so we can enable/disable vectorization and interleaving separately.
         Name = llvm::MDString::get(Context, "llvm.loop.vectorize.enable");
@@ -619,22 +627,20 @@ void CodeGenFunction::EmitCondBrHints(llvm::LLVMContext &Context,
       // Fallthrough.
     case LoopHintAttr::VectorizeWidth:
     case LoopHintAttr::InterleaveCount:
+    case LoopHintAttr::UnrollCount:
       Name = llvm::MDString::get(Context, MetadataName);
       Value = llvm::ConstantInt::get(Int32Ty, ValueInt);
       break;
     case LoopHintAttr::Unroll:
       Name = llvm::MDString::get(Context, MetadataName);
-      Value = (ValueInt == 0) ? Builder.getFalse() : Builder.getTrue();
-      break;
-    case LoopHintAttr::UnrollCount:
-      Name = llvm::MDString::get(Context, MetadataName);
-      Value = llvm::ConstantInt::get(Int32Ty, ValueInt);
+      Value = nullptr;
       break;
     }
 
     SmallVector<llvm::Value *, 2> OpValues;
     OpValues.push_back(Name);
-    OpValues.push_back(Value);
+    if (Value)
+      OpValues.push_back(Value);
 
     // Set or overwrite metadata indicated by Name.
     Metadata.push_back(llvm::MDNode::get(Context, OpValues));
@@ -2018,10 +2024,15 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
                        llvm::Attribute::NoUnwind);
 
   // Slap the source location of the inline asm into a !srcloc metadata on the
-  // call.  FIXME: Handle metadata for MS-style inline asms.
-  if (const GCCAsmStmt *gccAsmStmt = dyn_cast<GCCAsmStmt>(&S))
+  // call.
+  if (const GCCAsmStmt *gccAsmStmt = dyn_cast<GCCAsmStmt>(&S)) {
     Result->setMetadata("srcloc", getAsmSrcLocInfo(gccAsmStmt->getAsmString(),
                                                    *this));
+  } else {
+    // At least put the line number on MS inline asm blobs.
+    auto Loc = llvm::ConstantInt::get(Int32Ty, S.getAsmLoc().getRawEncoding());
+    Result->setMetadata("srcloc", llvm::MDNode::get(getLLVMContext(), Loc));
+  }
 
   // Extract all of the register value results from the asm.
   std::vector<llvm::Value*> RegResults;
