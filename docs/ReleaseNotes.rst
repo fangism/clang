@@ -100,7 +100,8 @@ passes via three new flags: `-Rpass`, `-Rpass-missed` and `-Rpass-analysis`.
 These flags take a POSIX regular expression which indicates the name
 of the pass (or passes) that should emit optimization remarks.
 
-The option `-u` is forwarded to the linker on gnutools toolchains.
+Options `-u` and `-z` are forwarded to the linker on gnutools toolchains.
+
 
 New Pragmas in Clang
 -----------------------
@@ -164,6 +165,16 @@ libclang
 
 Static Analyzer
 ---------------
+
+Check for code testing a variable for 0 after using it as a denominator.
+This new checker, alpha.core.TestAfterDivZero, catches issues like this:
+
+.. code:: c
+
+  int sum = ...
+  int avg = sum / count; // potential division by zero...
+  if (count == 0) { ... } // ...caught here
+
 
 The `-analyzer-config` options are now passed from scan-build through to
 ccc-analyzer and then to Clang.
