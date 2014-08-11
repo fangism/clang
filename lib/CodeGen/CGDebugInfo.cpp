@@ -1193,11 +1193,18 @@ CollectCXXBases(const CXXRecordDecl *RD, llvm::DIFile Unit,
       cast<CXXRecordDecl>(BI.getType()->getAs<RecordType>()->getDecl());
 
     if (BI.isVirtual()) {
-      // virtual base offset offset is -ve. The code generator emits dwarf
-      // expression where it expects +ve number.
-      BaseOffset =
-        0 - CGM.getItaniumVTableContext()
-               .getVirtualBaseOffsetOffset(RD, Base).getQuantity();
+      if (CGM.getTarget().getCXXABI().isItaniumFamily()) {
+        // virtual base offset offset is -ve. The code generator emits dwarf
+        // expression where it expects +ve number.
+        BaseOffset =
+          0 - CGM.getItaniumVTableContext()
+                 .getVirtualBaseOffsetOffset(RD, Base).getQuantity();
+      } else {
+        // In the MS ABI, store the vbtable offset, which is analogous to the
+        // vbase offset offset in Itanium.
+        BaseOffset =
+            4 * CGM.getMicrosoftVTableContext().getVBTableIndex(RD, Base);
+      }
       BFlags = llvm::DIDescriptor::FlagVirtual;
     } else
       BaseOffset = CGM.getContext().toBits(RL.getBaseClassOffset(Base));
@@ -2940,6 +2947,7 @@ namespace {
 
 void CGDebugInfo::EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
                                                        llvm::Value *Arg,
+                                                       unsigned ArgNo,
                                                        llvm::Value *LocalAddr,
                                                        CGBuilderTy &Builder) {
   assert(DebugKind >= CodeGenOptions::LimitedDebugInfo);
@@ -3071,7 +3079,7 @@ void CGDebugInfo::EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
                                  llvm::DIDescriptor(scope),
                                  Arg->getName(), tunit, line, type,
                                  CGM.getLangOpts().Optimize, flags,
-                                 cast<llvm::Argument>(Arg)->getArgNo() + 1);
+                                 ArgNo);
 
   if (LocalAddr) {
     // Insert an llvm.dbg.value into the current block.

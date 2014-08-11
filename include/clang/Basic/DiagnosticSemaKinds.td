@@ -2007,6 +2007,8 @@ def err_undeclared_nsarray : Error<
 def err_undeclared_nsdictionary : Error<
   "NSDictionary must be available to use Objective-C dictionary "
   "literals">;
+def err_undeclared_alloc : Error<
+  "alloc must be available to use Objective-C literals">;
 def err_undeclared_boxing_method : Error<
   "declaration of %0 is missing in %1 class">;
 def err_objc_literal_method_sig : Error<
@@ -2316,6 +2318,11 @@ def warn_fun_excludes_mutex : Warning<
 def warn_cannot_resolve_lock : Warning<
   "cannot resolve lock expression">,
   InGroup<ThreadSafetyAnalysis>, DefaultIgnore;
+
+// Thread safety warnings negative capabilities
+def warn_acquire_requires_negative_cap : Warning<
+  "acquiring %0 '%1' requires negative capability '%2'">,
+  InGroup<ThreadSafetyNegative>, DefaultIgnore;
 
 // Imprecise thread safety warnings
 def warn_variable_requires_lock : Warning<
@@ -6142,8 +6149,9 @@ def err_anonymous_record_bad_member : Error<
 def err_anonymous_record_nonpublic_member : Error<
   "anonymous %select{struct|union}0 cannot contain a "
   "%select{private|protected}1 data member">;
-def ext_ms_anonymous_struct : ExtWarn<
-  "anonymous structs are a Microsoft extension">, InGroup<Microsoft>;
+def ext_ms_anonymous_record : ExtWarn<
+  "anonymous %select{structs|unions}0 are a Microsoft extension">,
+  InGroup<Microsoft>;
 
 // C++ local classes
 def err_reference_to_local_var_in_enclosing_function : Error<
@@ -6903,6 +6911,9 @@ def err_property_not_found_suggest : Error<
   "property %0 not found on object of type %1; did you mean %2?">;
 def err_ivar_access_using_property_syntax_suggest : Error<
   "property %0 not found on object of type %1; did you mean to access instance variable %2?">;
+def warn_property_access_suggest : Warning<
+"property %0 not found on object of type %1; did you mean to access property %2?">,
+InGroup<PropertyAccessDotSyntax>;
 def err_property_found_suggest : Error<
   "property %0 found on object of type %1; did you mean to access "
   "it with the \".\" operator?">;

@@ -2489,15 +2489,18 @@ ASTReader::ReadControlBlock(ModuleFile &F,
           return Missing;
         }
 
+        HeaderSearch &HS = PP.getHeaderSearchInfo();
         const FileEntry *StoredModMap = FileMgr.getFile(F.ModuleMapPath);
-        if (StoredModMap == nullptr || StoredModMap != M->ModuleMap) {
-          assert(M->ModuleMap && "found module is missing module map file");
+        const FileEntry *ModMap =
+            HS.getModuleMap().getModuleMapFileForUniquing(M);
+        if (StoredModMap == nullptr || StoredModMap != ModMap) {
+          assert(ModMap && "found module is missing module map file");
           assert(M->Name == F.ModuleName && "found module with different name");
           assert(ImportedBy && "top-level import should be verified");
           if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
             Diag(diag::err_imported_module_modmap_changed)
               << F.ModuleName << ImportedBy->FileName
-              << M->ModuleMap->getName() << F.ModuleMapPath;
+              << ModMap->getName() << F.ModuleMapPath;
           return OutOfDate;
         }
       }
@@ -4281,20 +4284,17 @@ ASTReader::ReadSubmoduleBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
       bool ConfigMacrosExhaustive = Record[Idx++];
 
       Module *ParentModule = nullptr;
-      const FileEntry *ModuleMap = nullptr;
-      if (Parent) {
+      if (Parent)
         ParentModule = getSubmodule(Parent);
-        ModuleMap = ParentModule->ModuleMap;
-      }
-
-      if (!F.ModuleMapPath.empty())
-        ModuleMap = FileMgr.getFile(F.ModuleMapPath);
 
       // Retrieve this (sub)module from the module map, creating it if
       // necessary.
-      CurrentModule = ModMap.findOrCreateModule(Name, ParentModule, ModuleMap,
-                                                IsFramework, 
+      CurrentModule = ModMap.findOrCreateModule(Name, ParentModule, IsFramework,
                                                 IsExplicit).first;
+
+      // FIXME: set the definition loc for CurrentModule, or call
+      // ModMap.setInferredModuleAllowedBy()
+
       SubmoduleID GlobalIndex = GlobalID - NUM_PREDEF_SUBMODULE_IDS;
       if (GlobalIndex >= SubmodulesLoaded.size() ||
           SubmodulesLoaded[GlobalIndex]) {
@@ -4639,9 +4639,10 @@ bool ASTReader::ParseDiagnosticOptions(const RecordData &Record, bool Complain,
   DiagOpts->set##Name(static_cast<Type>(Record[Idx++]));
 #include "clang/Basic/DiagnosticOptions.def"
 
-  for (unsigned N = Record[Idx++]; N; --N) {
+  for (unsigned N = Record[Idx++]; N; --N)
     DiagOpts->Warnings.push_back(ReadString(Record, Idx));
-  }
+  for (unsigned N = Record[Idx++]; N; --N)
+    DiagOpts->Remarks.push_back(ReadString(Record, Idx));
 
   return Listener.ReadDiagnosticOptions(DiagOpts, Complain);
 }
@@ -5268,7 +5269,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     EPI.TypeQuals = Record[Idx++];
     EPI.RefQualifier = static_cast<RefQualifierKind>(Record[Idx++]);
     SmallVector<QualType, 8> ExceptionStorage;
-    readExceptionSpec(*Loc.F, ExceptionStorage, EPI, Record, Idx);
+    readExceptionSpec(*Loc.F, ExceptionStorage, EPI.ExceptionSpec, Record, Idx);
 
     unsigned NumParams = Record[Idx++];
     SmallVector<QualType, 16> ParamTypes;
@@ -5537,24 +5538,22 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
 
 void ASTReader::readExceptionSpec(ModuleFile &ModuleFile,
                                   SmallVectorImpl<QualType> &Exceptions,
-                                  FunctionProtoType::ExtProtoInfo &EPI,
+                                  FunctionProtoType::ExceptionSpecInfo &ESI,
                                   const RecordData &Record, unsigned &Idx) {
   ExceptionSpecificationType EST =
       static_cast<ExceptionSpecificationType>(Record[Idx++]);
-  EPI.ExceptionSpecType = EST;
+  ESI.Type = EST;
   if (EST == EST_Dynamic) {
-    EPI.NumExceptions = Record[Idx++];
-    for (unsigned I = 0; I != EPI.NumExceptions; ++I)
+    for (unsigned I = 0, N = Record[Idx++]; I != N; ++I)
       Exceptions.push_back(readType(ModuleFile, Record, Idx));
-    EPI.Exceptions = Exceptions.data();
+    ESI.Exceptions = Exceptions;
   } else if (EST == EST_ComputedNoexcept) {
-    EPI.NoexceptExpr = ReadExpr(ModuleFile);
+    ESI.NoexceptExpr = ReadExpr(ModuleFile);
   } else if (EST == EST_Uninstantiated) {
-    EPI.ExceptionSpecDecl = ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
-    EPI.ExceptionSpecTemplate =
-        ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
+    ESI.SourceDecl = ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
+    ESI.SourceTemplate = ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
   } else if (EST == EST_Unevaluated) {
-    EPI.ExceptionSpecDecl = ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
+    ESI.SourceDecl = ReadDeclAs<FunctionDecl>(ModuleFile, Record, Idx);
   }
 }
 
@@ -8126,10 +8125,7 @@ void ASTReader::finishPendingActions() {
     }
 
     // Perform any pending declaration updates.
-    //
-    // Don't do this if we have known-incomplete redecl chains: it relies on
-    // being able to walk redeclaration chains.
-    while (PendingDeclChains.empty() && !PendingUpdateRecords.empty()) {
+    while (!PendingUpdateRecords.empty()) {
       auto Update = PendingUpdateRecords.pop_back_val();
       ReadingKindTracker ReadingKind(Read_Decl, *this);
       loadDeclUpdateRecords(Update.first, Update.second);

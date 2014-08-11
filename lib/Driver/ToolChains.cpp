@@ -333,7 +333,8 @@ void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
   }
 
   // If we are building profile support, link that library in.
-  if (Args.hasArg(options::OPT_fprofile_arcs) ||
+  if (Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
+                   false) ||
       Args.hasArg(options::OPT_fprofile_generate) ||
       Args.hasArg(options::OPT_fprofile_instr_generate) ||
       Args.hasArg(options::OPT_fcreate_profile) ||
@@ -1247,8 +1248,8 @@ Generic_GCC::GCCInstallationDetector::init(
   // The library directories which may contain GCC installations.
   SmallVector<StringRef, 4> CandidateLibDirs, CandidateBiarchLibDirs;
   // The compatible GCC triples for this particular architecture.
-  SmallVector<StringRef, 10> CandidateTripleAliases;
-  SmallVector<StringRef, 10> CandidateBiarchTripleAliases;
+  SmallVector<StringRef, 16> CandidateTripleAliases;
+  SmallVector<StringRef, 16> CandidateBiarchTripleAliases;
   CollectLibDirsAndTriples(TargetTriple, BiarchVariantTriple, CandidateLibDirs,
                            CandidateTripleAliases, CandidateBiarchLibDirs,
                            CandidateBiarchTripleAliases);
@@ -1754,7 +1755,14 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
       .Maybe(SoftFloat)
       .Maybe(Nan2008)
       .FilterOut(".*sof/nan2008")
-      .FilterOut(NonExistent);
+      .FilterOut(NonExistent)
+      .setIncludeDirsCallback([](
+          StringRef InstallDir, StringRef TripleStr, const Multilib &M) {
+        std::vector<std::string> Dirs;
+        Dirs.push_back((InstallDir + "/include").str());
+        Dirs.push_back((InstallDir + "/../../../../sysroot/usr/include").str());
+        return Dirs;
+      });
   }
 
   // Check for Code Sourcery toolchain multilibs
@@ -1799,7 +1807,15 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
       .Maybe(MAbi64)
       .FilterOut("/mips16.*/64")
       .FilterOut("/micromips.*/64")
-      .FilterOut(NonExistent);
+      .FilterOut(NonExistent)
+      .setIncludeDirsCallback([](
+          StringRef InstallDir, StringRef TripleStr, const Multilib &M) {
+        std::vector<std::string> Dirs;
+        Dirs.push_back((InstallDir + "/include").str());
+        Dirs.push_back((InstallDir + "/../../../../" + TripleStr +
+                        "/libc/usr/include").str());
+        return Dirs;
+      });
   }
 
   MultilibSet AndroidMipsMultilibs = MultilibSet()
@@ -1841,7 +1857,14 @@ static bool findMIPSMultilibs(const llvm::Triple &TargetTriple, StringRef Path,
       .Maybe(Mips64r6)
       .Maybe(MAbi64)
       .Maybe(LittleEndian)
-      .FilterOut(NonExistent);
+      .FilterOut(NonExistent)
+      .setIncludeDirsCallback([](
+          StringRef InstallDir, StringRef TripleStr, const Multilib &M) {
+        std::vector<std::string> Dirs;
+        Dirs.push_back((InstallDir + "/include").str());
+        Dirs.push_back((InstallDir + "/../../../../sysroot/usr/include").str());
+        return Dirs;
+      });
   }
 
   StringRef CPUName;
@@ -2595,10 +2618,12 @@ NetBSD::NetBSD(const Driver &D, const llvm::Triple& Triple, const ArgList &Args)
     case llvm::Triple::thumbeb:
       switch (Triple.getEnvironment()) {
       case llvm::Triple::EABI:
-      case llvm::Triple::EABIHF:
       case llvm::Triple::GNUEABI:
-      case llvm::Triple::GNUEABIHF:
         getFilePaths().push_back("=/usr/lib/eabi");
+        break;
+      case llvm::Triple::EABIHF:
+      case llvm::Triple::GNUEABIHF:
+        getFilePaths().push_back("=/usr/lib/eabihf");
         break;
       default:
         getFilePaths().push_back("=/usr/lib/oabi");
@@ -2648,6 +2673,7 @@ NetBSD::GetCXXStdlibType(const ArgList &Args) const {
   getTriple().getOSVersion(Major, Minor, Micro);
   if (Major >= 7 || (Major == 6 && Minor == 99 && Micro >= 49) || Major == 0) {
     switch (getArch()) {
+    case llvm::Triple::aarch64:
     case llvm::Triple::arm:
     case llvm::Triple::armeb:
     case llvm::Triple::thumb:
@@ -2798,7 +2824,7 @@ static Distro DetectDistro(llvm::Triple::ArchType Arch) {
       llvm::MemoryBuffer::getFile("/etc/lsb-release");
   if (File) {
     StringRef Data = File.get()->getBuffer();
-    SmallVector<StringRef, 8> Lines;
+    SmallVector<StringRef, 16> Lines;
     Data.split(Lines, "\n");
     Distro Version = UnknownDistro;
     for (unsigned i = 0, s = Lines.size(); i != s; ++i)
@@ -3243,20 +3269,16 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   // Lacking those, try to detect the correct set of system includes for the
   // target triple.
 
-  // Sourcery CodeBench and modern FSF Mips toolchains put extern C
-  // system includes under three additional directories.
-  if (GCCInstallation.isValid() && isMipsArch(getTriple().getArch())) {
-    addExternCSystemIncludeIfExists(
-        DriverArgs, CC1Args, GCCInstallation.getInstallPath() + "/include");
-
-    addExternCSystemIncludeIfExists(
-        DriverArgs, CC1Args,
-        GCCInstallation.getInstallPath() + "/../../../../" +
-            GCCInstallation.getTriple().str() + "/libc/usr/include");
-
-    addExternCSystemIncludeIfExists(
-        DriverArgs, CC1Args,
-        GCCInstallation.getInstallPath() + "/../../../../sysroot/usr/include");
+  // Add include directories specific to the selected multilib set and multilib.
+  if (GCCInstallation.isValid()) {
+    auto Callback = Multilibs.includeDirsCallback();
+    if (Callback) {
+      const auto IncludePaths = Callback(GCCInstallation.getInstallPath(),
+                                         GCCInstallation.getTriple().str(),
+                                         GCCInstallation.getMultilib());
+      for (const auto &Path : IncludePaths)
+        addExternCSystemIncludeIfExists(DriverArgs, CC1Args, Path);
+    }
   }
 
   // Implement generic Debian multiarch support.
@@ -3539,7 +3561,8 @@ void XCore::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
 void XCore::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                          ArgStringList &CC1Args) const {
   if (DriverArgs.hasArg(options::OPT_nostdinc) ||
-      DriverArgs.hasArg(options::OPT_nostdlibinc))
+      DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+      DriverArgs.hasArg(options::OPT_nostdincxx))
     return;
   if (const char *cl_include_dir = getenv("XCC_CPLUS_INCLUDE_PATH")) {
     SmallVector<StringRef, 4> Dirs;

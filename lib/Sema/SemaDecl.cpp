@@ -1725,6 +1725,43 @@ static void filterNonConflictingPreviousDecls(ASTContext &context,
   filter.done();
 }
 
+/// Typedef declarations don't have linkage, but they still denote the same
+/// entity if their types are the same.
+/// FIXME: This is notionally doing the same thing as ASTReaderDecl's
+/// isSameEntity.
+static void filterNonConflictingPreviousTypedefDecls(ASTContext &Context,
+                                                     TypedefNameDecl *Decl,
+                                                     LookupResult &Previous) {
+  // This is only interesting when modules are enabled.
+  if (!Context.getLangOpts().Modules)
+    return;
+
+  // Empty sets are uninteresting.
+  if (Previous.empty())
+    return;
+
+  LookupResult::Filter Filter = Previous.makeFilter();
+  while (Filter.hasNext()) {
+    NamedDecl *Old = Filter.next();
+
+    // Non-hidden declarations are never ignored.
+    if (!Old->isHidden())
+      continue;
+
+    // Declarations of the same entity are not ignored, even if they have
+    // different linkages.
+    if (auto *OldTD = dyn_cast<TypedefNameDecl>(Old))
+      if (Context.hasSameType(OldTD->getUnderlyingType(),
+                              Decl->getUnderlyingType()))
+        continue;
+
+    if (!Old->isExternallyVisible())
+      Filter.erase();
+  }
+
+  Filter.done();
+}
+
 bool Sema::isIncompatibleTypedef(TypeDecl *Old, TypedefNameDecl *New) {
   QualType OldType;
   if (TypedefNameDecl *OldTypedef = dyn_cast<TypedefNameDecl>(Old))
@@ -3407,21 +3444,36 @@ Decl *Sema::ParsedFreeStandingDeclSpec(Scope *S, AccessSpecifier AS,
     }
   }
 
-  // Check for Microsoft C extension: anonymous struct member.
-  if (getLangOpts().MicrosoftExt && !getLangOpts().CPlusPlus &&
-      CurContext->isRecord() &&
+  // C11 6.7.2.1p2:
+  //   A struct-declaration that does not declare an anonymous structure or
+  //   anonymous union shall contain a struct-declarator-list.
+  if (!getLangOpts().CPlusPlus && CurContext->isRecord() &&
       DS.getStorageClassSpec() == DeclSpec::SCS_unspecified) {
-    // Handle 2 kinds of anonymous struct:
+    // Check for Microsoft C extension: anonymous struct/union member.
+    // Handle 2 kinds of anonymous struct/union:
     //   struct STRUCT;
+    //   union UNION;
     // and
     //   STRUCT_TYPE;  <- where STRUCT_TYPE is a typedef struct.
-    RecordDecl *Record = dyn_cast_or_null<RecordDecl>(Tag);
-    if ((Record && Record->getDeclName() && !Record->isCompleteDefinition()) ||
-        (DS.getTypeSpecType() == DeclSpec::TST_typename &&
-         DS.getRepAsType().get()->isStructureType())) {
-      Diag(DS.getLocStart(), diag::ext_ms_anonymous_struct)
-        << DS.getSourceRange();
-      return BuildMicrosoftCAnonymousStruct(S, DS, Record);
+    //   UNION_TYPE;   <- where UNION_TYPE is a typedef union.
+    if ((Tag && Tag->getDeclName()) ||
+        DS.getTypeSpecType() == DeclSpec::TST_typename) {
+      RecordDecl *Record = nullptr;
+      if (Tag)
+        Record = dyn_cast<RecordDecl>(Tag);
+      else if (const RecordType *RT =
+                   DS.getRepAsType().get()->getAsStructureType())
+        Record = RT->getDecl();
+      else if (const RecordType *UT = DS.getRepAsType().get()->getAsUnionType())
+        Record = UT->getDecl();
+
+      if (Record && getLangOpts().MicrosoftExt) {
+        Diag(DS.getLocStart(), diag::ext_ms_anonymous_record)
+          << Record->isUnion() << DS.getSourceRange();
+        return BuildMicrosoftCAnonymousStruct(S, DS, Record);
+      }
+
+      DeclaresAnything = false;
     }
   }
 
@@ -3962,15 +4014,12 @@ Decl *Sema::BuildAnonymousStructOrUnion(Scope *S, DeclSpec &DS,
 ///
 /// void foo() {
 ///   B var;
-///   var.a = 3; 
+///   var.a = 3;
 /// }
 ///
 Decl *Sema::BuildMicrosoftCAnonymousStruct(Scope *S, DeclSpec &DS,
                                            RecordDecl *Record) {
-  
-  // If there is no Record, get the record via the typedef.
-  if (!Record)
-    Record = DS.getRepAsType().get()->getAsStructureType()->getDecl();
+  assert(Record && "expected a record!");
 
   // Mock up a declarator.
   Declarator Dc(DS, Declarator::TypeNameContext);
@@ -4835,7 +4884,7 @@ Sema::ActOnTypedefNameDecl(Scope *S, DeclContext *DC, TypedefNameDecl *NewTD,
   // in an outer scope, it isn't the same thing.
   FilterLookupForScope(Previous, DC, S, /*ConsiderLinkage*/false,
                        /*AllowInlineNamespace*/false);
-  filterNonConflictingPreviousDecls(Context, NewTD, Previous);
+  filterNonConflictingPreviousTypedefDecls(Context, NewTD, Previous);
   if (!Previous.empty()) {
     Redeclaration = true;
     MergeTypedefNameDecl(NewTD, Previous);
@@ -5047,18 +5096,22 @@ static void checkDLLAttributeRedeclaration(Sema &S, NamedDecl *OldDecl,
   }
 
   // A redeclaration is not allowed to drop a dllimport attribute, the only
-  // exceptions being inline function definitions and local extern declarations.
+  // exceptions being inline function definitions, local extern declarations,
+  // and qualified friend declarations.
   // NB: MSVC converts such a declaration to dllexport.
-  bool IsInline = false, IsStaticDataMember = false;
+  bool IsInline = false, IsStaticDataMember = false, IsQualifiedFriend = false;
   if (const auto *VD = dyn_cast<VarDecl>(NewDecl))
     // Ignore static data because out-of-line definitions are diagnosed
     // separately.
     IsStaticDataMember = VD->isStaticDataMember();
-  else if (const auto *FD = dyn_cast<FunctionDecl>(NewDecl))
+  else if (const auto *FD = dyn_cast<FunctionDecl>(NewDecl)) {
     IsInline = FD->isInlined();
+    IsQualifiedFriend = FD->getQualifier() &&
+                        FD->getFriendObjectKind() == Decl::FOK_Declared;
+  }
 
   if (OldImportAttr && !HasNewAttr && !IsInline && !IsStaticDataMember &&
-      !NewDecl->isLocalExternDecl()) {
+      !NewDecl->isLocalExternDecl() && !IsQualifiedFriend) {
     S.Diag(NewDecl->getLocation(),
            diag::warn_redeclaration_without_attribute_prev_attribute_ignored)
       << NewDecl << OldImportAttr;
@@ -7110,12 +7163,10 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     const FunctionProtoType *FPT = R->getAs<FunctionProtoType>();
     if ((Name.getCXXOverloadedOperator() == OO_Delete ||
          Name.getCXXOverloadedOperator() == OO_Array_Delete) &&
-        getLangOpts().CPlusPlus11 && FPT && !FPT->hasExceptionSpec()) {
-      FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
-      EPI.ExceptionSpecType = EST_BasicNoexcept;
-      NewFD->setType(Context.getFunctionType(FPT->getReturnType(),
-                                             FPT->getParamTypes(), EPI));
-    }
+        getLangOpts().CPlusPlus11 && FPT && !FPT->hasExceptionSpec())
+      NewFD->setType(Context.getFunctionType(
+          FPT->getReturnType(), FPT->getParamTypes(),
+          FPT->getExtProtoInfo().withExceptionSpec(EST_BasicNoexcept)));
   }
 
   // Filter out previous declarations that don't match the scope.

@@ -2994,7 +2994,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
                                       DynamicExceptionRanges,
                                       NoexceptExpr,
                                       Exceptions,
-                                      EPI);
+                                      EPI.ExceptionSpec);
 
         T = Context.getFunctionType(T, ParamTys, EPI);
       }
@@ -5162,14 +5162,6 @@ static void assignInheritanceModel(Sema &S, CXXRecordDecl *RD) {
         S.ImplicitMSInheritanceAttrLoc.isValid()
             ? S.ImplicitMSInheritanceAttrLoc
             : RD->getSourceRange()));
-  }
-
-  if (RD->hasDefinition()) {
-    // Assign inheritance models to all of the base classes, because now we can
-    // form pointers to members of base classes without calling
-    // RequireCompleteType on the pointer to member of the base class type.
-    for (const CXXBaseSpecifier &BS : RD->bases())
-      assignInheritanceModel(S, BS.getType()->getAsCXXRecordDecl());
   }
 }
 
