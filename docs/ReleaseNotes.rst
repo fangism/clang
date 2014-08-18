@@ -67,6 +67,65 @@ about them. The improvements since the 3.4 release include:
 - GCC compatibility: Clang displays a warning on unsupported gcc
   optimization flags instead of an error.
 
+- New warning `-Wabsolute-value`: Clang warns about incorrect or useless usage
+  of the absolute functions (`abs`, `fabsf`, etc).
+
+  .. code-block:: c
+
+    #include <stdlib.h>
+    void foo() {
+     unsigned int i=0;
+     abs(i);
+    }
+
+  returns
+  `warning: taking the absolute value of unsigned type 'unsigned int' has no effect [-Wabsolute-value]`
+
+  or
+
+  .. code-block:: c
+
+    #include <stdlib.h>
+    void plop() {
+      long long i=0;
+      abs(i);
+    }
+
+  returns
+  `warning: absolute value function 'abs' given an argument of type 'long long' but has parameter of type 'int' which may cause truncation of value [-Wabsolute-value] use function 'llabs' instead`
+
+- New warning `-Wtautological-pointer-compare`:
+
+  .. code-block:: c++
+
+    #include <stddef.h>
+    void foo() {
+     int arr[5];
+     int x;
+     // warn on these conditionals
+     if (foo);
+     if (arr);
+     if (&x);
+     if (foo == NULL);
+     if (arr == NULL);
+     if (&x == NULL);
+    }
+
+  returns
+  `warning: comparison of address of 'x' equal to a null pointer is always false [-Wtautological-pointer-compare]`
+
+- New warning `-Wtautological-undefined-compare`: 
+
+  .. code-block:: c++
+
+    #include <stddef.h>
+    void f(int &x) {
+       if (&x == nullptr) { }
+    }
+
+  returns
+  `warning: reference cannot be bound to dereferenced null pointer in well-defined C++ code; comparison may be assumed to always evaluate to false [-Wtautological-undefined-compare]`
+
 -  ...
 
 New Compiler Flags
