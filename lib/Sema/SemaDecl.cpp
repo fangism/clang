@@ -6692,7 +6692,7 @@ static void checkIsValidOpenCLKernelParameter(
   Sema &S,
   Declarator &D,
   ParmVarDecl *Param,
-  llvm::SmallPtrSet<const Type *, 16> &ValidTypes) {
+  llvm::SmallPtrSetImpl<const Type *> &ValidTypes) {
   QualType PT = Param->getType();
 
   // Cache the valid types we encounter to avoid rechecking structs that are
@@ -8275,6 +8275,15 @@ namespace {
     }
 
     void VisitObjCMessageExpr(ObjCMessageExpr *E) { return; }
+
+    void VisitCXXConstructExpr(CXXConstructExpr *E) {
+      if (E->getConstructor()->isCopyConstructor()) {
+        if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E->getArg(0))) {
+          HandleDeclRefExpr(DRE);
+        }
+      }
+      Inherited::VisitCXXConstructExpr(E);
+    }
 
     void HandleDeclRefExpr(DeclRefExpr *DRE) {
       Decl* ReferenceDecl = DRE->getDecl();

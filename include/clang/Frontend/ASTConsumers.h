@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef DRIVER_ASTCONSUMERS_H
-#define DRIVER_ASTCONSUMERS_H
+#ifndef LLVM_CLANG_FRONTEND_ASTCONSUMERS_H
+#define LLVM_CLANG_FRONTEND_ASTCONSUMERS_H
 
 #include "clang/Basic/LLVM.h"
 
@@ -38,7 +38,8 @@ std::unique_ptr<ASTConsumer> CreateASTPrinter(raw_ostream *OS,
 // AST dumper: dumps the raw AST in human-readable form to stderr; this is
 // intended for debugging.
 std::unique_ptr<ASTConsumer> CreateASTDumper(StringRef FilterString,
-                                             bool DumpLookups = false);
+                                             bool DumpDecls,
+                                             bool DumpLookups);
 
 // AST Decl node lister: prints qualified names of all filterable AST Decl
 // nodes.

@@ -543,8 +543,7 @@ static bool checkPreprocessorOptions(const PreprocessorOptions &PPOpts,
       continue;
 
     SuggestedPredefines += "#include \"";
-    SuggestedPredefines +=
-      HeaderSearch::NormalizeDashIncludePath(File, FileMgr);
+    SuggestedPredefines += File;
     SuggestedPredefines += "\"\n";
   }
 
@@ -556,8 +555,7 @@ static bool checkPreprocessorOptions(const PreprocessorOptions &PPOpts,
       continue;
 
     SuggestedPredefines += "#__include_macros \"";
-    SuggestedPredefines +=
-      HeaderSearch::NormalizeDashIncludePath(File, FileMgr);
+    SuggestedPredefines += File;
     SuggestedPredefines += "\"\n##\n";
   }
 
@@ -1900,16 +1898,20 @@ void ASTReader::removeOverriddenMacros(IdentifierInfo *II,
     SubmoduleID OwnerID = Overrides[OI];
 
     // If this macro is not yet visible, remove it from the hidden names list.
+    // It won't be there if we're in the middle of making the owner visible.
     Module *Owner = getSubmodule(OwnerID);
-    HiddenNames &Hidden = HiddenNamesMap[Owner];
-    HiddenMacrosMap::iterator HI = Hidden.HiddenMacros.find(II);
-    if (HI != Hidden.HiddenMacros.end()) {
-      // Register the macro now so we don't lose it when we re-export.
-      PP.appendMacroDirective(II, HI->second->import(PP, ImportLoc));
+    auto HiddenIt = HiddenNamesMap.find(Owner);
+    if (HiddenIt != HiddenNamesMap.end()) {
+      HiddenNames &Hidden = HiddenIt->second;
+      HiddenMacrosMap::iterator HI = Hidden.HiddenMacros.find(II);
+      if (HI != Hidden.HiddenMacros.end()) {
+        // Register the macro now so we don't lose it when we re-export.
+        PP.appendMacroDirective(II, HI->second->import(PP, ImportLoc));
 
-      auto SubOverrides = HI->second->getOverriddenSubmodules();
-      Hidden.HiddenMacros.erase(HI);
-      removeOverriddenMacros(II, ImportLoc, Ambig, SubOverrides);
+        auto SubOverrides = HI->second->getOverriddenSubmodules();
+        Hidden.HiddenMacros.erase(HI);
+        removeOverriddenMacros(II, ImportLoc, Ambig, SubOverrides);
+      }
     }
 
     // If this macro is already in our list of conflicts, remove it from there.
@@ -2470,45 +2472,9 @@ ASTReader::ReadControlBlock(ModuleFile &F,
       break;
 
     case MODULE_MAP_FILE:
-      F.ModuleMapPath = Blob;
-
-      // Try to resolve ModuleName in the current header search context and
-      // verify that it is found in the same module map file as we saved. If the
-      // top-level AST file is a main file, skip this check because there is no
-      // usable header search context.
-      assert(!F.ModuleName.empty() &&
-             "MODULE_NAME should come before MOUDLE_MAP_FILE");
-      if (F.Kind == MK_Module &&
-          (*ModuleMgr.begin())->Kind != MK_MainFile) {
-        Module *M = PP.getHeaderSearchInfo().lookupModule(F.ModuleName);
-        if (!M) {
-          assert(ImportedBy && "top-level import should be verified");
-          if ((ClientLoadCapabilities & ARR_Missing) == 0)
-            Diag(diag::err_imported_module_not_found)
-              << F.ModuleName << ImportedBy->FileName;
-          return Missing;
-        }
-
-        HeaderSearch &HS = PP.getHeaderSearchInfo();
-        const FileEntry *StoredModMap = FileMgr.getFile(F.ModuleMapPath);
-        const FileEntry *ModMap =
-            HS.getModuleMap().getModuleMapFileForUniquing(M);
-        if (StoredModMap == nullptr || StoredModMap != ModMap) {
-          assert(ModMap && "found module is missing module map file");
-          assert(M->Name == F.ModuleName && "found module with different name");
-          assert(ImportedBy && "top-level import should be verified");
-          if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
-            Diag(diag::err_imported_module_modmap_changed)
-              << F.ModuleName << ImportedBy->FileName
-              << ModMap->getName() << F.ModuleMapPath;
-          return OutOfDate;
-        }
-      }
-
-      if (Listener)
-        Listener->ReadModuleMapFile(F.ModuleMapPath);
-      break;
-
+      if (ASTReadResult Result =
+              ReadModuleMapFileBlock(Record, F, ImportedBy, ClientLoadCapabilities))
+        return Result;
     case INPUT_FILE_OFFSETS:
       F.InputFileOffsets = (const uint32_t *)Blob.data();
       F.InputFilesLoaded.resize(Record[0]);
@@ -2654,9 +2620,9 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         F.TypeRemap.insertOrReplace(
           std::make_pair(LocalBaseTypeIndex, 
                          F.BaseTypeIndex - LocalBaseTypeIndex));
-        
-        TypesLoaded.resize(TypesLoaded.size() + F.LocalNumTypes);
       }
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      TypesLoaded.resize(TypesLoaded.size() + std::max(F.LocalNumTypes, 1U));
       break;
     }
         
@@ -2684,9 +2650,10 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         // Introduce the global -> local mapping for declarations within this
         // module.
         F.GlobalToLocalDeclIDs[&F] = LocalBaseDeclID;
-        
-        DeclsLoaded.resize(DeclsLoaded.size() + F.LocalNumDecls);
       }
+
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      DeclsLoaded.resize(DeclsLoaded.size() + std::max(F.LocalNumDecls, 1U));
       break;
     }
         
@@ -2713,7 +2680,6 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         auto *DC = cast<DeclContext>(D);
         DC->getPrimaryContext()->setHasExternalVisibleStorage(true);
         auto *&LookupTable = F.DeclContextInfos[DC].NameLookupTableData;
-        // FIXME: There should never be an existing lookup table.
         delete LookupTable;
         LookupTable = Table;
       } else
@@ -2755,10 +2721,11 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         F.IdentifierRemap.insertOrReplace(
           std::make_pair(LocalBaseIdentifierID,
                          F.BaseIdentifierID - LocalBaseIdentifierID));
-        
-        IdentifiersLoaded.resize(IdentifiersLoaded.size() 
-                                 + F.LocalNumIdentifiers);
       }
+
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      IdentifiersLoaded.resize(IdentifiersLoaded.size() +
+                               std::max(F.LocalNumIdentifiers, 1U));
       break;
     }
 
@@ -2848,9 +2815,10 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         F.SelectorRemap.insertOrReplace(
           std::make_pair(LocalBaseSelectorID,
                          F.BaseSelectorID - LocalBaseSelectorID));
-
-        SelectorsLoaded.resize(SelectorsLoaded.size() + F.LocalNumSelectors);        
       }
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      SelectorsLoaded.resize(SelectorsLoaded.size() +
+                             std::max(F.LocalNumSelectors, 1U));
       break;
     }
         
@@ -2890,8 +2858,10 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
       F.SLocEntryOffsets = (const uint32_t *)Blob.data();
       F.LocalNumSLocEntries = Record[0];
       unsigned SLocSpaceSize = Record[1];
+
+      // Increase size by >= 1 so we get a unique base index in the next module.
       std::tie(F.SLocEntryBaseID, F.SLocEntryBaseOffset) =
-          SourceMgr.AllocateLoadedSLocEntries(F.LocalNumSLocEntries,
+          SourceMgr.AllocateLoadedSLocEntries(std::max(F.LocalNumSLocEntries, 1U),
                                               SLocSpaceSize);
       // Make our entry in the range map. BaseID is negative and growing, so
       // we invert it. Because we invert it, though, we need the other end of
@@ -3084,9 +3054,11 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         PP.createPreprocessingRecord();
       if (!PP.getPreprocessingRecord()->getExternalSource())
         PP.getPreprocessingRecord()->SetExternalSource(*this);
+
+      // Increase size by >= 1 so we get a unique base index in the next module.
       StartingID 
         = PP.getPreprocessingRecord()
-            ->allocateLoadedEntities(F.NumPreprocessedEntities);
+            ->allocateLoadedEntities(std::max(F.NumPreprocessedEntities, 1U));
       F.BasePreprocessedEntityID = StartingID;
 
       if (F.NumPreprocessedEntities > 0) {
@@ -3290,9 +3262,9 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         F.MacroRemap.insertOrReplace(
           std::make_pair(LocalBaseMacroID,
                          F.BaseMacroID - LocalBaseMacroID));
-
-        MacrosLoaded.resize(MacrosLoaded.size() + F.LocalNumMacros);
       }
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      MacrosLoaded.resize(MacrosLoaded.size() + std::max(F.LocalNumMacros, 1U));
       break;
     }
 
@@ -3316,6 +3288,89 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
     }
   }
 }
+
+ASTReader::ASTReadResult
+ASTReader::ReadModuleMapFileBlock(RecordData &Record, ModuleFile &F,
+                                  const ModuleFile *ImportedBy,
+                                  unsigned ClientLoadCapabilities) {
+  unsigned Idx = 0;
+  F.ModuleMapPath = ReadString(Record, Idx);
+
+  // Try to resolve ModuleName in the current header search context and
+  // verify that it is found in the same module map file as we saved. If the
+  // top-level AST file is a main file, skip this check because there is no
+  // usable header search context.
+  assert(!F.ModuleName.empty() &&
+         "MODULE_NAME should come before MOUDLE_MAP_FILE");
+  if (F.Kind == MK_Module && (*ModuleMgr.begin())->Kind != MK_MainFile) {
+    Module *M = PP.getHeaderSearchInfo().lookupModule(F.ModuleName);
+    if (!M) {
+      assert(ImportedBy && "top-level import should be verified");
+      if ((ClientLoadCapabilities & ARR_Missing) == 0)
+        Diag(diag::err_imported_module_not_found)
+          << F.ModuleName << ImportedBy->FileName;
+      return Missing;
+    }
+
+    // Check the primary module map file.
+    auto &Map = PP.getHeaderSearchInfo().getModuleMap();
+    const FileEntry *StoredModMap = FileMgr.getFile(F.ModuleMapPath);
+    const FileEntry *ModMap = Map.getModuleMapFileForUniquing(M);
+    if (StoredModMap == nullptr || StoredModMap != ModMap) {
+      assert(ModMap && "found module is missing module map file");
+      assert(M->Name == F.ModuleName && "found module with different name");
+      assert(ImportedBy && "top-level import should be verified");
+      if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
+        Diag(diag::err_imported_module_modmap_changed)
+          << F.ModuleName << ImportedBy->FileName
+          << ModMap->getName() << F.ModuleMapPath;
+      return OutOfDate;
+    }
+
+    llvm::SmallPtrSet<const FileEntry *, 1> AdditionalStoredMaps;
+    for (unsigned I = 0, N = Record[Idx++]; I < N; ++I) {
+      // FIXME: we should use input files rather than storing names.
+      std::string Filename = ReadString(Record, Idx);
+      const FileEntry *F =
+          FileMgr.getFile(Filename, false, false);
+      if (F == nullptr) {
+        if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
+          Error("could not find file '" + Filename +"' referenced by AST file");
+        return OutOfDate;
+      }
+      AdditionalStoredMaps.insert(F);
+    }
+
+    // Check any additional module map files (e.g. module.private.modulemap)
+    // that are not in the pcm.
+    if (auto *AdditionalModuleMaps = Map.getAdditionalModuleMapFiles(M)) {
+      for (const FileEntry *ModMap : *AdditionalModuleMaps) {
+        // Remove files that match
+        // Note: SmallPtrSet::erase is really remove
+        if (!AdditionalStoredMaps.erase(ModMap)) {
+          if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
+            Diag(diag::err_module_different_modmap)
+              << F.ModuleName << /*new*/0 << ModMap->getName();
+          return OutOfDate;
+        }
+      }
+    }
+
+    // Check any additional module map files that are in the pcm, but not
+    // found in header search. Cases that match are already removed.
+    for (const FileEntry *ModMap : AdditionalStoredMaps) {
+      if ((ClientLoadCapabilities & ARR_OutOfDate) == 0)
+        Diag(diag::err_module_different_modmap)
+          << F.ModuleName << /*not new*/1 << ModMap->getName();
+      return OutOfDate;
+    }
+  }
+
+  if (Listener)
+    Listener->ReadModuleMapFile(F.ModuleMapPath);
+  return Success;
+}
+
 
 /// \brief Move the given method to the back of the global list of methods.
 static void moveMethodToBackOfGlobalList(Sema &S, ObjCMethodDecl *Method) {
@@ -4138,9 +4193,11 @@ bool ASTReader::readASTFileControlBlock(StringRef Filename,
     case MODULE_NAME:
       Listener.ReadModuleName(Blob);
       break;
-    case MODULE_MAP_FILE:
-      Listener.ReadModuleMapFile(Blob);
+    case MODULE_MAP_FILE: {
+      unsigned Idx = 0;
+      Listener.ReadModuleMapFile(ReadString(Record, Idx));
       break;
+    }
     case LANGUAGE_OPTIONS:
       if (ParseLanguageOptions(Record, false, Listener))
         return true;
@@ -4459,9 +4516,11 @@ ASTReader::ReadSubmoduleBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
         F.SubmoduleRemap.insertOrReplace(
           std::make_pair(LocalBaseSubmoduleID,
                          F.BaseSubmoduleID - LocalBaseSubmoduleID));
-        
-        SubmodulesLoaded.resize(SubmodulesLoaded.size() + F.LocalNumSubmodules);
-      }      
+      }
+
+      // Increase size by >= 1 so we get a unique base index in the next module.
+      SubmodulesLoaded.resize(SubmodulesLoaded.size() +
+                              std::max(F.LocalNumSubmodules, 1U));
       break;
     }
         
@@ -6004,12 +6063,6 @@ void ASTReader::CompleteRedeclChain(const Decl *D) {
 
   const DeclContext *DC = D->getDeclContext()->getRedeclContext();
 
-  // Recursively ensure that the decl context itself is complete
-  // (in particular, this matters if the decl context is a namespace).
-  //
-  // FIXME: This should be performed by lookup instead of here.
-  cast<Decl>(DC)->getMostRecentDecl();
-
   // If this is a named declaration, complete it by looking it up
   // within its context.
   //
@@ -6373,13 +6426,13 @@ namespace {
   /// declaration context.
   class DeclContextNameLookupVisitor {
     ASTReader &Reader;
-    SmallVectorImpl<const DeclContext *> &Contexts;
+    ArrayRef<const DeclContext *> Contexts;
     DeclarationName Name;
     SmallVectorImpl<NamedDecl *> &Decls;
 
   public:
-    DeclContextNameLookupVisitor(ASTReader &Reader, 
-                                 SmallVectorImpl<const DeclContext *> &Contexts, 
+    DeclContextNameLookupVisitor(ASTReader &Reader,
+                                 ArrayRef<const DeclContext *> Contexts,
                                  DeclarationName Name,
                                  SmallVectorImpl<NamedDecl *> &Decls)
       : Reader(Reader), Contexts(Contexts), Name(Name), Decls(Decls) { }
@@ -6392,9 +6445,9 @@ namespace {
       // this context in this module.
       ModuleFile::DeclContextInfosMap::iterator Info;
       bool FoundInfo = false;
-      for (unsigned I = 0, N = This->Contexts.size(); I != N; ++I) {
-        Info = M.DeclContextInfos.find(This->Contexts[I]);
-        if (Info != M.DeclContextInfos.end() && 
+      for (auto *DC : This->Contexts) {
+        Info = M.DeclContextInfos.find(DC);
+        if (Info != M.DeclContextInfos.end() &&
             Info->second.NameLookupTableData) {
           FoundInfo = true;
           break;
@@ -6403,7 +6456,7 @@ namespace {
 
       if (!FoundInfo)
         return false;
-      
+
       // Look for this name within this module.
       ASTDeclContextNameLookupTable *LookupTable =
         Info->second.NameLookupTableData;
@@ -6424,9 +6477,11 @@ namespace {
           // currently read before reading its name. The lookup is triggered by
           // building that decl (likely indirectly), and so it is later in the
           // sense of "already existing" and can be ignored here.
+          // FIXME: This should not happen; deserializing declarations should
+          // not perform lookups since that can lead to deserialization cycles.
           continue;
         }
-      
+
         // Record this declaration.
         FoundAnything = true;
         This->Decls.push_back(ND);
@@ -6466,15 +6521,17 @@ ASTReader::FindExternalVisibleDeclsByName(const DeclContext *DC,
   if (!Name)
     return false;
 
+  Deserializing LookupResults(this);
+
   SmallVector<NamedDecl *, 64> Decls;
-  
+
   // Compute the declaration contexts we need to look into. Multiple such
   // declaration contexts occur when two declaration contexts from disjoint
   // modules get merged, e.g., when two namespaces with the same name are 
   // independently defined in separate modules.
   SmallVector<const DeclContext *, 2> Contexts;
   Contexts.push_back(DC);
-  
+
   if (DC->isNamespace()) {
     auto Merged = MergedDecls.find(const_cast<Decl *>(cast<Decl>(DC)));
     if (Merged != MergedDecls.end()) {
@@ -6482,24 +6539,40 @@ ASTReader::FindExternalVisibleDeclsByName(const DeclContext *DC,
         Contexts.push_back(cast<DeclContext>(GetDecl(Merged->second[I])));
     }
   }
+
+  auto LookUpInContexts = [&](ArrayRef<const DeclContext*> Contexts) {
+    DeclContextNameLookupVisitor Visitor(*this, Contexts, Name, Decls);
+
+    // If we can definitively determine which module file to look into,
+    // only look there. Otherwise, look in all module files.
+    ModuleFile *Definitive;
+    if (Contexts.size() == 1 &&
+        (Definitive = getDefinitiveModuleFileFor(Contexts[0], *this))) {
+      DeclContextNameLookupVisitor::visit(*Definitive, &Visitor);
+    } else {
+      ModuleMgr.visit(&DeclContextNameLookupVisitor::visit, &Visitor);
+    }
+  };
+
+  LookUpInContexts(Contexts);
+
+  // If this might be an implicit special member function, then also search
+  // all merged definitions of the surrounding class. We need to search them
+  // individually, because finding an entity in one of them doesn't imply that
+  // we can't find a different entity in another one.
   if (isa<CXXRecordDecl>(DC)) {
-    auto Merged = MergedLookups.find(DC);
-    if (Merged != MergedLookups.end())
-      Contexts.insert(Contexts.end(), Merged->second.begin(),
-                      Merged->second.end());
+    auto Kind = Name.getNameKind();
+    if (Kind == DeclarationName::CXXConstructorName ||
+        Kind == DeclarationName::CXXDestructorName ||
+        (Kind == DeclarationName::CXXOperatorName &&
+         Name.getCXXOverloadedOperator() == OO_Equal)) {
+      auto Merged = MergedLookups.find(DC);
+      if (Merged != MergedLookups.end())
+        for (auto *MergedDC : Merged->second)
+          LookUpInContexts(MergedDC);
+    }
   }
 
-  DeclContextNameLookupVisitor Visitor(*this, Contexts, Name, Decls);
-
-  // If we can definitively determine which module file to look into,
-  // only look there. Otherwise, look in all module files.
-  ModuleFile *Definitive;
-  if (Contexts.size() == 1 &&
-      (Definitive = getDefinitiveModuleFileFor(DC, *this))) {
-    DeclContextNameLookupVisitor::visit(*Definitive, &Visitor);
-  } else {
-    ModuleMgr.visit(&DeclContextNameLookupVisitor::visit, &Visitor);
-  }
   ++NumVisibleDeclContextsRead;
   SetExternalVisibleDeclsForName(DC, Name, Decls);
   return !Decls.empty();
@@ -8199,9 +8272,16 @@ void ASTReader::finishPendingActions() {
 }
 
 void ASTReader::diagnoseOdrViolations() {
+  if (PendingOdrMergeFailures.empty() && PendingOdrMergeChecks.empty())
+    return;
+
   // Trigger the import of the full definition of each class that had any
   // odr-merging problems, so we can produce better diagnostics for them.
-  for (auto &Merge : PendingOdrMergeFailures) {
+  // These updates may in turn find and diagnose some ODR failures, so take
+  // ownership of the set first.
+  auto OdrMergeFailures = std::move(PendingOdrMergeFailures);
+  PendingOdrMergeFailures.clear();
+  for (auto &Merge : OdrMergeFailures) {
     Merge.first->buildLookup();
     Merge.first->decls_begin();
     Merge.first->bases_begin();
@@ -8275,7 +8355,7 @@ void ASTReader::diagnoseOdrViolations() {
   }
 
   // Issue any pending ODR-failure diagnostics.
-  for (auto &Merge : PendingOdrMergeFailures) {
+  for (auto &Merge : OdrMergeFailures) {
     // If we've already pointed out a specific problem with this class, don't
     // bother issuing a general "something's different" diagnostic.
     if (!DiagnosedOdrMergeFailures.insert(Merge.first))
@@ -8314,7 +8394,6 @@ void ASTReader::diagnoseOdrViolations() {
         << Merge.first;
     }
   }
-  PendingOdrMergeFailures.clear();
 }
 
 void ASTReader::FinishedDeserializing() {

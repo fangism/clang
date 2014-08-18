@@ -1366,9 +1366,12 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
                                   : diag::warn_instance_method_not_found_with_typo;
         Selector MatchedSel = OMD->getSelector();
         SourceRange SelectorRange(SelectorLocs.front(), SelectorLocs.back());
-        Diag(SelLoc, DiagID)
-          << Sel<< isClassMessage << MatchedSel
-          << FixItHint::CreateReplacement(SelectorRange, MatchedSel.getAsString());
+        if (MatchedSel.isUnarySelector())
+          Diag(SelLoc, DiagID)
+            << Sel<< isClassMessage << MatchedSel
+            << FixItHint::CreateReplacement(SelectorRange, MatchedSel.getAsString());
+        else
+          Diag(SelLoc, DiagID) << Sel<< isClassMessage << MatchedSel;
       }
       else
         Diag(SelLoc, DiagID)
@@ -1705,11 +1708,15 @@ HandleExprPropertyRefExpr(const ObjCObjectPointerType *OPT,
   // name 'x'.
   if (Setter && Setter->isImplicit() && Setter->isPropertyAccessor()
       && !IFace->FindPropertyDeclaration(Member)) {
-      if (const ObjCPropertyDecl *PDecl = Setter->findPropertyDecl())
+      if (const ObjCPropertyDecl *PDecl = Setter->findPropertyDecl()) {
+        // Do not warn if user is using property-dot syntax to make call to
+        // user named setter.
+        if (!(PDecl->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_setter))
           Diag(MemberLoc,
                diag::warn_property_access_suggest)
           << MemberName << QualType(OPT, 0) << PDecl->getName()
           << FixItHint::CreateReplacement(MemberLoc, PDecl->getName());
+      }
   }
 
   if (Getter || Setter) {
@@ -2415,6 +2422,10 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
         Method = LookupFactoryMethodInGlobalPool(Sel, 
                                                  SourceRange(LBracLoc,RBracLoc),
                                                  receiverIsId);
+      if (Method)
+        if (ObjCMethodDecl *BestMethod =
+              SelectBestMethod(Sel, ArgsIn, Method->isInstanceMethod()))
+          Method = BestMethod;
     } else if (ReceiverType->isObjCClassType() ||
                ReceiverType->isObjCQualifiedClassType()) {
       // Handle messages to Class.
@@ -2466,6 +2477,10 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
                       << Sel << SourceRange(LBracLoc, RBracLoc);
                   }
             }
+            if (Method)
+              if (ObjCMethodDecl *BestMethod =
+                  SelectBestMethod(Sel, ArgsIn, Method->isInstanceMethod()))
+                Method = BestMethod;
           }
         }
       }

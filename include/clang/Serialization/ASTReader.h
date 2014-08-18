@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_FRONTEND_AST_READER_H
-#define LLVM_CLANG_FRONTEND_AST_READER_H
+#ifndef LLVM_CLANG_SERIALIZATION_ASTREADER_H
+#define LLVM_CLANG_SERIALIZATION_ASTREADER_H
 
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclarationName.h"
@@ -1117,6 +1117,9 @@ private:
   bool ReadSourceManagerBlock(ModuleFile &F);
   llvm::BitstreamCursor &SLocCursorForID(int ID);
   SourceLocation getImportLocation(ModuleFile *F);
+  ASTReadResult ReadModuleMapFileBlock(RecordData &Record, ModuleFile &F,
+                                       const ModuleFile *ImportedBy,
+                                       unsigned ClientLoadCapabilities);
   ASTReadResult ReadSubmoduleBlock(ModuleFile &F,
                                    unsigned ClientLoadCapabilities);
   static bool ParseLanguageOptions(const RecordData &Record, bool Complain,
@@ -1415,8 +1418,9 @@ public:
   void UpdateSema();
 
   /// \brief Add in-memory (virtual file) buffer.
-  void addInMemoryBuffer(StringRef &FileName, llvm::MemoryBuffer *Buffer) {
-    ModuleMgr.addInMemoryBuffer(FileName, Buffer);
+  void addInMemoryBuffer(StringRef &FileName,
+                         std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+    ModuleMgr.addInMemoryBuffer(FileName, std::move(Buffer));
   }
 
   /// \brief Finalizes the AST reader's state before writing an AST file to

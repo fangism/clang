@@ -503,6 +503,17 @@ def note_bracket_depth : Note<
 def err_misplaced_ellipsis_in_declaration : Error<
   "'...' must %select{immediately precede declared identifier|"
   "be innermost component of anonymous pack declaration}0">;
+def warn_misplaced_ellipsis_vararg : Warning<
+  "'...' in this location creates a C-style varargs function"
+  "%select{, not a function parameter pack|}0">,
+  InGroup<DiagGroup<"ambiguous-ellipsis">>;
+def note_misplaced_ellipsis_vararg_existing_ellipsis : Note<
+  "preceding '...' declares a function parameter pack">;
+def note_misplaced_ellipsis_vararg_add_ellipsis : Note<
+  "place '...' %select{immediately before declared identifier|here}0 "
+  "to declare a function parameter pack">;
+def note_misplaced_ellipsis_vararg_add_comma : Note<
+  "insert ',' before '...' to silence this warning">;
 def ext_abstract_pack_declarator_parens : ExtWarn<
   "ISO C++11 requires a parenthesized pack declaration to have a name">,
   InGroup<DiagGroup<"anonymous-pack-parens">>;
@@ -855,6 +866,11 @@ def warn_pragma_pack_malformed : Warning<
 // - #pragma unused
 def warn_pragma_unused_expected_var : Warning<
   "expected '#pragma unused' argument to be a variable name">,
+  InGroup<IgnoredPragmas>;
+// - #pragma init_seg
+def warn_pragma_init_seg_unsupported_target : Warning<
+  "'#pragma init_seg' is only supported when targeting a "
+  "Microsoft environment">,
   InGroup<IgnoredPragmas>;
 // - #pragma fp_contract
 def err_pragma_fp_contract_scope : Error<

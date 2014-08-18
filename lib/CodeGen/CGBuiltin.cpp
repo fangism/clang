@@ -3088,6 +3088,18 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     return Builder.CreateCall(F, llvm::ConstantInt::get(Int32Ty, HintID));
   }
 
+  if (BuiltinID == ARM::BI__builtin_arm_prefetch) {
+    Value *Address = EmitScalarExpr(E->getArg(0));
+    Value *RW      = EmitScalarExpr(E->getArg(1));
+    Value *IsData  = EmitScalarExpr(E->getArg(2));
+
+    // Locality is not supported on ARM target
+    Value *Locality = llvm::ConstantInt::get(Int32Ty, 3);
+
+    Value *F = CGM.getIntrinsic(Intrinsic::prefetch);
+    return Builder.CreateCall4(F, Address, RW, Locality, IsData);
+  }
+
   if (BuiltinID == ARM::BI__builtin_arm_rbit) {
     return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_rbit),
                                                EmitScalarExpr(E->getArg(0)),
@@ -3840,6 +3852,29 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
   if (HintID != static_cast<unsigned>(-1)) {
     Function *F = CGM.getIntrinsic(Intrinsic::aarch64_hint);
     return Builder.CreateCall(F, llvm::ConstantInt::get(Int32Ty, HintID));
+  }
+
+  if (BuiltinID == AArch64::BI__builtin_arm_prefetch) {
+    Value *Address         = EmitScalarExpr(E->getArg(0));
+    Value *RW              = EmitScalarExpr(E->getArg(1));
+    Value *CacheLevel      = EmitScalarExpr(E->getArg(2));
+    Value *RetentionPolicy = EmitScalarExpr(E->getArg(3));
+    Value *IsData          = EmitScalarExpr(E->getArg(4));
+
+    Value *Locality = nullptr;
+    if (cast<llvm::ConstantInt>(RetentionPolicy)->isZero()) {
+      // Temporal fetch, needs to convert cache level to locality.
+      Locality = llvm::ConstantInt::get(Int32Ty,
+        -cast<llvm::ConstantInt>(CacheLevel)->getValue() + 3);
+    } else {
+      // Streaming fetch.
+      Locality = llvm::ConstantInt::get(Int32Ty, 0);
+    }
+
+    // FIXME: We need AArch64 specific LLVM intrinsic if we want to specify
+    // PLDL3STRM or PLDL2STRM.
+    Value *F = CGM.getIntrinsic(Intrinsic::prefetch);
+    return Builder.CreateCall4(F, Address, RW, Locality, IsData);
   }
 
   if (BuiltinID == AArch64::BI__builtin_arm_rbit) {
@@ -6020,6 +6055,17 @@ static Value *emitTernaryFPBuiltin(CodeGenFunction &CGF,
   return CGF.Builder.CreateCall3(F, Src0, Src1, Src2);
 }
 
+// Emit an intrinsic that has 1 float or double operand, and 1 integer.
+static Value *emitFPIntBuiltin(CodeGenFunction &CGF,
+                               const CallExpr *E,
+                               unsigned IntrinsicID) {
+  llvm::Value *Src0 = CGF.EmitScalarExpr(E->getArg(0));
+  llvm::Value *Src1 = CGF.EmitScalarExpr(E->getArg(1));
+
+  Value *F = CGF.CGM.getIntrinsic(IntrinsicID, Src0->getType());
+  return CGF.Builder.CreateCall2(F, Src0, Src1);
+}
+
 Value *CodeGenFunction::EmitR600BuiltinExpr(unsigned BuiltinID,
                                             const CallExpr *E) {
   switch (BuiltinID) {
@@ -6058,12 +6104,8 @@ Value *CodeGenFunction::EmitR600BuiltinExpr(unsigned BuiltinID,
   case R600::BI__builtin_amdgpu_div_fixupf:
     return emitTernaryFPBuiltin(*this, E, Intrinsic::AMDGPU_div_fixup);
   case R600::BI__builtin_amdgpu_trig_preop:
-  case R600::BI__builtin_amdgpu_trig_preopf: {
-    Value *Src0 = EmitScalarExpr(E->getArg(0));
-    Value *Src1 = EmitScalarExpr(E->getArg(1));
-    Value *F = CGM.getIntrinsic(Intrinsic::AMDGPU_trig_preop, Src0->getType());
-    return Builder.CreateCall2(F, Src0, Src1);
-  }
+  case R600::BI__builtin_amdgpu_trig_preopf:
+    return emitFPIntBuiltin(*this, E, Intrinsic::AMDGPU_trig_preop);
   case R600::BI__builtin_amdgpu_rcp:
   case R600::BI__builtin_amdgpu_rcpf:
     return emitUnaryFPBuiltin(*this, E, Intrinsic::AMDGPU_rcp);
@@ -6073,6 +6115,9 @@ Value *CodeGenFunction::EmitR600BuiltinExpr(unsigned BuiltinID,
   case R600::BI__builtin_amdgpu_rsq_clamped:
   case R600::BI__builtin_amdgpu_rsq_clampedf:
     return emitUnaryFPBuiltin(*this, E, Intrinsic::AMDGPU_rsq_clamped);
+  case R600::BI__builtin_amdgpu_ldexp:
+  case R600::BI__builtin_amdgpu_ldexpf:
+    return emitFPIntBuiltin(*this, E, Intrinsic::AMDGPU_ldexp);
    default:
     return nullptr;
   }

@@ -12,8 +12,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_FILESYSTEMSTATCACHE_H
-#define LLVM_CLANG_FILESYSTEMSTATCACHE_H
+#ifndef LLVM_CLANG_BASIC_FILESYSTEMSTATCACHE_H
+#define LLVM_CLANG_BASIC_FILESYSTEMSTATCACHE_H
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/StringMap.h"
@@ -74,8 +74,8 @@ public:
 
   /// \brief Sets the next stat call cache in the chain of stat caches.
   /// Takes ownership of the given stat cache.
-  void setNextStatCache(FileSystemStatCache *Cache) {
-    NextStatCache.reset(Cache);
+  void setNextStatCache(std::unique_ptr<FileSystemStatCache> Cache) {
+    NextStatCache = std::move(Cache);
   }
   
   /// \brief Retrieve the next stat call cache in the chain.

@@ -1301,8 +1301,11 @@ void ASTDeclReader::MergeDefinitionData(
 
   // If the new definition has new special members, let the name lookup
   // code know that it needs to look in the new definition too.
-  if ((MergeDD.DeclaredSpecialMembers & ~DD.DeclaredSpecialMembers) &&
-      DD.Definition != MergeDD.Definition) {
+  //
+  // FIXME: We only need to do this if the merged definition declares members
+  // that this definition did not declare, or if it defines members that this
+  // definition did not define.
+  if (MergeDD.DeclaredSpecialMembers && DD.Definition != MergeDD.Definition) {
     Reader.MergedLookups[DD.Definition].push_back(MergeDD.Definition);
     DD.Definition->setHasExternalVisibleStorage();
   }
@@ -2016,6 +2019,8 @@ void ASTDeclReader::mergeRedeclarable(Redeclarable<T> *DBase,
   T *D = static_cast<T*>(DBase);
   T *DCanon = D->getCanonicalDecl();
   if (D != DCanon &&
+      // IDs < NUM_PREDEF_DECL_IDS are not loaded from an AST file.
+      Redecl.getFirstID() >= NUM_PREDEF_DECL_IDS &&
       (!Reader.getContext().getLangOpts().Modules ||
        Reader.getOwningModuleFile(DCanon) == Reader.getOwningModuleFile(D))) {
     // All redeclarations between this declaration and its originally-canonical
@@ -2391,8 +2396,14 @@ static DeclContext *getPrimaryContextForMerging(DeclContext *DC) {
   if (NamespaceDecl *ND = dyn_cast<NamespaceDecl>(DC))
     return ND->getOriginalNamespace();
 
+  // There is one tricky case here: if DC is a class with no definition, then
+  // we're merging a declaration whose definition is added by an update record,
+  // but we've not yet loaded that update record. In this case, we use the
+  // canonical declaration for merging until we get a real definition.
+  // FIXME: When we add a definition, we may need to move the partial lookup
+  // information from the canonical declaration onto the chosen definition.
   if (CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(DC))
-    return RD->getDefinition();
+    return RD->getPrimaryContext();
 
   if (EnumDecl *ED = dyn_cast<EnumDecl>(DC))
     return ED->getASTContext().getLangOpts().CPlusPlus? ED->getDefinition()
@@ -2619,11 +2630,11 @@ ASTReader::combineStoredMergedDecls(Decl *Canon, GlobalDeclID CanonID) {
   // Append the stored merged declarations to the merged declarations set.
   MergedDeclsMap::iterator Pos = MergedDecls.find(Canon);
   if (Pos == MergedDecls.end())
-    Pos = MergedDecls.insert(std::make_pair(Canon, 
+    Pos = MergedDecls.insert(std::make_pair(Canon,
                                             SmallVector<DeclID, 2>())).first;
   Pos->second.append(StoredPos->second.begin(), StoredPos->second.end());
   StoredMergedDecls.erase(StoredPos);
-  
+
   // Sort and uniquify the set of merged declarations.
   llvm::array_pod_sort(Pos->second.begin(), Pos->second.end());
   Pos->second.erase(std::unique(Pos->second.begin(), Pos->second.end()),
@@ -2953,13 +2964,13 @@ namespace {
   class RedeclChainVisitor {
     ASTReader &Reader;
     SmallVectorImpl<DeclID> &SearchDecls;
-    llvm::SmallPtrSet<Decl *, 16> &Deserialized;
+    llvm::SmallPtrSetImpl<Decl *> &Deserialized;
     GlobalDeclID CanonID;
     SmallVector<Decl *, 4> Chain;
     
   public:
     RedeclChainVisitor(ASTReader &Reader, SmallVectorImpl<DeclID> &SearchDecls,
-                       llvm::SmallPtrSet<Decl *, 16> &Deserialized,
+                       llvm::SmallPtrSetImpl<Decl *> &Deserialized,
                        GlobalDeclID CanonID)
       : Reader(Reader), SearchDecls(SearchDecls), Deserialized(Deserialized),
         CanonID(CanonID) { 
@@ -3078,7 +3089,7 @@ namespace {
     ASTReader &Reader;
     serialization::GlobalDeclID InterfaceID;
     ObjCInterfaceDecl *Interface;
-    llvm::SmallPtrSet<ObjCCategoryDecl *, 16> &Deserialized;
+    llvm::SmallPtrSetImpl<ObjCCategoryDecl *> &Deserialized;
     unsigned PreviousGeneration;
     ObjCCategoryDecl *Tail;
     llvm::DenseMap<DeclarationName, ObjCCategoryDecl *> NameCategoryMap;
@@ -3126,7 +3137,7 @@ namespace {
     ObjCCategoriesVisitor(ASTReader &Reader,
                           serialization::GlobalDeclID InterfaceID,
                           ObjCInterfaceDecl *Interface,
-                        llvm::SmallPtrSet<ObjCCategoryDecl *, 16> &Deserialized,
+                        llvm::SmallPtrSetImpl<ObjCCategoryDecl *> &Deserialized,
                           unsigned PreviousGeneration)
       : Reader(Reader), InterfaceID(InterfaceID), Interface(Interface),
         Deserialized(Deserialized), PreviousGeneration(PreviousGeneration),
@@ -3361,7 +3372,12 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
           Reader.ReadTemplateArgumentList(TemplArgs, F, Record, Idx);
           auto *TemplArgList = TemplateArgumentList::CreateCopy(
               Reader.getContext(), TemplArgs.data(), TemplArgs.size());
-          Spec->setInstantiationOf(PartialSpec, TemplArgList);
+
+          // FIXME: If we already have a partial specialization set,
+          // check that it matches.
+          if (!Spec->getSpecializedTemplateOrPartial()
+                   .is<ClassTemplatePartialSpecializationDecl *>())
+            Spec->setInstantiationOf(PartialSpec, TemplArgList);
         }
       }
 
