@@ -83,6 +83,9 @@ void Driver::ParseDriverMode(ArrayRef<const char *> Args) {
     getOpts().getOption(options::OPT_driver_mode).getPrefixedName();
 
   for (size_t I = 0, E = Args.size(); I != E; ++I) {
+    // Ingore nullptrs, they are response file's EOL markers
+    if (Args[I] == nullptr)
+      continue;
     const StringRef Arg = Args[I];
     if (!Arg.startswith(OptName))
       continue;
@@ -102,7 +105,7 @@ void Driver::ParseDriverMode(ArrayRef<const char *> Args) {
   }
 }
 
-InputArgList *Driver::ParseArgStrings(ArrayRef<const char *> ArgList) {
+InputArgList *Driver::ParseArgStrings(ArrayRef<const char *> ArgStrings) {
   llvm::PrettyStackTraceString CrashInfo("Command line argument parsing");
 
   unsigned IncludedFlagsBitmask;
@@ -111,7 +114,7 @@ InputArgList *Driver::ParseArgStrings(ArrayRef<const char *> ArgList) {
     getIncludeExcludeOptionFlagMasks();
 
   unsigned MissingArgIndex, MissingArgCount;
-  InputArgList *Args = getOpts().ParseArgs(ArgList.begin(), ArgList.end(),
+  InputArgList *Args = getOpts().ParseArgs(ArgStrings.begin(), ArgStrings.end(),
                                            MissingArgIndex, MissingArgCount,
                                            IncludedFlagsBitmask,
                                            ExcludedFlagsBitmask);
@@ -530,12 +533,12 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
         llvm::sys::path::append(VFS, "vfs", "vfs.yaml");
       }
 
-      std::string Err;
+      std::error_code EC;
       Script += ".sh";
-      llvm::raw_fd_ostream ScriptOS(Script.c_str(), Err, llvm::sys::fs::F_Excl);
-      if (!Err.empty()) {
+      llvm::raw_fd_ostream ScriptOS(Script, EC, llvm::sys::fs::F_Excl);
+      if (EC) {
         Diag(clang::diag::note_drv_command_failed_diag_msg)
-          << "Error generating run script: " + Script + " " + Err;
+            << "Error generating run script: " + Script + " " + EC.message();
       } else {
         // Replace the original filename with the preprocessed one.
         size_t I, E;

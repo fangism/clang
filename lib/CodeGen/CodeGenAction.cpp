@@ -579,7 +579,9 @@ void CodeGenAction::EndSourceFileAction() {
   TheModule.reset(BEConsumer->takeModule());
 }
 
-llvm::Module *CodeGenAction::takeModule() { return TheModule.release(); }
+std::unique_ptr<llvm::Module> CodeGenAction::takeModule() {
+  return std::move(TheModule);
+}
 
 llvm::LLVMContext *CodeGenAction::takeLLVMContext() {
   OwnsVMContext = false;

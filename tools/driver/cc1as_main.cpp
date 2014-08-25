@@ -262,13 +262,12 @@ static formatted_raw_ostream *GetOutputStream(AssemblerInvocation &Opts,
   if (Opts.OutputPath != "-")
     sys::RemoveFileOnSignal(Opts.OutputPath);
 
-  std::string Error;
-  raw_fd_ostream *Out =
-      new raw_fd_ostream(Opts.OutputPath.c_str(), Error,
-                         (Binary ? sys::fs::F_None : sys::fs::F_Text));
-  if (!Error.empty()) {
-    Diags.Report(diag::err_fe_unable_to_open_output)
-      << Opts.OutputPath << Error;
+  std::error_code EC;
+  raw_fd_ostream *Out = new raw_fd_ostream(
+      Opts.OutputPath, EC, (Binary ? sys::fs::F_None : sys::fs::F_Text));
+  if (EC) {
+    Diags.Report(diag::err_fe_unable_to_open_output) << Opts.OutputPath
+                                                     << EC.message();
     delete Out;
     return nullptr;
   }
@@ -295,7 +294,7 @@ static bool ExecuteAssembler(AssemblerInvocation &Opts,
   SourceMgr SrcMgr;
 
   // Tell SrcMgr about this buffer, which is what the parser will pick up.
-  SrcMgr.AddNewSourceBuffer(Buffer->release(), SMLoc());
+  SrcMgr.AddNewSourceBuffer(std::move(*Buffer), SMLoc());
 
   // Record the location of the include directories so that the lexer can find
   // it later.
