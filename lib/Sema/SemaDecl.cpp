@@ -1623,32 +1623,30 @@ static StringRef getHeaderName(ASTContext::GetBuiltinTypeError Error) {
 /// file scope.  lazily create a decl for it. ForRedeclaration is true
 /// if we're creating this built-in in anticipation of redeclaring the
 /// built-in.
-NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned bid,
+NamedDecl *Sema::LazilyCreateBuiltin(IdentifierInfo *II, unsigned ID,
                                      Scope *S, bool ForRedeclaration,
                                      SourceLocation Loc) {
   LookupPredefedObjCSuperType(*this, S, II);
-  
-  Builtin::ID BID = (Builtin::ID)bid;
 
   ASTContext::GetBuiltinTypeError Error;
-  QualType R = Context.GetBuiltinType(BID, Error);
+  QualType R = Context.GetBuiltinType(ID, Error);
   if (Error) {
     if (ForRedeclaration)
       Diag(Loc, diag::warn_implicit_decl_requires_sysheader)
           << getHeaderName(Error)
-          << Context.BuiltinInfo.GetName(BID);
+          << Context.BuiltinInfo.GetName(ID);
     return nullptr;
   }
 
-  if (!ForRedeclaration && Context.BuiltinInfo.isPredefinedLibFunction(BID)) {
+  if (!ForRedeclaration && Context.BuiltinInfo.isPredefinedLibFunction(ID)) {
     Diag(Loc, diag::ext_implicit_lib_function_decl)
-      << Context.BuiltinInfo.GetName(BID)
+      << Context.BuiltinInfo.GetName(ID)
       << R;
-    if (Context.BuiltinInfo.getHeaderName(BID) &&
+    if (Context.BuiltinInfo.getHeaderName(ID) &&
         !Diags.isIgnored(diag::ext_implicit_lib_function_decl, Loc))
       Diag(Loc, diag::note_include_header_or_declare)
-          << Context.BuiltinInfo.getHeaderName(BID)
-          << Context.BuiltinInfo.GetName(BID);
+          << Context.BuiltinInfo.getHeaderName(ID)
+          << Context.BuiltinInfo.GetName(ID);
   }
 
   DeclContext *Parent = Context.getTranslationUnitDecl();
@@ -3450,6 +3448,9 @@ Decl *Sema::ParsedFreeStandingDeclSpec(Scope *S, AccessSpecifier AS,
   // C11 6.7.2.1p2:
   //   A struct-declaration that does not declare an anonymous structure or
   //   anonymous union shall contain a struct-declarator-list.
+  //
+  // This rule also existed in C89 and C99; the grammar for struct-declaration
+  // did not permit a struct-declaration without a struct-declarator-list.
   if (!getLangOpts().CPlusPlus && CurContext->isRecord() &&
       DS.getStorageClassSpec() == DeclSpec::SCS_unspecified) {
     // Check for Microsoft C extension: anonymous struct/union member.
@@ -5072,7 +5073,7 @@ static void checkDLLAttributeRedeclaration(Sema &S, NamedDecl *OldDecl,
     NewDecl = NewTD->getTemplatedDecl();
 
   if (!OldDecl || !NewDecl)
-      return;
+    return;
 
   const DLLImportAttr *OldImportAttr = OldDecl->getAttr<DLLImportAttr>();
   const DLLExportAttr *OldExportAttr = OldDecl->getAttr<DLLExportAttr>();
@@ -5089,13 +5090,30 @@ static void checkDLLAttributeRedeclaration(Sema &S, NamedDecl *OldDecl,
   // Implicitly generated declarations are also excluded for now because there
   // is no other way to switch these to use dllimport or dllexport.
   bool AddsAttr = !(OldImportAttr || OldExportAttr) && HasNewAttr;
+
   if (AddsAttr && !IsSpecialization && !OldDecl->isImplicit()) {
-    S.Diag(NewDecl->getLocation(), diag::err_attribute_dll_redeclaration)
-      << NewDecl
-      << (NewImportAttr ? (const Attr *)NewImportAttr : NewExportAttr);
+    // If the declaration hasn't been used yet, allow with a warning for
+    // free functions and global variables.
+    bool JustWarn = false;
+    if (!OldDecl->isUsed() && OldDecl->getDeclContext()->isFileContext()) {
+      auto *VD = dyn_cast<VarDecl>(OldDecl);
+      if (VD && !VD->getDescribedVarTemplate())
+        JustWarn = true;
+      auto *FD = dyn_cast<FunctionDecl>(OldDecl);
+      if (FD && FD->getTemplatedKind() == FunctionDecl::TK_NonTemplate)
+        JustWarn = true;
+    }
+
+    unsigned DiagID = JustWarn ? diag::warn_attribute_dll_redeclaration
+                               : diag::err_attribute_dll_redeclaration;
+    S.Diag(NewDecl->getLocation(), DiagID)
+        << NewDecl
+        << (NewImportAttr ? (const Attr *)NewImportAttr : NewExportAttr);
     S.Diag(OldDecl->getLocation(), diag::note_previous_declaration);
-    NewDecl->setInvalidDecl();
-    return;
+    if (!JustWarn) {
+      NewDecl->setInvalidDecl();
+      return;
+    }
   }
 
   // A redeclaration is not allowed to drop a dllimport attribute, the only
@@ -8191,7 +8209,7 @@ namespace {
     void HandleValue(Expr *E) {
       if (isReferenceType)
         return;
-      E = E->IgnoreParenImpCasts();
+      E = E->IgnoreParens();
       if (DeclRefExpr* DRE = dyn_cast<DeclRefExpr>(E)) {
         HandleDeclRefExpr(DRE);
         return;
@@ -8200,6 +8218,23 @@ namespace {
       if (ConditionalOperator *CO = dyn_cast<ConditionalOperator>(E)) {
         HandleValue(CO->getTrueExpr());
         HandleValue(CO->getFalseExpr());
+        return;
+      }
+
+      if (BinaryConditionalOperator *BCO =
+              dyn_cast<BinaryConditionalOperator>(E)) {
+        HandleValue(BCO->getFalseExpr());
+        return;
+      }
+
+      if (OpaqueValueExpr *OVE = dyn_cast<OpaqueValueExpr>(E)) {
+        HandleValue(OVE->getSourceExpr());
+        return;
+      }
+
+      if (BinaryOperator *BO = dyn_cast<BinaryOperator>(E)) {
+        if (BO->getOpcode() == BO_Comma)
+          HandleValue(BO->getRHS());
         return;
       }
 
@@ -8286,6 +8321,19 @@ namespace {
         }
       }
       Inherited::VisitCXXConstructExpr(E);
+    }
+
+    void VisitCallExpr(CallExpr *E) {
+      // Treat std::move as a use.
+      if (E->getNumArgs() == 1) {
+        if (FunctionDecl *FD = E->getDirectCallee()) {
+          if (FD->getIdentifier() && FD->getIdentifier()->isStr("move")) {
+            HandleValue(E->getArg(0));
+          }
+        }
+      }
+
+      Inherited::VisitCallExpr(E);
     }
 
     void HandleDeclRefExpr(DeclRefExpr *DRE) {
@@ -9909,6 +9957,7 @@ static void RebuildLambdaScopeInfo(CXXMethodDecl *CallOperator,
 
   // Add the captures to the LSI so they can be noted as already
   // captured within tryCaptureVar. 
+  auto I = LambdaClass->field_begin();
   for (const auto &C : LambdaClass->captures()) {
     if (C.capturesVariable()) {
       VarDecl *VD = C.getCapturedVar();
@@ -9925,7 +9974,10 @@ static void RebuildLambdaScopeInfo(CXXMethodDecl *CallOperator,
     } else if (C.capturesThis()) {
       LSI->addThisCapture(/*Nested*/ false, C.getLocation(), 
                               S.getCurrentThisType(), /*Expr*/ nullptr);
+    } else {
+      LSI->addVLATypeCapture(C.getLocation(), I->getType());
     }
+    ++I;
   }
 }
 

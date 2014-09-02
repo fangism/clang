@@ -2070,6 +2070,21 @@ TEST_F(FormatTest, FormatsInlineASM) {
       "    \"xchgq\\t%%rbx, %%rsi\\n\\t\"\n"
       "    : \"=a\"(*rEAX), \"=S\"(*rEBX), \"=c\"(*rECX), \"=d\"(*rEDX)\n"
       "    : \"a\"(value));");
+  EXPECT_EQ(
+      "void NS_InvokeByIndex(void *that, unsigned int methodIndex) {\n"
+      "    __asm {\n"
+      "        mov     edx,[that] // vtable in edx\n"
+      "        mov     eax,methodIndex\n"
+      "        call    [edx][eax*4] // stdcall\n"
+      "    }\n"
+      "}",
+      format("void NS_InvokeByIndex(void *that,   unsigned int methodIndex) {\n"
+             "    __asm {\n"
+             "        mov     edx,[that] // vtable in edx\n"
+             "        mov     eax,methodIndex\n"
+             "        call    [edx][eax*4] // stdcall\n"
+             "    }\n"
+             "}"));
 }
 
 TEST_F(FormatTest, FormatTryCatch) {
@@ -4916,6 +4931,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyFormat("vector<a * b> v;");
   verifyFormat("foo<b && false>();");
   verifyFormat("foo<b & 1>();");
+  verifyFormat("decltype(*::std::declval<const T &>()) void F();");
 
   verifyIndependentOfContext("MACRO(int *i);");
   verifyIndependentOfContext("MACRO(auto *a);");
@@ -5450,6 +5466,9 @@ TEST_F(FormatTest, LayoutCxx11BraceInitializers) {
   verifyFormat("int foo(int i) { return fo1{}(i); }");
   verifyFormat("int foo(int i) { return fo1{}(i); }");
   verifyFormat("auto i = decltype(x){};");
+  verifyFormat("std::vector<int> v = {1, 0 /* comment */};");
+  verifyFormat("Node n{1, Node{1000}, //\n"
+               "       2};");
 
   // In combination with BinPackParameters = false.
   FormatStyle NoBinPacking = getLLVMStyle();
@@ -5545,10 +5564,7 @@ TEST_F(FormatTest, LayoutCxx11BraceInitializers) {
       "                                 bbbbbbbbbbbbbbbbbbbb, bbbbb };",
       ExtraSpaces);
   verifyFormat("DoSomethingWithVector({} /* No data */);", ExtraSpaces);
-  verifyFormat("DoSomethingWithVector({\n"
-               "                        {} /* No data */\n"
-               "                      },\n"
-               "                      { { 1, 2 } });",
+  verifyFormat("DoSomethingWithVector({ {} /* No data */ }, { { 1, 2 } });",
                ExtraSpaces);
   verifyFormat(
       "someFunction(OtherParam,\n"
@@ -5618,10 +5634,9 @@ TEST_F(FormatTest, FormatsBracedListsInColumnLayout) {
                "    1, 1, 1, 1, 1, 1, 1, 1, //\n"
                "};",
                getLLVMStyleWithColumns(39));
-  verifyFormat("vector<int> x = {\n"
-               "    1, 1, 1, 1, 1, 1, 1, 1,\n"
-               "    /**/ /**/\n"
-               "};",
+  verifyFormat("vector<int> x = {1, 1, 1, 1,\n"
+               "                 1, 1, 1, 1,\n"
+               "                 /**/ /**/};",
                getLLVMStyleWithColumns(39));
   verifyFormat("return {{aaaaaaaaaaaaaaaaaaaaa},\n"
                "        {aaaaaaaaaaaaaaaaaaa},\n"
@@ -7708,6 +7723,28 @@ TEST_F(FormatTest, ConfigurableSpacesInParentheses) {
                "}", Spaces);
 }
 
+TEST_F(FormatTest, ConfigurableSpacesInSquareBrackets) {
+  verifyFormat("int a[5];");
+  verifyFormat("a[3] += 42;");
+
+  FormatStyle Spaces = getLLVMStyle();
+  Spaces.SpacesInSquareBrackets = true;
+  // Lambdas unchanged.
+  verifyFormat("int c = []() -> int { return 2; }();\n", Spaces);
+  verifyFormat("return [i, args...] {};", Spaces);
+
+  // Not lambdas.
+  verifyFormat("int a[ 5 ];", Spaces);
+  verifyFormat("a[ 3 ] += 42;", Spaces);
+  verifyFormat("constexpr char hello[]{\"hello\"};", Spaces);
+  verifyFormat("double &operator[](int i) { return 0; }\n"
+               "int i;",
+               Spaces);
+  verifyFormat("std::unique_ptr<int[]> foo() {}", Spaces);
+  verifyFormat("int i = a[ a ][ a ]->f();", Spaces);
+  verifyFormat("int i = (*b)[ a ]->f();", Spaces);
+}
+
 TEST_F(FormatTest, ConfigurableSpaceBeforeAssignmentOperators) {
   verifyFormat("int a = 5;");
   verifyFormat("a += 42;");
@@ -8264,6 +8301,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(ObjCSpaceBeforeProtocolList);
   CHECK_PARSE_BOOL(Cpp11BracedListStyle);
   CHECK_PARSE_BOOL(SpacesInParentheses);
+  CHECK_PARSE_BOOL(SpacesInSquareBrackets);
   CHECK_PARSE_BOOL(SpacesInAngles);
   CHECK_PARSE_BOOL(SpaceInEmptyParentheses);
   CHECK_PARSE_BOOL(SpacesInContainerLiterals);

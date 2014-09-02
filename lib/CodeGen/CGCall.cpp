@@ -139,23 +139,6 @@ static CallingConv getCallingConventionForDecl(const Decl *D, bool IsWindows) {
   return CC_C;
 }
 
-static bool isAAPCSVFP(const CGFunctionInfo &FI, const TargetInfo &Target) {
-  switch (FI.getEffectiveCallingConvention()) {
-  case llvm::CallingConv::C:
-    switch (Target.getTriple().getEnvironment()) {
-    case llvm::Triple::EABIHF:
-    case llvm::Triple::GNUEABIHF:
-      return true;
-    default:
-      return false;
-    }
-  case llvm::CallingConv::ARM_AAPCS_VFP:
-    return true;
-  default:
-    return false;
-  }
-}
-
 /// Arrange the argument and result information for a call to an
 /// unknown C++ non-static member function of the given abstract type.
 /// (Zero value of RD means we don't have any meaningful "this" argument type,
@@ -347,6 +330,20 @@ CodeGenTypes::arrangeGlobalDeclaration(GlobalDecl GD) {
     return arrangeCXXDestructor(DD, GD.getDtorType());
 
   return arrangeFunctionDeclaration(FD);
+}
+
+/// Arrange a thunk that takes 'this' as the first parameter followed by
+/// varargs.  Return a void pointer, regardless of the actual return type.
+/// The body of the thunk will end in a musttail call to a function of the
+/// correct type, and the caller will bitcast the function to the correct
+/// prototype.
+const CGFunctionInfo &
+CodeGenTypes::arrangeMSMemberPointerThunk(const CXXMethodDecl *MD) {
+  assert(MD->isVirtual() && "only virtual memptrs have thunks");
+  CanQual<FunctionProtoType> FTP = GetFormalType(MD);
+  CanQualType ArgTys[] = { GetThisType(Context, MD->getParent()) };
+  return arrangeLLVMFunctionInfo(Context.VoidTy, false, ArgTys,
+                                 FTP->getExtInfo(), RequiredArgs(1));
 }
 
 /// Arrange a call as unto a free function, except possibly with an
@@ -644,11 +641,13 @@ EnterStructPointerForCoercedAccess(llvm::Value *SrcPtr,
   llvm::Type *FirstElt = SrcSTy->getElementType(0);
 
   // If the first elt is at least as large as what we're looking for, or if the
-  // first element is the same size as the whole struct, we can enter it.
+  // first element is the same size as the whole struct, we can enter it. The
+  // comparison must be made on the store size and not the alloca size. Using
+  // the alloca size may overstate the size of the load.
   uint64_t FirstEltSize =
-    CGF.CGM.getDataLayout().getTypeAllocSize(FirstElt);
+    CGF.CGM.getDataLayout().getTypeStoreSize(FirstElt);
   if (FirstEltSize < DstSize &&
-      FirstEltSize < CGF.CGM.getDataLayout().getTypeAllocSize(SrcSTy))
+      FirstEltSize < CGF.CGM.getDataLayout().getTypeStoreSize(SrcSTy))
     return SrcPtr;
 
   // GEP into the first element.
@@ -989,14 +988,11 @@ CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
 
     case ABIArgInfo::Extend:
     case ABIArgInfo::Direct: {
-      // If the coerce-to type is a first class aggregate, flatten it.  Either
-      // way is semantically identical, but fast-isel and the optimizer
-      // generally likes scalar values better than FCAs.
-      // We cannot do this for functions using the AAPCS calling convention,
-      // as structures are treated differently by that calling convention.
+      // Fast-isel and the optimizer generally like scalar values better than
+      // FCAs, so we flatten them if this is safe to do for this argument.
       llvm::Type *argType = argAI.getCoerceToType();
       llvm::StructType *st = dyn_cast<llvm::StructType>(argType);
-      if (st && !isAAPCSVFP(FI, getTarget())) {
+      if (st && argAI.isDirect() && argAI.getCanBeFlattened()) {
         for (unsigned i = 0, e = st->getNumElements(); i != e; ++i)
           argTypes.push_back(st->getElementType(i));
       } else {
@@ -1134,7 +1130,7 @@ void ClangToLLVMArgMapping::construct(CodeGenModule &CGM,
     case ABIArgInfo::Direct: {
       // FIXME: handle sseregparm someday...
       llvm::StructType *STy = dyn_cast<llvm::StructType>(AI.getCoerceToType());
-      if (!isAAPCSVFP(FI, CGM.getTarget()) && STy) {
+      if (AI.isDirect() && AI.getCanBeFlattened() && STy) {
         IRArgs.NumberOfArgs = STy->getNumElements();
       } else {
         IRArgs.NumberOfArgs = 1;
@@ -1439,6 +1435,30 @@ static llvm::Value *emitArgumentDemotion(CodeGenFunction &CGF,
   return CGF.Builder.CreateFPCast(value, varType, "arg.unpromote");
 }
 
+static bool shouldAddNonNullAttr(const Decl *FD, const ParmVarDecl *PVD) {
+  // FIXME: __attribute__((nonnull)) can also be applied to:
+  //   - references to pointers, where the pointee is known to be
+  //     nonnull (apparently a Clang extension)
+  //   - transparent unions containing pointers
+  // In the former case, LLVM IR cannot represent the constraint. In
+  // the latter case, we have no guarantee that the transparent union
+  // is in fact passed as a pointer.
+  if (!PVD->getType()->isAnyPointerType() &&
+      !PVD->getType()->isBlockPointerType())
+    return false;
+  // First, check attribute on parameter itself.
+  if (PVD->hasAttr<NonNullAttr>())
+    return true;
+  // Check function attributes.
+  if (!FD)
+    return false;
+  for (const auto *NNAttr : FD->specific_attrs<NonNullAttr>()) {
+    if (NNAttr->isNonNull(PVD->getFunctionScopeIndex()))
+      return true;
+  }
+  return false;
+}
+
 void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
                                          llvm::Function *Fn,
                                          const FunctionArgList &Args) {
@@ -1482,10 +1502,6 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
     AI->addAttr(llvm::AttributeSet::get(getLLVMContext(), AI->getArgNo() + 1,
                                         llvm::Attribute::NoAlias));
   }
-
-  // Get the function-level nonnull attribute if it exists.
-  const NonNullAttr *NNAtt =
-    CurCodeDecl ? CurCodeDecl->getAttr<NonNullAttr>() : nullptr;
 
   // Track if we received the parameter as a pointer (indirect, byval, or
   // inalloca).  If already have a pointer, EmitParmDecl doesn't need to copy it
@@ -1577,8 +1593,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
         llvm::Value *V = AI;
 
         if (const ParmVarDecl *PVD = dyn_cast<ParmVarDecl>(Arg)) {
-          if ((NNAtt && NNAtt->isNonNull(PVD->getFunctionScopeIndex())) ||
-              PVD->hasAttr<NonNullAttr>())
+          if (shouldAddNonNullAttr(CurCodeDecl, PVD))
             AI->addAttr(llvm::AttributeSet::get(getLLVMContext(),
                                                 AI->getArgNo() + 1,
                                                 llvm::Attribute::NonNull));
@@ -1671,13 +1686,11 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
                           llvm::PointerType::getUnqual(ArgI.getCoerceToType()));
       }
 
-      // If the coerce-to type is a first class aggregate, we flatten it and
-      // pass the elements. Either way is semantically identical, but fast-isel
-      // and the optimizer generally likes scalar values better than FCAs.
-      // We cannot do this for functions using the AAPCS calling convention,
-      // as structures are treated differently by that calling convention.
+      // Fast-isel and the optimizer generally like scalar values better than
+      // FCAs, so we flatten them if this is safe to do for this argument.
       llvm::StructType *STy = dyn_cast<llvm::StructType>(ArgI.getCoerceToType());
-      if (!isAAPCSVFP(FI, getTarget()) && STy && STy->getNumElements() > 1) {
+      if (ArgI.isDirect() && ArgI.getCanBeFlattened() && STy &&
+          STy->getNumElements() > 1) {
         uint64_t SrcSize = CGM.getDataLayout().getTypeAllocSize(STy);
         llvm::Type *DstTy =
           cast<llvm::PointerType>(Ptr->getType())->getElementType();
@@ -2093,8 +2106,7 @@ void CodeGenFunction::EmitFunctionEpilog(const CGFunctionInfo &FI,
       llvm::Constant *StaticData[] = {
         EmitCheckSourceLocation(EndLoc)
       };
-      EmitCheck(Cond, "nonnull_return", StaticData, ArrayRef<llvm::Value *>(),
-                CRK_Recoverable);
+      EmitCheck(Cond, "nonnull_return", StaticData, None, CRK_Recoverable);
     }
     Ret = Builder.CreateRet(RV);
   } else {
@@ -2562,7 +2574,7 @@ CodeGenFunction::AddObjCARCExceptionMetadata(llvm::Instruction *Inst) {
 llvm::CallInst *
 CodeGenFunction::EmitNounwindRuntimeCall(llvm::Value *callee,
                                          const llvm::Twine &name) {
-  return EmitNounwindRuntimeCall(callee, ArrayRef<llvm::Value*>(), name);
+  return EmitNounwindRuntimeCall(callee, None, name);
 }
 
 /// Emits a call to the given nounwind runtime function.
@@ -2580,7 +2592,7 @@ CodeGenFunction::EmitNounwindRuntimeCall(llvm::Value *callee,
 llvm::CallInst *
 CodeGenFunction::EmitRuntimeCall(llvm::Value *callee,
                                  const llvm::Twine &name) {
-  return EmitRuntimeCall(callee, ArrayRef<llvm::Value*>(), name);
+  return EmitRuntimeCall(callee, None, name);
 }
 
 /// Emits a simple call (never an invoke) to the given runtime
@@ -2619,7 +2631,7 @@ void CodeGenFunction::EmitNoreturnRuntimeCallOrInvoke(llvm::Value *callee,
 llvm::CallSite
 CodeGenFunction::EmitRuntimeCallOrInvoke(llvm::Value *callee,
                                          const Twine &name) {
-  return EmitRuntimeCallOrInvoke(callee, ArrayRef<llvm::Value*>(), name);
+  return EmitRuntimeCallOrInvoke(callee, None, name);
 }
 
 /// Emits a call or invoke instruction to the given runtime function.
@@ -2635,7 +2647,7 @@ CodeGenFunction::EmitRuntimeCallOrInvoke(llvm::Value *callee,
 llvm::CallSite
 CodeGenFunction::EmitCallOrInvoke(llvm::Value *Callee,
                                   const Twine &Name) {
-  return EmitCallOrInvoke(Callee, ArrayRef<llvm::Value *>(), Name);
+  return EmitCallOrInvoke(Callee, None, Name);
 }
 
 /// Emits a call or invoke instruction to the given function, depending
@@ -2929,14 +2941,11 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
 
       }
 
-      // If the coerce-to type is a first class aggregate, we flatten it and
-      // pass the elements. Either way is semantically identical, but fast-isel
-      // and the optimizer generally likes scalar values better than FCAs.
-      // We cannot do this for functions using the AAPCS calling convention,
-      // as structures are treated differently by that calling convention.
+      // Fast-isel and the optimizer generally like scalar values better than
+      // FCAs, so we flatten them if this is safe to do for this argument.
       llvm::StructType *STy =
             dyn_cast<llvm::StructType>(ArgInfo.getCoerceToType());
-      if (STy && !isAAPCSVFP(CallInfo, getTarget())) {
+      if (STy && ArgInfo.isDirect() && ArgInfo.getCanBeFlattened()) {
         llvm::Type *SrcTy =
           cast<llvm::PointerType>(SrcPtr->getType())->getElementType();
         uint64_t SrcSize = CGM.getDataLayout().getTypeAllocSize(SrcTy);

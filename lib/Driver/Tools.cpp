@@ -755,10 +755,9 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
       break;
     case llvm::Triple::EABIHF:
     case llvm::Triple::EABI:
+    default:
       ABIName = "aapcs";
       break;
-    default:
-      ABIName = "apcs-gnu";
     }
   }
   CmdArgs.push_back("-target-abi");
@@ -1638,7 +1637,7 @@ void Clang::AddHexagonTargetArgs(const ArgList &Args,
 }
 
 // Decode AArch64 features from string like +[no]featureA+[no]featureB+...
-static bool DecodeAArch64Features(const Driver &D, const StringRef &text,
+static bool DecodeAArch64Features(const Driver &D, StringRef text,
                                   std::vector<const char *> &Features) {
   SmallVector<StringRef, 8> Split;
   text.split(Split, StringRef("+"), -1, false);
@@ -2043,8 +2042,7 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
         } else if (Value == "-L") {
           CmdArgs.push_back("-msave-temp-labels");
         } else if (Value == "--fatal-warnings") {
-          CmdArgs.push_back("-mllvm");
-          CmdArgs.push_back("-fatal-assembler-warnings");
+          CmdArgs.push_back("-massembler-fatal-warnings");
         } else if (Value == "--noexecstack") {
           CmdArgs.push_back("-mnoexecstack");
         } else if (Value == "-compress-debug-sections" ||
@@ -2136,7 +2134,7 @@ static void addProfileRT(
 }
 
 static SmallString<128> getSanitizerRTLibName(const ToolChain &TC,
-                                              const StringRef Sanitizer,
+                                              StringRef Sanitizer,
                                               bool Shared) {
   // Sanitizer runtime has name "libclang_rt.<Sanitizer>-<ArchName>.{a,so}"
   // (or "libclang_rt.<Sanitizer>-<ArchName>-android.so for Android)
@@ -2152,7 +2150,7 @@ static SmallString<128> getSanitizerRTLibName(const ToolChain &TC,
 
 static void addSanitizerRTLinkFlags(const ToolChain &TC, const ArgList &Args,
                                     ArgStringList &CmdArgs,
-                                    const StringRef Sanitizer,
+                                    StringRef Sanitizer,
                                     bool ExportSymbols, bool LinkDeps) {
   SmallString<128> LibSanitizer =
       getSanitizerRTLibName(TC, Sanitizer, /*Shared*/ false);
@@ -2199,8 +2197,7 @@ static void addAsanRT(const ToolChain &TC, const ArgList &Args,
                       ArgStringList &CmdArgs, bool Shared, bool IsCXX) {
   if (Shared) {
     // Link dynamic runtime if necessary.
-    SmallString<128> LibSanitizer =
-        getSanitizerRTLibName(TC, "asan_dynamic", Shared);
+    SmallString<128> LibSanitizer = getSanitizerRTLibName(TC, "asan", Shared);
     CmdArgs.insert(CmdArgs.begin(), Args.MakeArgString(LibSanitizer));
   }
 
@@ -3716,6 +3713,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString("-mstack-alignment=" + alignment));
   }
 
+  if (getToolChain().getTriple().getArch() == llvm::Triple::aarch64 ||
+      getToolChain().getTriple().getArch() == llvm::Triple::aarch64_be)
+    CmdArgs.push_back("-fallow-half-arguments-and-returns");
+
   if (Arg *A = Args.getLastArg(options::OPT_mrestrict_it,
                                options::OPT_mno_restrict_it)) {
     if (A->getOption().matches(options::OPT_mrestrict_it)) {
@@ -4951,19 +4952,10 @@ void gcc::Common::ConstructJob(Compilation &C, const JobAction &JA,
   RenderExtraToolArgs(JA, CmdArgs);
 
   // If using a driver driver, force the arch.
-  llvm::Triple::ArchType Arch = getToolChain().getArch();
   if (getToolChain().getTriple().isOSDarwin()) {
     CmdArgs.push_back("-arch");
-
-    // FIXME: Remove these special cases.
-    if (Arch == llvm::Triple::ppc)
-      CmdArgs.push_back("ppc");
-    else if (Arch == llvm::Triple::ppc64)
-      CmdArgs.push_back("ppc64");
-    else if (Arch == llvm::Triple::ppc64le)
-      CmdArgs.push_back("ppc64le");
-    else
-      CmdArgs.push_back(Args.MakeArgString(getToolChain().getArchName()));
+    CmdArgs.push_back(
+      Args.MakeArgString(getToolChain().getDefaultUniversalArchName()));
   }
 
   // Try to force gcc to match the tool chain we want, if we recognize
@@ -4971,6 +4963,7 @@ void gcc::Common::ConstructJob(Compilation &C, const JobAction &JA,
   //
   // FIXME: The triple class should directly provide the information we want
   // here.
+  llvm::Triple::ArchType Arch = getToolChain().getArch();
   if (Arch == llvm::Triple::x86 || Arch == llvm::Triple::ppc)
     CmdArgs.push_back("-m32");
   else if (Arch == llvm::Triple::x86_64 || Arch == llvm::Triple::ppc64 ||
@@ -7785,7 +7778,7 @@ void dragonfly::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
 static void addSanitizerRTWindows(const ToolChain &TC, const ArgList &Args,
                                   ArgStringList &CmdArgs,
-                                  const StringRef RTName) {
+                                  StringRef RTName) {
   SmallString<128> LibSanitizer(getCompilerRTLibDir(TC));
   llvm::sys::path::append(LibSanitizer,
                           Twine("clang_rt.") + RTName + ".lib");
@@ -7833,7 +7826,10 @@ void visualstudio::Link::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString("-debug"));
     CmdArgs.push_back(Args.MakeArgString("-incremental:no"));
     // FIXME: Handle 64-bit.
-    if (DLL) {
+    if (Args.hasArg(options::OPT__SLASH_MD, options::OPT__SLASH_MDd)) {
+      addSanitizerRTWindows(getToolChain(), Args, CmdArgs, "asan_dynamic-i386");
+      addSanitizerRTWindows(getToolChain(), Args, CmdArgs, "asan_uar_thunk-i386");
+    } else if (DLL) {
       addSanitizerRTWindows(getToolChain(), Args, CmdArgs,
                             "asan_dll_thunk-i386");
     } else {
@@ -7880,7 +7876,7 @@ static std::string FindFallback(const char *FallbackName,
   llvm::SplitString(OptPath.getValue(), PathSegments, EnvPathSeparatorStr);
 
   for (size_t i = 0, e = PathSegments.size(); i != e; ++i) {
-    const StringRef &PathSegment = PathSegments[i];
+    StringRef PathSegment = PathSegments[i];
     if (PathSegment.empty())
       continue;
 

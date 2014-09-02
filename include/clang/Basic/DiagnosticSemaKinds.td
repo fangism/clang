@@ -787,7 +787,8 @@ def warn_no_autosynthesis_property : Warning<
   InGroup<ObjCNoPropertyAutoSynthesis>;
 def warn_autosynthesis_property_in_superclass : Warning<
   "auto property synthesis will not synthesize property "
-  "%0 because it will be implemented by its superclass">,
+  "%0; it will be implemented by its superclass, use @dynamic to "
+  "acknowledge intention">,
   InGroup<ObjCNoPropertyAutoSynthesis>;
 def warn_autosynthesis_property_ivar_match :Warning<
   "autosynthesized property %0 will use %select{|synthesized}1 instance variable "
@@ -2133,6 +2134,9 @@ def warn_attribute_invalid_on_definition : Warning<
   InGroup<IgnoredAttributes>;
 def err_attribute_dll_redeclaration : Error<
   "redeclaration of %q0 cannot add %q1 attribute">;
+def warn_attribute_dll_redeclaration : Warning<
+  "redeclaration of %q0 should not add %q1 attribute">,
+  InGroup<DiagGroup<"dll-attribute-on-redeclaration">>;
 def err_attribute_dllimport_function_definition : Error<
   "dllimport cannot be applied to non-inline function definition">;
 def err_attribute_dll_deleted : Error<
@@ -5354,9 +5358,6 @@ let CategoryName = "Lambda Issue" in {
     "'this' cannot be %select{implicitly |}0captured in this context">;
   def err_lambda_capture_anonymous_var : Error<
     "unnamed variable cannot be implicitly captured in a lambda expression">;
-  def err_lambda_capture_vm_type : Error<
-    "variable %0 with variably modified type cannot be captured in "
-    "a lambda expression">;
   def err_lambda_capture_flexarray_type : Error<
     "variable %0 with flexible array member cannot be captured in "
     "a lambda expression">;
@@ -6470,7 +6471,7 @@ def note_format_fix_specifier : Note<"did you mean to use '%0'?">;
 def note_printf_c_str: Note<"did you mean to call the %0 method?">;
 
 def warn_null_arg : Warning<
-  "null passed to a callee which requires a non-null argument">,
+  "null passed to a callee that requires a non-null argument">,
   InGroup<NonNull>;
 def warn_null_ret : Warning<
   "null returned from %select{function|method}0 that requires a non-null return value">,
@@ -6879,7 +6880,11 @@ def warn_ivar_use_hidden : Warning<
    InGroup<DiagGroup<"shadow-ivar">>;
 def warn_direct_initialize_call : Warning<
   "explicit call to +initialize results in duplicate call to +initialize">,
-   InGroup<DiagGroup<"explicit-initialize-call">>;
+   InGroup<ExplicitInitializeCall>;
+def warn_direct_super_initialize_call : Warning<
+  "explicit call to [super initialize] should only be in implementation "
+  "of +initialize">,
+   InGroup<ExplicitInitializeCall>;
 def error_ivar_use_in_class_method : Error<
   "instance variable %0 accessed in class method">;
 def error_implicit_ivar_access : Error<

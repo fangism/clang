@@ -262,7 +262,7 @@ public:
     // Delete all bindings when a matcher does not match.
     // This prevents unexpected exposure of bound nodes in unmatches
     // branches of the match tree.
-    *Builder = BoundNodesTreeBuilder();
+    Builder->removeBindings([](const BoundNodesMap &) { return true; });
     return false;
   }
 
@@ -490,7 +490,7 @@ bool matchesFirstInRange(const MatcherT &Matcher, IteratorT Start,
   for (IteratorT I = Start; I != End; ++I) {
     BoundNodesTreeBuilder Result(*Builder);
     if (Matcher.matches(*I, Finder, &Result)) {
-      *Builder = Result;
+      *Builder = std::move(Result);
       return true;
     }
   }
@@ -506,7 +506,7 @@ bool matchesFirstInPointerRange(const MatcherT &Matcher, IteratorT Start,
   for (IteratorT I = Start; I != End; ++I) {
     BoundNodesTreeBuilder Result(*Builder);
     if (Matcher.matches(**I, Finder, &Result)) {
-      *Builder = Result;
+      *Builder = std::move(Result);
       return true;
     }
   }
@@ -1647,7 +1647,7 @@ getTemplateSpecializationArgs(const ClassTemplateSpecializationDecl &D) {
 
 inline ArrayRef<TemplateArgument>
 getTemplateSpecializationArgs(const TemplateSpecializationType &T) {
-  return ArrayRef<TemplateArgument>(T.getArgs(), T.getNumArgs());
+  return llvm::makeArrayRef(T.getArgs(), T.getNumArgs());
 }
 
 struct NotEqualsBoundNodePredicate {

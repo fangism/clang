@@ -122,7 +122,7 @@ public:
     delete PerModulePasses;
     delete PerFunctionPasses;
     if (CodeGenOpts.DisableFree)
-      BuryPointer(TM.release());
+      BuryPointer(std::move(TM));
   }
 
   std::unique_ptr<TargetMachine> TM;
@@ -483,6 +483,7 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   Options.MCOptions.MCSaveTempLabels = CodeGenOpts.SaveTempLabels;
   Options.MCOptions.MCUseDwarfDirectory = !CodeGenOpts.NoDwarfDirectoryAsm;
   Options.MCOptions.MCNoExecStack = CodeGenOpts.NoExecStack;
+  Options.MCOptions.MCFatalWarnings = CodeGenOpts.FatalWarnings;
   Options.MCOptions.AsmVerbose = CodeGenOpts.AsmVerbose;
 
   TargetMachine *TM = TheTarget->createTargetMachine(Triple, TargetOpts.CPU,

@@ -658,6 +658,20 @@ void UnwrappedLineParser::parseStructuralElement() {
       break;
     }
     break;
+  case tok::kw_asm:
+    FormatTok->Finalized = true;
+    nextToken();
+    if (FormatTok->is(tok::l_brace)) {
+      while (FormatTok && FormatTok->isNot(tok::eof)) {
+        FormatTok->Finalized = true;
+        if (FormatTok->is(tok::r_brace)) {
+          nextToken();
+          break;
+        }
+        nextToken();
+      }
+    }
+    break;
   case tok::kw_namespace:
     parseNamespace();
     return;

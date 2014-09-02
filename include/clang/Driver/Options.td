@@ -1624,7 +1624,7 @@ multiclass BooleanFFlag<string name> {
   def _fno : Flag<["-"], "fno-"#name>;
 }
 
-defm : BooleanFFlag<"no-keep-inline-functions">, Group<clang_ignored_gcc_optimization_f_Group>;
+defm : BooleanFFlag<"keep-inline-functions">, Group<clang_ignored_gcc_optimization_f_Group>;
 
 def fprofile_dir : Joined<["-"], "fprofile-dir=">, Group<clang_ignored_gcc_optimization_f_Group>;
 
@@ -1722,6 +1722,9 @@ defm variable_expansion_in_unroller : BooleanFFlag<"variable-expansion-in-unroll
     Group<clang_ignored_gcc_optimization_f_Group>;
 defm web : BooleanFFlag<"web">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm whole_program : BooleanFFlag<"whole-program">, Group<clang_ignored_gcc_optimization_f_Group>;
+defm devirtualize : BooleanFFlag<"devirtualize">, Group<clang_ignored_gcc_optimization_f_Group>;
+defm devirtualize_speculatively : BooleanFFlag<"devirtualize-speculatively">,
+    Group<clang_ignored_gcc_optimization_f_Group>;
 
 // gfortran options that we recognize in the driver and pass along when
 // invoking GCC to compile Fortran code.

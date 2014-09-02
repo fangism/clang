@@ -3153,18 +3153,19 @@ bool GRBugReporter::generatePathDiagnostic(PathDiagnostic& PD,
       std::unique_ptr<PathDiagnosticPiece> LastPiece;
       for (BugReport::visitor_iterator I = visitors.begin(), E = visitors.end();
           I != E; ++I) {
-        if (PathDiagnosticPiece *Piece = (*I)->getEndPath(PDB, N, *R)) {
+        if (std::unique_ptr<PathDiagnosticPiece> Piece =
+                (*I)->getEndPath(PDB, N, *R)) {
           assert (!LastPiece &&
               "There can only be one final piece in a diagnostic.");
-          LastPiece.reset(Piece);
+          LastPiece = std::move(Piece);
         }
       }
 
       if (ActiveScheme != PathDiagnosticConsumer::None) {
         if (!LastPiece)
-          LastPiece.reset(BugReporterVisitor::getDefaultEndPath(PDB, N, *R));
+          LastPiece = BugReporterVisitor::getDefaultEndPath(PDB, N, *R);
         assert(LastPiece);
-        PD.setEndOfPath(LastPiece.release());
+        PD.setEndOfPath(std::move(LastPiece));
       }
 
       // Make sure we get a clean location context map so we don't
@@ -3247,15 +3248,15 @@ void BugReporter::emitReport(BugReport* R) {
   // To guarantee memory release.
   std::unique_ptr<BugReport> UniqueR(R);
 
-  // Defensive checking: throw the bug away if it comes from a BodyFarm-
-  // generated body. We do this very early because report processing relies
-  // on the report's location being valid.
-  // FIXME: Valid bugs can occur in BodyFarm-generated bodies, so really we
-  // need to just find a reasonable location like we do later on with the path
-  // pieces.
   if (const ExplodedNode *E = R->getErrorNode()) {
-    const LocationContext *LCtx = E->getLocationContext();
-    if (LCtx->getAnalysisDeclContext()->isBodyAutosynthesized())
+    const AnalysisDeclContext *DeclCtx =
+        E->getLocationContext()->getAnalysisDeclContext();
+    // The source of autosynthesized body can be handcrafted AST or a model
+    // file. The locations from handcrafted ASTs have no valid source locations
+    // and have to be discarded. Locations from model files should be preserved
+    // for processing and reporting.
+    if (DeclCtx->isBodyAutosynthesized() &&
+        !DeclCtx->isBodyAutosynthesizedFromModelFile())
       return;
   }
   
@@ -3277,12 +3278,11 @@ void BugReporter::emitReport(BugReport* R) {
   BugReportEquivClass* EQ = EQClasses.FindNodeOrInsertPos(ID, InsertPos);
 
   if (!EQ) {
-    EQ = new BugReportEquivClass(UniqueR.release());
+    EQ = new BugReportEquivClass(std::move(UniqueR));
     EQClasses.InsertNode(EQ, InsertPos);
     EQClassesVector.push_back(EQ);
-  }
-  else
-    EQ->AddReport(UniqueR.release());
+  } else
+    EQ->AddReport(std::move(UniqueR));
 }
 
 
@@ -3449,13 +3449,13 @@ void BugReporter::FlushReport(BugReport *exampleReport,
   // of the issue.
   if (D->path.empty()) {
     PathDiagnosticLocation L = exampleReport->getLocation(getSourceManager());
-    PathDiagnosticPiece *piece =
-      new PathDiagnosticEventPiece(L, exampleReport->getDescription());
+    auto piece = llvm::make_unique<PathDiagnosticEventPiece>(
+        L, exampleReport->getDescription());
     BugReport::ranges_iterator Beg, End;
     std::tie(Beg, End) = exampleReport->getRanges();
     for ( ; Beg != End; ++Beg)
       piece->addRange(*Beg);
-    D->setEndOfPath(piece);
+    D->setEndOfPath(std::move(piece));
   }
 
   // Get the meta data.
@@ -3465,7 +3465,7 @@ void BugReporter::FlushReport(BugReport *exampleReport,
     D->addMeta(*i);
   }
 
-  PD.HandlePathDiagnostic(D.release());
+  PD.HandlePathDiagnostic(std::move(D));
 }
 
 void BugReporter::EmitBasicReport(const Decl *DeclWithIssue,

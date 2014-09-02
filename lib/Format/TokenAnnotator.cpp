@@ -313,7 +313,9 @@ private:
         updateParameterCount(Left, CurrentToken);
         if (CurrentToken->isOneOf(tok::colon, tok::l_brace)) {
           FormatToken *Previous = CurrentToken->getPreviousNonComment();
-          if (Previous->is(tok::identifier))
+          if ((CurrentToken->is(tok::colon) ||
+               Style.Language == FormatStyle::LK_Proto) &&
+              Previous->is(tok::identifier))
             Previous->Type = TT_SelectorName;
           if (CurrentToken->is(tok::colon))
             Left->Type = TT_DictLiteral;
@@ -923,8 +925,7 @@ private:
     if (!NextToken || NextToken->is(tok::l_brace))
       return TT_Unknown;
 
-    if (PrevToken->is(tok::coloncolon) ||
-        (PrevToken->is(tok::l_paren) && !IsExpression))
+    if (PrevToken->is(tok::coloncolon))
       return TT_PointerOrReference;
 
     if (PrevToken->isOneOf(tok::l_paren, tok::l_square, tok::l_brace,
@@ -1550,17 +1551,28 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   if (Right.is(tok::star) && Left.is(tok::l_paren))
     return false;
   if (Left.is(tok::l_square))
-    return Left.Type == TT_ArrayInitializerLSquare &&
-           Style.SpacesInContainerLiterals && Right.isNot(tok::r_square);
+    return (Left.Type == TT_ArrayInitializerLSquare &&
+            Style.SpacesInContainerLiterals && Right.isNot(tok::r_square)) ||
+           (Left.Type == TT_ArraySubscriptLSquare &&
+            Style.SpacesInSquareBrackets && Right.isNot(tok::r_square));
   if (Right.is(tok::r_square))
-    return Right.MatchingParen && Style.SpacesInContainerLiterals &&
-           Right.MatchingParen->Type == TT_ArrayInitializerLSquare;
+    return Right.MatchingParen &&
+           ((Style.SpacesInContainerLiterals &&
+             Right.MatchingParen->Type == TT_ArrayInitializerLSquare) ||
+            (Style.SpacesInSquareBrackets &&
+             Right.MatchingParen->Type == TT_ArraySubscriptLSquare));
   if (Right.is(tok::l_square) && Right.Type != TT_ObjCMethodExpr &&
       Right.Type != TT_LambdaLSquare && Left.isNot(tok::numeric_constant) &&
       Left.Type != TT_DictLiteral)
     return false;
   if (Left.is(tok::colon))
     return Left.Type != TT_ObjCMethodExpr;
+  if (Left.is(tok::l_brace) && Right.is(tok::r_brace))
+    return !Left.Children.empty(); // No spaces in "{}".
+  if ((Left.is(tok::l_brace) && Left.BlockKind != BK_Block) ||
+      (Right.is(tok::r_brace) && Right.MatchingParen &&
+       Right.MatchingParen->BlockKind != BK_Block))
+    return !Style.Cpp11BracedListStyle;
   if (Left.Type == TT_BlockComment)
     return !Left.TokenText.endswith("=*/");
   if (Right.is(tok::l_paren)) {
@@ -1578,12 +1590,6 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   }
   if (Left.is(tok::at) && Right.Tok.getObjCKeywordID() != tok::objc_not_keyword)
     return false;
-  if (Left.is(tok::l_brace) && Right.is(tok::r_brace))
-    return !Left.Children.empty(); // No spaces in "{}".
-  if ((Left.is(tok::l_brace) && Left.BlockKind != BK_Block) ||
-      (Right.is(tok::r_brace) && Right.MatchingParen &&
-       Right.MatchingParen->BlockKind != BK_Block))
-    return !Style.Cpp11BracedListStyle;
   if (Right.Type == TT_UnaryOperator)
     return !Left.isOneOf(tok::l_paren, tok::l_square, tok::at) &&
            (Left.isNot(tok::colon) || Left.Type != TT_ObjCMethodExpr);
@@ -1717,16 +1723,16 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     return true;
   }
 
-  // If the last token before a '}' is a comma or a comment, the intention is to
-  // insert a line break after it in order to make shuffling around entries
-  // easier.
+  // If the last token before a '}' is a comma or a trailing comment, the
+  // intention is to insert a line break after it in order to make shuffling
+  // around entries easier.
   const FormatToken *BeforeClosingBrace = nullptr;
   if (Left.is(tok::l_brace) && Left.MatchingParen)
     BeforeClosingBrace = Left.MatchingParen->Previous;
   else if (Right.is(tok::r_brace))
     BeforeClosingBrace = Right.Previous;
-  if (BeforeClosingBrace &&
-      BeforeClosingBrace->isOneOf(tok::comma, tok::comment))
+  if (BeforeClosingBrace && (BeforeClosingBrace->is(tok::comma) ||
+                             BeforeClosingBrace->isTrailingComment()))
     return true;
 
   if (Style.Language == FormatStyle::LK_JavaScript) {

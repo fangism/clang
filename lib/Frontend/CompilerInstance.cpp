@@ -165,9 +165,8 @@ static void SetupSerializedDiagnostics(DiagnosticOptions *DiagOpts,
                                        DiagnosticsEngine &Diags,
                                        StringRef OutputFile) {
   std::error_code EC;
-  std::unique_ptr<llvm::raw_fd_ostream> OS;
-  OS.reset(
-      new llvm::raw_fd_ostream(OutputFile.str(), EC, llvm::sys::fs::F_None));
+  auto OS = llvm::make_unique<llvm::raw_fd_ostream>(OutputFile.str(), EC,
+                                                    llvm::sys::fs::F_None);
 
   if (EC) {
     Diags.Report(diag::warn_fe_serialized_diag_failure) << OutputFile
@@ -176,7 +175,7 @@ static void SetupSerializedDiagnostics(DiagnosticOptions *DiagOpts,
   }
 
   DiagnosticConsumer *SerializedConsumer =
-      clang::serialized_diags::create(OS.release(), DiagOpts);
+      clang::serialized_diags::create(std::move(OS), DiagOpts);
 
   Diags.setClient(new ChainedDiagnosticConsumer(Diags.takeClient(),
                                                 SerializedConsumer));
@@ -700,7 +699,8 @@ bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input,
     Kind = Input.isSystem() ? SrcMgr::C_System : SrcMgr::C_User;
 
   if (Input.isBuffer()) {
-    SourceMgr.setMainFileID(SourceMgr.createFileID(Input.getBuffer(), Kind));
+    SourceMgr.setMainFileID(SourceMgr.createFileID(
+        std::unique_ptr<llvm::MemoryBuffer>(Input.getBuffer()), Kind));
     assert(!SourceMgr.getMainFileID().isInvalid() &&
            "Couldn't establish MainFileID!");
     return true;
@@ -723,11 +723,11 @@ bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input,
     // STDIN.
     if (File->isNamedPipe()) {
       std::string ErrorStr;
-      if (llvm::MemoryBuffer *MB =
+      if (std::unique_ptr<llvm::MemoryBuffer> MB =
               FileMgr.getBufferForFile(File, &ErrorStr, /*isVolatile=*/true)) {
         // Create a new virtual file that will have the correct size.
         File = FileMgr.getVirtualFile(InputFile, MB->getBufferSize(), 0);
-        SourceMgr.overrideFileContents(File, MB);
+        SourceMgr.overrideFileContents(File, std::move(MB));
       } else {
         Diags.Report(diag::err_cannot_open_file) << InputFile << ErrorStr;
         return false;
@@ -749,7 +749,7 @@ bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input,
                                                    SB->getBufferSize(), 0);
     SourceMgr.setMainFileID(
         SourceMgr.createFileID(File, SourceLocation(), Kind));
-    SourceMgr.overrideFileContents(File, SB.release());
+    SourceMgr.overrideFileContents(File, std::move(SB));
   }
 
   assert(!SourceMgr.getMainFileID().isInvalid() &&
@@ -797,8 +797,9 @@ bool CompilerInstance::ExecuteAction(FrontendAction &Act) {
     llvm::EnableStatistics();
 
   for (unsigned i = 0, e = getFrontendOpts().Inputs.size(); i != e; ++i) {
-    // Reset the ID tables if we are reusing the SourceManager.
-    if (hasSourceManager())
+    // Reset the ID tables if we are reusing the SourceManager and parsing
+    // regular files.
+    if (hasSourceManager() && !Act.isModelParsingAction())
       getSourceManager().clearIDTables();
 
     if (Act.BeginSourceFile(*this, getFrontendOpts().Inputs[i])) {
@@ -946,11 +947,11 @@ static bool compileModuleImpl(CompilerInstance &ImportingInstance,
     FrontendOpts.Inputs.push_back(
         FrontendInputFile("__inferred_module.map", IK));
 
-    llvm::MemoryBuffer *ModuleMapBuffer =
+    std::unique_ptr<llvm::MemoryBuffer> ModuleMapBuffer =
         llvm::MemoryBuffer::getMemBuffer(InferredModuleMapContent);
     ModuleMapFile = Instance.getFileManager().getVirtualFile(
         "__inferred_module.map", InferredModuleMapContent.size(), 0);
-    SourceMgr.overrideFileContents(ModuleMapFile, ModuleMapBuffer);
+    SourceMgr.overrideFileContents(ModuleMapFile, std::move(ModuleMapBuffer));
   }
 
   // Construct a module-generating action. Passing through the module map is
@@ -1603,3 +1604,4 @@ CompilerInstance::lookupMissingImports(StringRef Name,
 
   return false;
 }
+void CompilerInstance::resetAndLeakSema() { BuryPointer(takeSema()); }

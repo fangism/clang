@@ -194,7 +194,7 @@ ObjCMigrateAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   Consumers.push_back(WrapperFrontendAction::CreateASTConsumer(CI, InFile));
   Consumers.push_back(llvm::make_unique<ObjCMigrateASTConsumer>(
       MigrateDir, ObjCMigAction, Remapper, CompInst->getFileManager(), PPRec,
-      CompInst->getPreprocessor(), false, ArrayRef<std::string>()));
+      CompInst->getPreprocessor(), false, None));
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
@@ -1938,7 +1938,7 @@ public:
       return true;
 
     llvm::SourceMgr SM;
-    Stream YAMLStream(std::move(*FileBufOrErr), SM);
+    Stream YAMLStream(FileBufOrErr.get()->getMemBufferRef(), SM);
     document_iterator I = YAMLStream.begin();
     if (I == YAMLStream.end())
       return true;

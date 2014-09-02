@@ -2137,7 +2137,7 @@ llvm::Constant *CodeGenFunction::EmitCheckTypeDescriptor(QualType T) {
   CGM.getDiags().ConvertArgToString(DiagnosticsEngine::ak_qualtype,
                                     (intptr_t)T.getAsOpaquePtr(),
                                     StringRef(), StringRef(), None, Buffer,
-                                    ArrayRef<intptr_t>());
+                                    None);
 
   llvm::Constant *Components[] = {
     Builder.getInt16(TypeKind), Builder.getInt16(TypeInfo),
@@ -3320,7 +3320,7 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, llvm::Value *Callee,
 
   CallArgList Args;
   EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), E->arg_begin(),
-               E->arg_end(), ForceColumnInfo);
+               E->arg_end(), /*ParamsToSkip*/ 0, ForceColumnInfo);
 
   const CGFunctionInfo &FnInfo =
     CGM.getTypes().arrangeFreeFunctionCall(Args, FnType);

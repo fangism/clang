@@ -1224,9 +1224,9 @@ bool ASTReader::ReadSLocEntry(int ID) {
         return true;
       }
       
-      llvm::MemoryBuffer *Buffer
+      std::unique_ptr<llvm::MemoryBuffer> Buffer
         = llvm::MemoryBuffer::getMemBuffer(Blob.drop_back(1), File->getName());
-      SourceMgr.overrideFileContents(File, Buffer);
+      SourceMgr.overrideFileContents(File, std::move(Buffer));
     }
 
     break;
@@ -1251,10 +1251,10 @@ bool ASTReader::ReadSLocEntry(int ID) {
       return true;
     }
 
-    llvm::MemoryBuffer *Buffer
-      = llvm::MemoryBuffer::getMemBuffer(Blob.drop_back(1), Name);
-    SourceMgr.createFileID(Buffer, FileCharacter, ID, BaseOffset + Offset,
-                           IncludeLoc);
+    std::unique_ptr<llvm::MemoryBuffer> Buffer =
+        llvm::MemoryBuffer::getMemBuffer(Blob.drop_back(1), Name);
+    SourceMgr.createFileID(std::move(Buffer), FileCharacter, ID,
+                           BaseOffset + Offset, IncludeLoc);
     break;
   }
 
@@ -4030,8 +4030,8 @@ std::string ASTReader::getOriginalSourceFile(const std::string &ASTFileName,
                                              DiagnosticsEngine &Diags) {
   // Open the AST file.
   std::string ErrStr;
-  std::unique_ptr<llvm::MemoryBuffer> Buffer;
-  Buffer.reset(FileMgr.getBufferForFile(ASTFileName, &ErrStr));
+  std::unique_ptr<llvm::MemoryBuffer> Buffer =
+      FileMgr.getBufferForFile(ASTFileName, &ErrStr);
   if (!Buffer) {
     Diags.Report(diag::err_fe_unable_to_read_pch_file) << ASTFileName << ErrStr;
     return std::string();
@@ -4119,8 +4119,8 @@ bool ASTReader::readASTFileControlBlock(StringRef Filename,
                                         ASTReaderListener &Listener) {
   // Open the AST file.
   std::string ErrStr;
-  std::unique_ptr<llvm::MemoryBuffer> Buffer;
-  Buffer.reset(FileMgr.getBufferForFile(Filename, &ErrStr));
+  std::unique_ptr<llvm::MemoryBuffer> Buffer =
+      FileMgr.getBufferForFile(Filename, &ErrStr);
   if (!Buffer) {
     return true;
   }
@@ -6065,9 +6065,7 @@ void ASTReader::CompleteRedeclChain(const Decl *D) {
   // If this is a named declaration, complete it by looking it up
   // within its context.
   //
-  // FIXME: We don't currently handle the cases where we can't do this;
-  // merging a class definition that contains unnamed entities should merge
-  // those entities. Likewise, merging a function definition should merge
+  // FIXME: Merging a function definition should merge
   // all mergeable entities within it.
   if (isa<TranslationUnitDecl>(DC) || isa<NamespaceDecl>(DC) ||
       isa<CXXRecordDecl>(DC) || isa<EnumDecl>(DC)) {
@@ -6080,6 +6078,9 @@ void ASTReader::CompleteRedeclChain(const Decl *D) {
           updateOutOfDateIdentifier(*II);
       } else
         DC->lookup(Name);
+    } else if (needsAnonymousDeclarationNumber(cast<NamedDecl>(D))) {
+      // FIXME: It'd be nice to do something a bit more targeted here.
+      D->getDeclContext()->decls_begin();
     }
   }
 }
@@ -8216,8 +8217,11 @@ void ASTReader::finishPendingActions() {
       }
       
       if (auto RD = dyn_cast<CXXRecordDecl>(D)) {
-        for (auto R : RD->redecls())
+        for (auto R : RD->redecls()) {
+          assert((R == D) == R->isThisDeclarationADefinition() &&
+                 "declaration thinks it's the definition but it isn't");
           cast<CXXRecordDecl>(R)->DefinitionData = RD->DefinitionData;
+        }
       }
 
       continue;
@@ -8307,12 +8311,21 @@ void ASTReader::diagnoseOdrViolations() {
       continue;
 
     DeclContext *CanonDef = D->getDeclContext();
-    DeclContext::lookup_result R = CanonDef->lookup(D->getDeclName());
 
     bool Found = false;
     const Decl *DCanon = D->getCanonicalDecl();
 
+    for (auto RI : D->redecls()) {
+      if (RI->getLexicalDeclContext() == CanonDef) {
+        Found = true;
+        break;
+      }
+    }
+    if (Found)
+      continue;
+
     llvm::SmallVector<const NamedDecl*, 4> Candidates;
+    DeclContext::lookup_result R = CanonDef->lookup(D->getDeclName());
     for (DeclContext::lookup_iterator I = R.begin(), E = R.end();
          !Found && I != E; ++I) {
       for (auto RI : (*I)->redecls()) {
@@ -8329,7 +8342,10 @@ void ASTReader::diagnoseOdrViolations() {
     }
 
     if (!Found) {
-      D->setInvalidDecl();
+      // The AST doesn't like TagDecls becoming invalid after they've been
+      // completed. We only really need to mark FieldDecls as invalid here.
+      if (!isa<TagDecl>(D))
+        D->setInvalidDecl();
 
       std::string CanonDefModule =
           getOwningModuleNameForDiagnostic(cast<Decl>(CanonDef));
