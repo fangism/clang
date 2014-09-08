@@ -324,6 +324,9 @@ struct FormatStyle {
   /// \brief If \c true, spaces may be inserted into C style casts.
   bool SpacesInCStyleCastParentheses;
 
+  /// \brief If \c true, a space may be inserted after C style casts.
+  bool SpaceAfterCStyleCast;
+
   /// \brief Different ways to put a space before opening parentheses.
   enum SpaceBeforeParensOptions {
     /// Never put a space before opening parentheses.
@@ -422,6 +425,7 @@ struct FormatStyle {
            SpaceInEmptyParentheses == R.SpaceInEmptyParentheses &&
            SpacesInContainerLiterals == R.SpacesInContainerLiterals &&
            SpacesInCStyleCastParentheses == R.SpacesInCStyleCastParentheses &&
+           SpaceAfterCStyleCast == R.SpaceAfterCStyleCast &&
            SpaceBeforeParens == R.SpaceBeforeParens &&
            SpaceBeforeAssignmentOperators == R.SpaceBeforeAssignmentOperators &&
            ContinuationIndentWidth == R.ContinuationIndentWidth &&
@@ -502,10 +506,8 @@ tooling::Replacements reformat(const FormatStyle &Style, StringRef Code,
 
 /// \brief Returns the \c LangOpts that the formatter expects you to set.
 ///
-/// \param Standard determines lexing mode: LC_Cpp11 and LS_Auto turn on C++11
-/// lexing mode, LS_Cpp03 - C++03 mode.
-LangOptions getFormattingLangOpts(
-    FormatStyle::LanguageStandard Standard = FormatStyle::LS_Cpp11);
+/// \param Style determines specific settings for lexing mode.
+LangOptions getFormattingLangOpts(const FormatStyle &Style = getLLVMStyle());
 
 /// \brief Description to be used for help text for a llvm::cl option for
 /// specifying format style. The description is closely related to the operation

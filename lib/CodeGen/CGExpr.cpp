@@ -711,6 +711,34 @@ EmitComplexPrePostIncDec(const UnaryOperator *E, LValue LV,
   return isPre ? IncVal : InVal;
 }
 
+void CodeGenFunction::EmitAlignmentAssumption(llvm::Value *PtrValue,
+                                              unsigned Alignment,
+                                              llvm::Value *OffsetValue) {
+  llvm::Value *PtrIntValue =
+    Builder.CreatePtrToInt(PtrValue, IntPtrTy, "ptrint");
+
+  llvm::Value *Mask = llvm::ConstantInt::get(IntPtrTy,
+    Alignment > 0 ? Alignment - 1 : 0);
+  if (OffsetValue) {
+    bool IsOffsetZero = false;
+    if (llvm::ConstantInt *CI = dyn_cast<llvm::ConstantInt>(OffsetValue))
+      IsOffsetZero = CI->isZero();
+
+    if (!IsOffsetZero) {
+      if (OffsetValue->getType() != IntPtrTy)
+        OffsetValue = Builder.CreateIntCast(OffsetValue, IntPtrTy,
+                        /*isSigned*/true, "offsetcast");
+      PtrIntValue = Builder.CreateSub(PtrIntValue, OffsetValue, "offsetptr");
+    }
+  }
+
+  llvm::Value *Zero = llvm::ConstantInt::get(IntPtrTy, 0);
+  llvm::Value *MaskedPtr = Builder.CreateAnd(PtrIntValue, Mask, "maskedptr");
+  llvm::Value *InvCond = Builder.CreateICmpEQ(MaskedPtr, Zero, "maskcond");
+
+  llvm::Value *FnAssume = CGM.getIntrinsic(llvm::Intrinsic::assume);
+  Builder.CreateCall(FnAssume, InvCond);
+}
 
 //===----------------------------------------------------------------------===//
 //                         LValue Expression Emission
@@ -3320,7 +3348,8 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, llvm::Value *Callee,
 
   CallArgList Args;
   EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), E->arg_begin(),
-               E->arg_end(), /*ParamsToSkip*/ 0, ForceColumnInfo);
+               E->arg_end(), E->getDirectCallee(), /*ParamsToSkip*/ 0,
+               ForceColumnInfo);
 
   const CGFunctionInfo &FnInfo =
     CGM.getTypes().arrangeFreeFunctionCall(Args, FnType);

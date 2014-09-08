@@ -803,6 +803,13 @@ public:
   QualType getObjCFastEnumerationStateType();
   
   /// Return the address of the constructor of the given type.
+
+  llvm::GlobalValue *
+  getAddrOfCXXStructor(const CXXMethodDecl *MD, StructorType Type,
+                       const CGFunctionInfo *FnInfo = nullptr,
+                       llvm::FunctionType *FnType = nullptr,
+                       bool DontDefer = false);
+
   llvm::GlobalValue *
   GetAddrOfCXXConstructor(const CXXConstructorDecl *ctor, CXXCtorType ctorType,
                           const CGFunctionInfo *fnInfo = nullptr,
@@ -1169,7 +1176,7 @@ private:
   void EmitCoverageFile();
 
   /// Emits the initializer for a uuidof string.
-  llvm::Constant *EmitUuidofInitializer(StringRef uuidstr, QualType IIDType);
+  llvm::Constant *EmitUuidofInitializer(StringRef uuidstr);
 
   /// Determine if the given decl can be emitted lazily; this is only relevant
   /// for definitions. The given decl must be either a function or var decl.

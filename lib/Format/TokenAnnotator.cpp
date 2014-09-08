@@ -917,6 +917,9 @@ private:
   /// \brief Return the type of the given token assuming it is * or &.
   TokenType determineStarAmpUsage(const FormatToken &Tok, bool IsExpression,
                                   bool InTemplateArgument) {
+    if (Style.Language == FormatStyle::LK_JavaScript)
+      return TT_BinaryOperator;
+
     const FormatToken *PrevToken = Tok.getPreviousNonComment();
     if (!PrevToken)
       return TT_UnaryOperator;
@@ -1100,7 +1103,7 @@ public:
           ++OperatorIndex;
         }
 
-        next();
+        next(/*SkipPastLeadingComments=*/false);
       }
     }
   }
@@ -1110,10 +1113,16 @@ private:
   /// and other tokens that we treat like binary operators.
   int getCurrentPrecedence() {
     if (Current) {
+      const FormatToken *NextNonComment = Current->getNextNonComment();
       if (Current->Type == TT_ConditionalExpr)
         return prec::Conditional;
+      else if (NextNonComment && NextNonComment->is(tok::colon) &&
+               NextNonComment->Type == TT_DictLiteral)
+        return prec::Comma;
       else if (Current->is(tok::semi) || Current->Type == TT_InlineASMColon ||
-               Current->Type == TT_SelectorName)
+               Current->Type == TT_SelectorName ||
+               (Current->is(tok::comment) && NextNonComment &&
+                NextNonComment->Type == TT_SelectorName))
         return 0;
       else if (Current->Type == TT_RangeBasedForLoopColon)
         return prec::Comma;
@@ -1166,10 +1175,12 @@ private:
     addFakeParenthesis(Start, prec::Conditional);
   }
 
-  void next() {
+  void next(bool SkipPastLeadingComments = true) {
     if (Current)
       Current = Current->Next;
-    while (Current && Current->isTrailingComment())
+    while (Current &&
+           (Current->NewlinesBefore == 0 || SkipPastLeadingComments) &&
+           Current->isTrailingComment())
       Current = Current->Next;
   }
 
@@ -1582,7 +1593,9 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
            Left.isOneOf(tok::kw_new, tok::kw_delete, tok::semi) ||
            (Style.SpaceBeforeParens != FormatStyle::SBPO_Never &&
             (Left.isOneOf(tok::kw_if, tok::kw_for, tok::kw_while,
-                          tok::kw_switch, tok::kw_catch, tok::kw_case) ||
+                          tok::kw_switch, tok::kw_case) ||
+             (Left.is(tok::kw_catch) &&
+              (!Left.Previous || Left.Previous->isNot(tok::period))) ||
              Left.IsForEachMacro)) ||
            (Style.SpaceBeforeParens == FormatStyle::SBPO_Always &&
             (Left.is(tok::identifier) || Left.isFunctionLikeKeyword()) &&
@@ -1641,9 +1654,10 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
            Tok.getNextNonComment() && Tok.Type != TT_ObjCMethodExpr &&
            !Tok.Previous->is(tok::question) &&
            (Tok.Type != TT_DictLiteral || Style.SpacesInContainerLiterals);
-  if (Tok.Previous->Type == TT_UnaryOperator ||
-      Tok.Previous->Type == TT_CastRParen)
+  if (Tok.Previous->Type == TT_UnaryOperator)
     return Tok.Type == TT_BinaryOperator;
+  if (Tok.Previous->Type == TT_CastRParen)
+    return Style.SpaceAfterCStyleCast || Tok.Type == TT_BinaryOperator;
   if (Tok.Previous->is(tok::greater) && Tok.is(tok::greater)) {
     return Tok.Type == TT_TemplateCloser &&
            Tok.Previous->Type == TT_TemplateCloser &&
