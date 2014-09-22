@@ -1864,6 +1864,7 @@ public:
   void VisitOMPParallelDirective(const OMPParallelDirective *D);
   void VisitOMPSimdDirective(const OMPSimdDirective *D);
   void VisitOMPForDirective(const OMPForDirective *D);
+  void VisitOMPForSimdDirective(const OMPForSimdDirective *D);
   void VisitOMPSectionsDirective(const OMPSectionsDirective *D);
   void VisitOMPSectionDirective(const OMPSectionDirective *D);
   void VisitOMPSingleDirective(const OMPSingleDirective *D);
@@ -1878,6 +1879,7 @@ public:
   void VisitOMPFlushDirective(const OMPFlushDirective *D);
   void VisitOMPOrderedDirective(const OMPOrderedDirective *D);
   void VisitOMPAtomicDirective(const OMPAtomicDirective *D);
+  void VisitOMPTargetDirective(const OMPTargetDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -2342,6 +2344,10 @@ void EnqueueVisitor::VisitOMPForDirective(const OMPForDirective *D) {
   VisitOMPLoopDirective(D);
 }
 
+void EnqueueVisitor::VisitOMPForSimdDirective(const OMPForSimdDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
 void EnqueueVisitor::VisitOMPSectionsDirective(const OMPSectionsDirective *D) {
   VisitOMPExecutableDirective(D);
 }
@@ -2399,6 +2405,10 @@ void EnqueueVisitor::VisitOMPOrderedDirective(const OMPOrderedDirective *D) {
 }
 
 void EnqueueVisitor::VisitOMPAtomicDirective(const OMPAtomicDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetDirective(const OMPTargetDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -4137,6 +4147,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPSimdDirective");
   case CXCursor_OMPForDirective:
     return cxstring::createRef("OMPForDirective");
+  case CXCursor_OMPForSimdDirective:
+    return cxstring::createRef("OMPForSimdDirective");
   case CXCursor_OMPSectionsDirective:
     return cxstring::createRef("OMPSectionsDirective");
   case CXCursor_OMPSectionDirective:
@@ -4165,6 +4177,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPOrderedDirective");
   case CXCursor_OMPAtomicDirective:
     return cxstring::createRef("OMPAtomicDirective");
+  case CXCursor_OMPTargetDirective:
+    return cxstring::createRef("OMPTargetDirective");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");

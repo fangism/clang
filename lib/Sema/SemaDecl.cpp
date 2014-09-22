@@ -1517,8 +1517,14 @@ void Sema::DiagnoseUnusedDecl(const NamedDecl *D) {
 static void CheckPoppedLabel(LabelDecl *L, Sema &S) {
   // Verify that we have no forward references left.  If so, there was a goto
   // or address of a label taken, but no definition of it.  Label fwd
-  // definitions are indicated with a null substmt.
-  if (L->getStmt() == nullptr)
+  // definitions are indicated with a null substmt which is also not a resolved
+  // MS inline assembly label name.
+  bool Diagnose = false;
+  if (L->isMSAsmLabel())
+    Diagnose = !L->isResolvedMSAsmLabel();
+  else
+    Diagnose = L->getStmt() == nullptr;
+  if (Diagnose)
     S.Diag(L->getLocation(), diag::err_undeclared_label_use) <<L->getDeclName();
 }
 
@@ -4066,13 +4072,16 @@ Decl *Sema::BuildMicrosoftCAnonymousStruct(Scope *S, DeclSpec &DS,
   TypeSourceInfo *TInfo = GetTypeForDeclarator(Dc, S);
   assert(TInfo && "couldn't build declarator info for anonymous struct");
 
+  auto *ParentDecl = cast<RecordDecl>(CurContext);
+  QualType RecTy = Context.getTypeDeclType(Record);
+
   // Create a declaration for this anonymous struct.
   NamedDecl *Anon = FieldDecl::Create(Context,
-                             cast<RecordDecl>(CurContext),
+                             ParentDecl,
                              DS.getLocStart(),
                              DS.getLocStart(),
                              /*IdentifierInfo=*/nullptr,
-                             Context.getTypeDeclType(Record),
+                             RecTy,
                              TInfo,
                              /*BitWidth=*/nullptr, /*Mutable=*/false,
                              /*InitStyle=*/ICIS_NoInit);
@@ -4088,10 +4097,13 @@ Decl *Sema::BuildMicrosoftCAnonymousStruct(Scope *S, DeclSpec &DS,
   Chain.push_back(Anon);
 
   RecordDecl *RecordDef = Record->getDefinition();
-  if (!RecordDef || InjectAnonymousStructOrUnionMembers(*this, S, CurContext,
-                                                        RecordDef, AS_none,
-                                                        Chain, true))
+  if (RequireCompleteType(Anon->getLocation(), RecTy,
+                          diag::err_field_incomplete) ||
+      InjectAnonymousStructOrUnionMembers(*this, S, CurContext, RecordDef,
+                                          AS_none, Chain, true)) {
     Anon->setInvalidDecl();
+    ParentDecl->setInvalidDecl();
+  }
 
   return Anon;
 }
@@ -7931,15 +7943,19 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
 
   // Semantic checking for this function declaration (in isolation).
 
-  // Diagnose the use of X86 fastcall on unprototyped functions.
+  // Diagnose the use of callee-cleanup calls on unprototyped functions.
   QualType NewQType = Context.getCanonicalType(NewFD->getType());
   const FunctionType *NewType = cast<FunctionType>(NewQType);
   if (isa<FunctionNoProtoType>(NewType)) {
     FunctionType::ExtInfo NewTypeInfo = NewType->getExtInfo();
-    if (NewTypeInfo.getCC() == CC_X86FastCall)
-      Diag(NewFD->getLocation(), diag::err_cconv_knr)
-          << FunctionType::getNameForCallConv(CC_X86FastCall);
-    // TODO: Also diagnose unprototyped stdcall functions?
+    if (isCalleeCleanup(NewTypeInfo.getCC())) {
+      // Windows system headers sometimes accidentally use stdcall without
+      // (void) parameters, so use a default-error warning in this case :-/
+      int DiagID = NewTypeInfo.getCC() == CC_X86StdCall
+          ? diag::warn_cconv_knr : diag::err_cconv_knr;
+      Diag(NewFD->getLocation(), DiagID)
+          << FunctionType::getNameForCallConv(NewTypeInfo.getCC());
+    }
   }
 
   if (getLangOpts().CPlusPlus) {
@@ -10426,7 +10442,7 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body,
 
     if (FD && FD->hasAttr<NakedAttr>()) {
       for (const Stmt *S : Body->children()) {
-        if (!isa<AsmStmt>(S)) {
+        if (!isa<AsmStmt>(S) && !isa<NullStmt>(S)) {
           Diag(S->getLocStart(), diag::err_non_asm_stmt_in_naked_function);
           Diag(FD->getAttr<NakedAttr>()->getLocation(), diag::note_attribute);
           FD->setInvalidDecl();

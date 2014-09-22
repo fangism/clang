@@ -2317,6 +2317,9 @@ DEF_TRAVERSE_STMT(OMPSimdDirective,
 DEF_TRAVERSE_STMT(OMPForDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
+DEF_TRAVERSE_STMT(OMPForSimdDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
 DEF_TRAVERSE_STMT(OMPSectionsDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
@@ -2359,6 +2362,9 @@ DEF_TRAVERSE_STMT(OMPOrderedDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
 DEF_TRAVERSE_STMT(OMPAtomicDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPTargetDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
 // OpenMP clauses.

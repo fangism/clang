@@ -836,6 +836,11 @@ void StmtPrinter::VisitOMPForDirective(OMPForDirective *Node) {
   PrintOMPExecutableDirective(Node);
 }
 
+void StmtPrinter::VisitOMPForSimdDirective(OMPForSimdDirective *Node) {
+  Indent() << "#pragma omp for simd ";
+  PrintOMPExecutableDirective(Node);
+}
+
 void StmtPrinter::VisitOMPSectionsDirective(OMPSectionsDirective *Node) {
   Indent() << "#pragma omp sections ";
   PrintOMPExecutableDirective(Node);
@@ -909,6 +914,11 @@ void StmtPrinter::VisitOMPOrderedDirective(OMPOrderedDirective *Node) {
 
 void StmtPrinter::VisitOMPAtomicDirective(OMPAtomicDirective *Node) {
   Indent() << "#pragma omp atomic ";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPTargetDirective(OMPTargetDirective *Node) {
+  Indent() << "#pragma omp target ";
   PrintOMPExecutableDirective(Node);
 }
 

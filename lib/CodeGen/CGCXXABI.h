@@ -161,6 +161,10 @@ public:
     return true;
   }
 
+  virtual bool isTypeInfoCalculable(QualType Ty) const {
+    return !Ty->isIncompleteType();
+  }
+
   /// Create a null member pointer of the given type.
   virtual llvm::Constant *EmitNullMemberPointer(const MemberPointerType *MPT);
 
@@ -384,6 +388,9 @@ public:
   virtual void EmitReturnFromThunk(CodeGenFunction &CGF,
                                    RValue RV, QualType ResultType);
 
+  virtual size_t getSrcArgforCopyCtor(const CXXConstructorDecl *,
+                                      FunctionArgList &Args) const = 0;
+
   /// Gets the pure virtual member call function.
   virtual StringRef GetPureVirtualCallName() = 0;
 
@@ -501,6 +508,10 @@ public:
   virtual LValue EmitThreadLocalVarDeclLValue(CodeGenFunction &CGF,
                                               const VarDecl *VD,
                                               QualType LValType);
+
+  /// Emit a single constructor/destructor with the given type from a C++
+  /// constructor Decl.
+  virtual void emitCXXStructor(const CXXMethodDecl *MD, StructorType Type) = 0;
 };
 
 // Create an instance of a C++ ABI class:
