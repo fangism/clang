@@ -498,6 +498,9 @@ DeclSpec::TST Sema::isTagName(IdentifierInfo &II, Scope *S) {
 /// @endcode
 bool Sema::isMicrosoftMissingTypename(const CXXScopeSpec *SS, Scope *S) {
   if (CurContext->isRecord()) {
+    if (SS->getScopeRep()->getKind() == NestedNameSpecifier::Super)
+      return true;
+
     const Type *Ty = SS->getScopeRep()->getAsType();
 
     CXXRecordDecl *RD = cast<CXXRecordDecl>(CurContext);
@@ -5096,14 +5099,7 @@ static void checkAttributesAfterMerging(Sema &S, NamedDecl &ND) {
   }
 
   // dll attributes require external linkage.
-  if (const DLLImportAttr *Attr = ND.getAttr<DLLImportAttr>()) {
-    if (!ND.isExternallyVisible()) {
-      S.Diag(ND.getLocation(), diag::err_attribute_dll_not_extern)
-        << &ND << Attr;
-      ND.setInvalidDecl();
-    }
-  }
-  if (const DLLExportAttr *Attr = ND.getAttr<DLLExportAttr>()) {
+  if (const InheritableAttr *Attr = getDLLAttr(&ND)) {
     if (!ND.isExternallyVisible()) {
       S.Diag(ND.getLocation(), diag::err_attribute_dll_not_extern)
         << &ND << Attr;
@@ -8240,6 +8236,8 @@ namespace {
     bool isPODType;
     bool isReferenceType;
 
+    bool isInitList;
+    llvm::SmallVector<unsigned, 4> InitFieldIndex;
   public:
     typedef EvaluatedExprVisitor<SelfReferenceChecker> Inherited;
 
@@ -8248,11 +8246,84 @@ namespace {
       isPODType = false;
       isRecordType = false;
       isReferenceType = false;
+      isInitList = false;
       if (ValueDecl *VD = dyn_cast<ValueDecl>(OrigDecl)) {
         isPODType = VD->getType().isPODType(S.Context);
         isRecordType = VD->getType()->isRecordType();
         isReferenceType = VD->getType()->isReferenceType();
       }
+    }
+
+    // For most expressions, just call the visitor.  For initializer lists,
+    // track the index of the field being initialized since fields are
+    // initialized in order allowing use of previously initialized fields.
+    void CheckExpr(Expr *E) {
+      InitListExpr *InitList = dyn_cast<InitListExpr>(E);
+      if (!InitList) {
+        Visit(E);
+        return;
+      }
+
+      // Track and increment the index here.
+      isInitList = true;
+      InitFieldIndex.push_back(0);
+      for (auto Child : InitList->children()) {
+        CheckExpr(cast<Expr>(Child));
+        ++InitFieldIndex.back();
+      }
+      InitFieldIndex.pop_back();
+    }
+
+    // Returns true if MemberExpr is checked and no futher checking is needed.
+    // Returns false if additional checking is required.
+    bool CheckInitListMemberExpr(MemberExpr *E, bool CheckReference) {
+      llvm::SmallVector<FieldDecl*, 4> Fields;
+      Expr *Base = E;
+      bool ReferenceField = false;
+
+      // Get the field memebers used.
+      while (MemberExpr *ME = dyn_cast<MemberExpr>(Base)) {
+        FieldDecl *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
+        if (!FD)
+          return false;
+        Fields.push_back(FD);
+        if (FD->getType()->isReferenceType())
+          ReferenceField = true;
+        Base = ME->getBase()->IgnoreParenImpCasts();
+      }
+
+      // Keep checking only if the base Decl is the same.
+      DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(Base);
+      if (!DRE || DRE->getDecl() != OrigDecl)
+        return false;
+
+      // A reference field can be bound to an unininitialized field.
+      if (CheckReference && !ReferenceField)
+        return true;
+
+      // Convert FieldDecls to their index number.
+      llvm::SmallVector<unsigned, 4> UsedFieldIndex;
+      for (auto I = Fields.rbegin(), E = Fields.rend(); I != E; ++I) {
+        UsedFieldIndex.push_back((*I)->getFieldIndex());
+      }
+
+      // See if a warning is needed by checking the first difference in index
+      // numbers.  If field being used has index less than the field being
+      // initialized, then the use is safe.
+      for (auto UsedIter = UsedFieldIndex.begin(),
+                UsedEnd = UsedFieldIndex.end(),
+                OrigIter = InitFieldIndex.begin(),
+                OrigEnd = InitFieldIndex.end();
+           UsedIter != UsedEnd && OrigIter != OrigEnd; ++UsedIter, ++OrigIter) {
+        if (*UsedIter < *OrigIter)
+          return true;
+        if (*UsedIter > *OrigIter)
+          break;
+      }
+
+      // TODO: Add a different warning which will print the field names.
+      HandleDeclRefExpr(DRE);
+      return true;
     }
 
     // For most expressions, the cast is directly above the DeclRefExpr.
@@ -8266,6 +8337,7 @@ namespace {
       }
 
       if (ConditionalOperator *CO = dyn_cast<ConditionalOperator>(E)) {
+        Visit(CO->getCond());
         HandleValue(CO->getTrueExpr());
         HandleValue(CO->getFalseExpr());
         return;
@@ -8284,12 +8356,20 @@ namespace {
       }
 
       if (BinaryOperator *BO = dyn_cast<BinaryOperator>(E)) {
-        if (BO->getOpcode() == BO_Comma)
+        if (BO->getOpcode() == BO_Comma) {
+          Visit(BO->getLHS());
           HandleValue(BO->getRHS());
-        return;
+          return;
+        }
       }
 
       if (isa<MemberExpr>(E)) {
+        if (isInitList) {
+          if (CheckInitListMemberExpr(cast<MemberExpr>(E),
+                                      false /*CheckReference*/))
+            return;
+        }
+
         Expr *Base = E->IgnoreParenImpCasts();
         while (MemberExpr *ME = dyn_cast<MemberExpr>(Base)) {
           // Check for static member variables and don't warn on them.
@@ -8313,8 +8393,7 @@ namespace {
     }
 
     void VisitImplicitCastExpr(ImplicitCastExpr *E) {
-      if (E->getCastKind() == CK_LValueToRValue ||
-          (isRecordType && E->getCastKind() == CK_NoOp)) {
+      if (E->getCastKind() == CK_LValueToRValue) {
         HandleValue(E->getSubExpr());
         return;
       }
@@ -8323,6 +8402,11 @@ namespace {
     }
 
     void VisitMemberExpr(MemberExpr *E) {
+      if (isInitList) {
+        if (CheckInitListMemberExpr(E, true /*CheckReference*/))
+          return;
+      }
+
       // Don't warn on arrays since they can be treated as pointers.
       if (E->getType()->canDecayToPointerType()) return;
 
@@ -8364,6 +8448,12 @@ namespace {
           HandleValue(E->getSubExpr());
         return;
       }
+
+      if (E->isIncrementDecrementOp()) {
+        HandleValue(E->getSubExpr());
+        return;
+      }
+
       Inherited::VisitUnaryOperator(E);
     }
 
@@ -8371,9 +8461,15 @@ namespace {
 
     void VisitCXXConstructExpr(CXXConstructExpr *E) {
       if (E->getConstructor()->isCopyConstructor()) {
-        if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E->getArg(0))) {
-          HandleDeclRefExpr(DRE);
-        }
+        Expr *ArgExpr = E->getArg(0);
+        if (InitListExpr *ILE = dyn_cast<InitListExpr>(ArgExpr))
+          if (ILE->getNumInits() == 1)
+            ArgExpr = ILE->getInit(0);
+        if (ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(ArgExpr))
+          if (ICE->getCastKind() == CK_NoOp)
+            ArgExpr = ICE->getSubExpr();
+        HandleValue(ArgExpr);
+        return;
       }
       Inherited::VisitCXXConstructExpr(E);
     }
@@ -8390,6 +8486,16 @@ namespace {
       }
 
       Inherited::VisitCallExpr(E);
+    }
+
+    void VisitBinaryOperator(BinaryOperator *E) {
+      if (E->isCompoundAssignmentOp()) {
+        HandleValue(E->getLHS());
+        Visit(E->getRHS());
+        return;
+      }
+
+      Inherited::VisitBinaryOperator(E);
     }
 
     // A custom visitor for BinaryConditionalOperator is needed because the
@@ -8439,7 +8545,7 @@ namespace {
             if (DRE->getDecl() == OrigDecl)
               return;
 
-    SelfReferenceChecker(S, OrigDecl).Visit(E);
+    SelfReferenceChecker(S, OrigDecl).CheckExpr(E);
   }
 }
 
@@ -9424,8 +9530,11 @@ Sema::FinalizeDeclaration(Decl *ThisDecl) {
     }
   }
 
+  // Grab the dllimport or dllexport attribute off of the VarDecl.
+  const InheritableAttr *DLLAttr = getDLLAttr(VD);
+
   // Imported static data members cannot be defined out-of-line.
-  if (const DLLImportAttr *IA = VD->getAttr<DLLImportAttr>()) {
+  if (const auto *IA = dyn_cast_or_null<DLLImportAttr>(DLLAttr)) {
     if (VD->isStaticDataMember() && VD->isOutOfLine() &&
         VD->isThisDeclarationADefinition()) {
       // We allow definitions of dllimport class template static data members
@@ -9444,6 +9553,14 @@ Sema::FinalizeDeclaration(Decl *ThisDecl) {
       if (!IsClassTemplateMember)
         VD->setInvalidDecl();
     }
+  }
+
+  // dllimport/dllexport variables cannot be thread local, their TLS index
+  // isn't exported with the variable.
+  if (DLLAttr && VD->getTLSKind()) {
+    Diag(VD->getLocation(), diag::err_attribute_dll_thread_local) << VD
+                                                                  << DLLAttr;
+    VD->setInvalidDecl();
   }
 
   if (UsedAttr *Attr = VD->getAttr<UsedAttr>()) {
@@ -12616,8 +12733,7 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
         continue;
       }
       // Okay, we have a legal flexible array member at the end of the struct.
-      if (Record)
-        Record->setHasFlexibleArrayMember(true);
+      Record->setHasFlexibleArrayMember(true);
     } else if (!FDTy->isDependentType() &&
                RequireCompleteType(FD->getLocation(), FD->getType(),
                                    diag::err_field_incomplete)) {
@@ -12626,11 +12742,11 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
       EnclosingDecl->setInvalidDecl();
       continue;
     } else if (const RecordType *FDTTy = FDTy->getAs<RecordType>()) {
-      if (FDTTy->getDecl()->hasFlexibleArrayMember()) {
-        // If this is a member of a union, then entire union becomes "flexible".
-        if (Record && Record->isUnion()) {
-          Record->setHasFlexibleArrayMember(true);
-        } else {
+      if (Record && FDTTy->getDecl()->hasFlexibleArrayMember()) {
+        // A type which contains a flexible array member is considered to be a
+        // flexible array member.
+        Record->setHasFlexibleArrayMember(true);
+        if (!Record->isUnion()) {
           // If this is a struct/class and this is not the last element, reject
           // it.  Note that GCC supports variable sized arrays in the middle of
           // structures.
@@ -12642,8 +12758,6 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
             // other structs as an extension.
             Diag(FD->getLocation(), diag::ext_flexible_array_in_struct)
               << FD->getDeclName();
-            if (Record)
-              Record->setHasFlexibleArrayMember(true);
           }
         }
       }

@@ -690,6 +690,7 @@ bool RecursiveASTVisitor<Derived>::TraverseNestedNameSpecifier(
   case NestedNameSpecifier::Namespace:
   case NestedNameSpecifier::NamespaceAlias:
   case NestedNameSpecifier::Global:
+  case NestedNameSpecifier::Super:
     return true;
 
   case NestedNameSpecifier::TypeSpec:
@@ -714,6 +715,7 @@ bool RecursiveASTVisitor<Derived>::TraverseNestedNameSpecifierLoc(
   case NestedNameSpecifier::Namespace:
   case NestedNameSpecifier::NamespaceAlias:
   case NestedNameSpecifier::Global:
+  case NestedNameSpecifier::Super:
     return true;
 
   case NestedNameSpecifier::TypeSpec:
@@ -2338,6 +2340,9 @@ DEF_TRAVERSE_STMT(OMPCriticalDirective, {
 })
 
 DEF_TRAVERSE_STMT(OMPParallelForDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPParallelForSimdDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
 DEF_TRAVERSE_STMT(OMPParallelSectionsDirective,

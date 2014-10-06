@@ -4672,6 +4672,8 @@ TEST_F(FormatTest, UnderstandsTemplateParameters) {
   EXPECT_EQ("A<::A<int>> a;", format("A< ::A<int>> a;", getGoogleStyle()));
   EXPECT_EQ("A<::A<int>> a;", format("A<::A<int> > a;", getGoogleStyle()));
 
+  verifyFormat("A<A>> a;", getChromiumStyle(FormatStyle::LK_Cpp));
+
   verifyFormat("test >> a >> b;");
   verifyFormat("test << a >> b;");
 
@@ -5114,6 +5116,7 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("my_int a = (my_int)sizeof(int);");
   verifyFormat("return (my_int)aaa;");
   verifyFormat("#define x ((int)-1)");
+  verifyFormat("#define LENGTH(x, y) (x) - (y) + 1");
   verifyFormat("#define p(q) ((int *)&q)");
   verifyFormat("fn(a)(b) + 1;");
 
@@ -5121,7 +5124,7 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("void f() { return P ? (my_int)*P : (my_int)0; }");
   verifyFormat("my_int a = (my_int)~0;");
   verifyFormat("my_int a = (my_int)++a;");
-  verifyFormat("my_int a = (my_int)+2;");
+  verifyFormat("my_int a = (my_int)-2;");
   verifyFormat("my_int a = (my_int)1;");
   verifyFormat("my_int a = (my_int *)1;");
   verifyFormat("my_int a = (const my_int)-1;");
@@ -8351,12 +8354,14 @@ TEST_F(FormatTest, GetsCorrectBasedOnStyle) {
   EXPECT_ALL_STYLES_EQUAL(Styles);
 }
 
-#define CHECK_PARSE_BOOL(FIELD)                                                \
+#define CHECK_PARSE_BOOL_FIELD(FIELD, CONFIG_NAME)                             \
   Style.FIELD = false;                                                         \
-  EXPECT_EQ(0, parseConfiguration(#FIELD ": true", &Style).value());           \
+  EXPECT_EQ(0, parseConfiguration(CONFIG_NAME ": true", &Style).value());      \
   EXPECT_TRUE(Style.FIELD);                                                    \
-  EXPECT_EQ(0, parseConfiguration(#FIELD ": false", &Style).value());          \
+  EXPECT_EQ(0, parseConfiguration(CONFIG_NAME ": false", &Style).value());     \
   EXPECT_FALSE(Style.FIELD);
+
+#define CHECK_PARSE_BOOL(FIELD) CHECK_PARSE_BOOL_FIELD(FIELD, #FIELD)
 
 #define CHECK_PARSE(TEXT, FIELD, VALUE)                                        \
   EXPECT_NE(VALUE, Style.FIELD);                                               \
@@ -8380,9 +8385,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(BreakConstructorInitializersBeforeComma);
   CHECK_PARSE_BOOL(ConstructorInitializerAllOnOneLineOrOnePerLine);
   CHECK_PARSE_BOOL(DerivePointerAlignment);
-  // For backward compatibility:
-  CHECK_PARSE("DerivePointerBinding: true", DerivePointerAlignment, true);
-  CHECK_PARSE("DerivePointerBinding: false", DerivePointerAlignment, false);
+  CHECK_PARSE_BOOL_FIELD(DerivePointerAlignment, "DerivePointerBinding");
   CHECK_PARSE_BOOL(IndentCaseLabels);
   CHECK_PARSE_BOOL(IndentWrappedFunctionNames);
   CHECK_PARSE_BOOL(KeepEmptyLinesAtTheStartOfBlocks);

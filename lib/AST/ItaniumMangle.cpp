@@ -375,6 +375,7 @@ private:
                         NamedDecl *firstQualifierLookup,
                         DeclarationName name,
                         unsigned knownArity);
+  void mangleCastExpression(const Expr *E, StringRef CastEncoding);
   void mangleExpression(const Expr *E, unsigned Arity = UnknownArity);
   void mangleCXXCtorType(CXXCtorType T);
   void mangleCXXDtorType(CXXDtorType T);
@@ -812,6 +813,9 @@ void CXXNameMangler::mangleUnresolvedPrefix(NestedNameSpecifier *qualifier,
 
     // We never want an 'E' here.
     return;
+
+  case NestedNameSpecifier::Super:
+    llvm_unreachable("Can't mangle __super specifier");
 
   case NestedNameSpecifier::Namespace:
     if (qualifier->getPrefix())
@@ -1460,6 +1464,9 @@ void CXXNameMangler::manglePrefix(NestedNameSpecifier *qualifier) {
   case NestedNameSpecifier::Global:
     // nothing
     return;
+
+  case NestedNameSpecifier::Super:
+    llvm_unreachable("Can't mangle __super specifier");
 
   case NestedNameSpecifier::Namespace:
     mangleName(qualifier->getAsNamespace());
@@ -2572,12 +2579,23 @@ static bool isParenthesizedADLCallee(const CallExpr *call) {
   return true;
 }
 
+void CXXNameMangler::mangleCastExpression(const Expr *E, StringRef CastEncoding) {
+  const ExplicitCastExpr *ECE = cast<ExplicitCastExpr>(E);
+  Out << CastEncoding;
+  mangleType(ECE->getType());
+  mangleExpression(ECE->getSubExpr());
+}
+
 void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
   // <expression> ::= <unary operator-name> <expression>
   //              ::= <binary operator-name> <expression> <expression>
   //              ::= <trinary operator-name> <expression> <expression> <expression>
   //              ::= cv <type> expression           # conversion with one argument
   //              ::= cv <type> _ <expression>* E # conversion with a different number of arguments
+  //              ::= dc <type> <expression>         # dynamic_cast<type> (expression)
+  //              ::= sc <type> <expression>         # static_cast<type> (expression)
+  //              ::= cc <type> <expression>         # const_cast<type> (expression)
+  //              ::= rc <type> <expression>         # reinterpret_cast<type> (expression)
   //              ::= st <type>                      # sizeof (a type)
   //              ::= at <type>                      # alignof (a type)
   //              ::= <template-param>
@@ -2643,7 +2661,6 @@ recurse:
   case Expr::ArrayTypeTraitExprClass:
   case Expr::ExpressionTraitExprClass:
   case Expr::VAArgExprClass:
-  case Expr::CXXUuidofExprClass:
   case Expr::CUDAKernelCallExprClass:
   case Expr::AsTypeExprClass:
   case Expr::PseudoObjectExprClass:
@@ -2655,6 +2672,20 @@ recurse:
                                      "cannot yet mangle expression type %0");
     Diags.Report(E->getExprLoc(), DiagID)
       << E->getStmtClassName() << E->getSourceRange();
+    break;
+  }
+
+  case Expr::CXXUuidofExprClass: {
+    const CXXUuidofExpr *UE = cast<CXXUuidofExpr>(E);
+    if (UE->isTypeOperand()) {
+      QualType UuidT = UE->getTypeOperand(Context.getASTContext());
+      Out << "u8__uuidoft";
+      mangleType(UuidT);
+    } else {
+      Expr *UuidExp = UE->getExprOperand();
+      Out << "u8__uuidofz";
+      mangleExpression(UuidExp, Arity);
+    }
     break;
   }
 
@@ -2982,17 +3013,22 @@ recurse:
   // Fall through to mangle the cast itself.
       
   case Expr::CStyleCastExprClass:
-  case Expr::CXXStaticCastExprClass:
-  case Expr::CXXDynamicCastExprClass:
-  case Expr::CXXReinterpretCastExprClass:
-  case Expr::CXXConstCastExprClass:
-  case Expr::CXXFunctionalCastExprClass: {
-    const ExplicitCastExpr *ECE = cast<ExplicitCastExpr>(E);
-    Out << "cv";
-    mangleType(ECE->getType());
-    mangleExpression(ECE->getSubExpr());
+  case Expr::CXXFunctionalCastExprClass:
+    mangleCastExpression(E, "cv");
     break;
-  }
+
+  case Expr::CXXStaticCastExprClass:
+    mangleCastExpression(E, "sc");
+    break;
+  case Expr::CXXDynamicCastExprClass:
+    mangleCastExpression(E, "dc");
+    break;
+  case Expr::CXXReinterpretCastExprClass:
+    mangleCastExpression(E, "rc");
+    break;
+  case Expr::CXXConstCastExprClass:
+    mangleCastExpression(E, "cc");
+    break;
 
   case Expr::CXXOperatorCallExprClass: {
     const CXXOperatorCallExpr *CE = cast<CXXOperatorCallExpr>(E);
