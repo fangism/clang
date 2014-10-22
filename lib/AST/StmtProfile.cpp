@@ -322,16 +322,26 @@ void OMPClauseProfiler::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
 
 template<typename T>
 void OMPClauseProfiler::VisitOMPClauseList(T *Node) {
-  for (auto *I : Node->varlists())
-    Profiler->VisitStmt(I);
+  for (auto *E : Node->varlists()) {
+    Profiler->VisitStmt(E);
+  }
 }
 
 void OMPClauseProfiler::VisitOMPPrivateClause(const OMPPrivateClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->private_copies()) {
+    Profiler->VisitStmt(E);
+  }
 }
-void OMPClauseProfiler::VisitOMPFirstprivateClause(
-                                         const OMPFirstprivateClause *C) {
+void
+OMPClauseProfiler::VisitOMPFirstprivateClause(const OMPFirstprivateClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->private_copies()) {
+    Profiler->VisitStmt(E);
+  }
+  for (auto *E : C->inits()) {
+    Profiler->VisitStmt(E);
+  }
 }
 void
 OMPClauseProfiler::VisitOMPLastprivateClause(const OMPLastprivateClause *C) {
@@ -463,6 +473,10 @@ void StmtProfiler::VisitOMPAtomicDirective(const OMPAtomicDirective *S) {
 }
 
 void StmtProfiler::VisitOMPTargetDirective(const OMPTargetDirective *S) {
+  VisitOMPExecutableDirective(S);
+}
+
+void StmtProfiler::VisitOMPTeamsDirective(const OMPTeamsDirective *S) {
   VisitOMPExecutableDirective(S);
 }
 
