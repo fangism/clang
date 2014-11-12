@@ -1194,7 +1194,7 @@ void ASTDeclReader::VisitNamespaceDecl(NamespaceDecl *D) {
     // any other module's anonymous namespaces, so don't attach the anonymous
     // namespace at all.
     NamespaceDecl *Anon = ReadDeclAs<NamespaceDecl>(Record, Idx);
-    if (F.Kind != MK_Module)
+    if (F.Kind != MK_ImplicitModule && F.Kind != MK_ExplicitModule)
       D->setAnonymousNamespace(Anon);
   } else {
     // Link this namespace back to the first declaration, which has already
@@ -2274,7 +2274,8 @@ static bool isConsumerInterestedIn(Decl *D, bool HasBody) {
   if (isa<FileScopeAsmDecl>(D) || 
       isa<ObjCProtocolDecl>(D) || 
       isa<ObjCImplDecl>(D) ||
-      isa<ImportDecl>(D))
+      isa<ImportDecl>(D) ||
+      isa<OMPThreadPrivateDecl>(D))
     return true;
   if (VarDecl *Var = dyn_cast<VarDecl>(D))
     return Var->isFileVarDecl() &&
@@ -3536,7 +3537,8 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
       // Each module has its own anonymous namespace, which is disjoint from
       // any other module's anonymous namespaces, so don't attach the anonymous
       // namespace at all.
-      if (ModuleFile.Kind != MK_Module) {
+      if (ModuleFile.Kind != MK_ImplicitModule &&
+          ModuleFile.Kind != MK_ExplicitModule) {
         if (TranslationUnitDecl *TU = dyn_cast<TranslationUnitDecl>(D))
           TU->setAnonymousNamespace(Anon);
         else
@@ -3684,6 +3686,10 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
 
     case UPD_STATIC_LOCAL_NUMBER:
       Reader.Context.setStaticLocalNumber(cast<VarDecl>(D), Record[Idx++]);
+      break;
+    case UPD_DECL_MARKED_OPENMP_THREADPRIVATE:
+      D->addAttr(OMPThreadPrivateDeclAttr::CreateImplicit(
+          Reader.Context, ReadSourceRange(Record, Idx)));
       break;
     }
   }

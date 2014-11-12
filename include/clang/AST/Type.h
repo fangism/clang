@@ -3012,6 +3012,8 @@ public:
   bool hasNoexceptExceptionSpec() const {
     return isNoexceptExceptionSpec(getExceptionSpecType());
   }
+  /// \brief Return whether this function has a dependent exception spec.
+  bool hasDependentExceptionSpec() const;
   /// \brief Result type of getNoexceptSpec().
   enum NoexceptResult {
     NR_NoNoexcept,  ///< There is no noexcept specifier.
@@ -3432,6 +3434,7 @@ public:
     attr_stdcall,
     attr_thiscall,
     attr_pascal,
+    attr_vectorcall,
     attr_pnaclcall,
     attr_inteloclbicc,
     attr_ms_abi,
@@ -5247,8 +5250,8 @@ template <typename T> const T *Type::castAs() const {
   ArrayType_cannot_be_used_with_getAs<T> at;
   (void) at;
 
-  assert(isa<T>(CanonicalType));
   if (const T *ty = dyn_cast<T>(this)) return ty;
+  assert(isa<T>(CanonicalType));
   return cast<T>(getUnqualifiedDesugaredType());
 }
 
