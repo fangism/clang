@@ -589,6 +589,12 @@ static void getARMFPUFeatures(const Driver &D, const Arg *A,
     Features.push_back("+crypto");
   } else if (FPU == "neon") {
     Features.push_back("+neon");
+  } else if (FPU == "neon-vfpv3") {
+    Features.push_back("+vfpv3");
+    Features.push_back("+neon");
+  } else if (FPU == "neon-vfpv4") {
+    Features.push_back("+neon");
+    Features.push_back("+vfpv4");
   } else if (FPU == "none") {
     Features.push_back("-vfp2");
     Features.push_back("-vfp3");
@@ -2181,16 +2187,10 @@ static void addProfileRT(
         Args.hasArg(options::OPT_coverage)))
     return;
 
-  // -fprofile-instr-generate requires position-independent code to build with
-  // shared objects.  Link against the right archive.
-  const char *Lib = "libclang_rt.profile-";
-  if (Args.hasArg(options::OPT_fprofile_instr_generate) &&
-      Args.hasArg(options::OPT_shared))
-    Lib = "libclang_rt.profile-pic-";
-
   SmallString<128> LibProfile = getCompilerRTLibDir(TC);
-  llvm::sys::path::append(LibProfile,
-      Twine(Lib) + getArchNameForCompilerRTLib(TC) + ".a");
+  llvm::sys::path::append(LibProfile, Twine("libclang_rt.profile-") +
+                                          getArchNameForCompilerRTLib(TC) +
+                                          ".a");
 
   CmdArgs.push_back(Args.MakeArgString(LibProfile));
 }
@@ -3631,15 +3631,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   const SanitizerArgs &Sanitize = getToolChain().getSanitizerArgs();
   Sanitize.addArgs(Args, CmdArgs);
 
-  if (!Args.hasFlag(options::OPT_fsanitize_recover,
-                    options::OPT_fno_sanitize_recover,
-                    true))
-    CmdArgs.push_back("-fno-sanitize-recover");
-
-  if (Args.hasFlag(options::OPT_fsanitize_undefined_trap_on_error,
-                   options::OPT_fno_sanitize_undefined_trap_on_error, false))
-    CmdArgs.push_back("-fsanitize-undefined-trap-on-error");
-
   // Report an error for -faltivec on anything other than PowerPC.
   if (const Arg *A = Args.getLastArg(options::OPT_faltivec))
     if (!(getToolChain().getArch() == llvm::Triple::ppc ||
@@ -4146,8 +4137,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (getToolChain().UseSjLjExceptions())
     CmdArgs.push_back("-fsjlj-exceptions");
-  else if (getToolChain().UseSEHExceptions())
-    CmdArgs.push_back("-fseh-exceptions");
 
   // C++ "sane" operator new.
   if (!Args.hasFlag(options::OPT_fassume_sane_operator_new,

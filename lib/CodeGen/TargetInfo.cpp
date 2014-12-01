@@ -65,6 +65,19 @@ static CGCXXABI::RecordArgABI getRecordArgABI(QualType T,
   return getRecordArgABI(RT, CXXABI);
 }
 
+/// Pass transparent unions as if they were the type of the first element. Sema
+/// should ensure that all elements of the union have the same "machine type".
+static QualType useFirstFieldIfTransparentUnion(QualType Ty) {
+  if (const RecordType *UT = Ty->getAsUnionType()) {
+    const RecordDecl *UD = UT->getDecl();
+    if (UD->hasAttr<TransparentUnionAttr>()) {
+      assert(!UD->field_empty() && "sema created an empty transparent union");
+      return UD->field_begin()->getType();
+    }
+  }
+  return Ty;
+}
+
 CGCXXABI &ABIInfo::getCXXABI() const {
   return CGT.getCXXABI();
 }
@@ -1006,6 +1019,8 @@ ABIArgInfo X86_32ABIInfo::classifyArgumentType(QualType Ty,
                                                CCState &State) const {
   // FIXME: Set alignment on indirect arguments.
 
+  Ty = useFirstFieldIfTransparentUnion(Ty);
+
   // Check with the C++ ABI first.
   const RecordType *RT = Ty->getAs<RecordType>();
   if (RT) {
@@ -1286,17 +1301,8 @@ bool X86_32TargetCodeGenInfo::isStructReturnInRegABI(
   case llvm::Triple::FreeBSD:
   case llvm::Triple::OpenBSD:
   case llvm::Triple::Bitrig:
-    return true;
   case llvm::Triple::Win32:
-    switch (Triple.getEnvironment()) {
-    case llvm::Triple::UnknownEnvironment:
-    case llvm::Triple::Cygnus:
-    case llvm::Triple::GNU:
-    case llvm::Triple::MSVC:
-      return true;
-    default:
-      return false;
-    }
+    return true;
   default:
     return false;
   }
@@ -2543,6 +2549,8 @@ ABIArgInfo X86_64ABIInfo::classifyArgumentType(
   bool isNamedArg)
   const
 {
+  Ty = useFirstFieldIfTransparentUnion(Ty);
+
   X86_64ABIInfo::Class Lo, Hi;
   classify(Ty, 0, Lo, Hi, isNamedArg);
 
@@ -3520,6 +3528,8 @@ bool PPC64_SVR4_ABIInfo::isHomogeneousAggregateSmallEnough(
 
 ABIArgInfo
 PPC64_SVR4_ABIInfo::classifyArgumentType(QualType Ty) const {
+  Ty = useFirstFieldIfTransparentUnion(Ty);
+
   if (Ty->isAnyComplexType())
     return ABIArgInfo::getDirect();
 
@@ -3803,78 +3813,19 @@ private:
   bool isDarwinPCS() const { return Kind == DarwinPCS; }
 
   ABIArgInfo classifyReturnType(QualType RetTy) const;
-  ABIArgInfo classifyArgumentType(QualType RetTy, unsigned &AllocatedVFP,
-                                  bool &IsHA, unsigned &AllocatedGPR,
-                                  bool &IsSmallAggr, bool IsNamedArg) const;
+  ABIArgInfo classifyArgumentType(QualType RetTy) const;
   bool isHomogeneousAggregateBaseType(QualType Ty) const override;
   bool isHomogeneousAggregateSmallEnough(const Type *Ty,
                                          uint64_t Members) const override;
 
   bool isIllegalVectorType(QualType Ty) const;
 
-  virtual void computeInfo(CGFunctionInfo &FI) const override {
-    // To correctly handle Homogeneous Aggregate, we need to keep track of the
-    // number of SIMD and Floating-point registers allocated so far.
-    // If the argument is an HFA or an HVA and there are sufficient unallocated
-    // SIMD and Floating-point registers, then the argument is allocated to SIMD
-    // and Floating-point Registers (with one register per member of the HFA or
-    // HVA). Otherwise, the NSRN is set to 8.
-    unsigned AllocatedVFP = 0;
-
-    // To correctly handle small aggregates, we need to keep track of the number
-    // of GPRs allocated so far. If the small aggregate can't all fit into
-    // registers, it will be on stack. We don't allow the aggregate to be
-    // partially in registers.
-    unsigned AllocatedGPR = 0;
-
-    // Find the number of named arguments. Variadic arguments get special
-    // treatment with the Darwin ABI.
-    unsigned NumRequiredArgs = FI.getNumRequiredArgs();
-
+  void computeInfo(CGFunctionInfo &FI) const override {
     if (!getCXXABI().classifyReturnType(FI))
       FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
-    unsigned ArgNo = 0;
-    for (CGFunctionInfo::arg_iterator it = FI.arg_begin(), ie = FI.arg_end();
-         it != ie; ++it, ++ArgNo) {
-      unsigned PreAllocation = AllocatedVFP, PreGPR = AllocatedGPR;
-      bool IsHA = false, IsSmallAggr = false;
-      const unsigned NumVFPs = 8;
-      const unsigned NumGPRs = 8;
-      bool IsNamedArg = ArgNo < NumRequiredArgs;
-      it->info = classifyArgumentType(it->type, AllocatedVFP, IsHA,
-                                      AllocatedGPR, IsSmallAggr, IsNamedArg);
 
-      // Under AAPCS the 64-bit stack slot alignment means we can't pass HAs
-      // as sequences of floats since they'll get "holes" inserted as
-      // padding by the back end.
-      if (IsHA && AllocatedVFP > NumVFPs && !isDarwinPCS() &&
-          getContext().getTypeAlign(it->type) < 64) {
-        uint32_t NumStackSlots = getContext().getTypeSize(it->type);
-        NumStackSlots = llvm::RoundUpToAlignment(NumStackSlots, 64) / 64;
-
-        llvm::Type *CoerceTy = llvm::ArrayType::get(
-            llvm::Type::getDoubleTy(getVMContext()), NumStackSlots);
-        it->info = ABIArgInfo::getDirect(CoerceTy);
-      }
-
-      // If we do not have enough VFP registers for the HA, any VFP registers
-      // that are unallocated are marked as unavailable. To achieve this, we add
-      // padding of (NumVFPs - PreAllocation) floats.
-      if (IsHA && AllocatedVFP > NumVFPs && PreAllocation < NumVFPs) {
-        llvm::Type *PaddingTy = llvm::ArrayType::get(
-            llvm::Type::getFloatTy(getVMContext()), NumVFPs - PreAllocation);
-        it->info.setPaddingType(PaddingTy);
-      }
-
-      // If we do not have enough GPRs for the small aggregate, any GPR regs
-      // that are unallocated are marked as unavailable.
-      if (IsSmallAggr && AllocatedGPR > NumGPRs && PreGPR < NumGPRs) {
-        llvm::Type *PaddingTy = llvm::ArrayType::get(
-            llvm::Type::getInt32Ty(getVMContext()), NumGPRs - PreGPR);
-        it->info =
-            ABIArgInfo::getDirect(it->info.getCoerceToType(), 0, PaddingTy);
-      }
-    }
+    for (auto &it : FI.arguments())
+      it.info = classifyArgumentType(it.type);
   }
 
   llvm::Value *EmitDarwinVAArg(llvm::Value *VAListAddr, QualType Ty,
@@ -3905,44 +3856,27 @@ public:
 };
 }
 
-ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
-                                                unsigned &AllocatedVFP,
-                                                bool &IsHA,
-                                                unsigned &AllocatedGPR,
-                                                bool &IsSmallAggr,
-                                                bool IsNamedArg) const {
+ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty) const {
+  Ty = useFirstFieldIfTransparentUnion(Ty);
+
   // Handle illegal vector types here.
   if (isIllegalVectorType(Ty)) {
     uint64_t Size = getContext().getTypeSize(Ty);
     if (Size <= 32) {
       llvm::Type *ResType = llvm::Type::getInt32Ty(getVMContext());
-      AllocatedGPR++;
       return ABIArgInfo::getDirect(ResType);
     }
     if (Size == 64) {
       llvm::Type *ResType =
           llvm::VectorType::get(llvm::Type::getInt32Ty(getVMContext()), 2);
-      AllocatedVFP++;
       return ABIArgInfo::getDirect(ResType);
     }
     if (Size == 128) {
       llvm::Type *ResType =
           llvm::VectorType::get(llvm::Type::getInt32Ty(getVMContext()), 4);
-      AllocatedVFP++;
       return ABIArgInfo::getDirect(ResType);
     }
-    AllocatedGPR++;
     return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
-  }
-  if (Ty->isVectorType())
-    // Size of a legal vector should be either 64 or 128.
-    AllocatedVFP++;
-  if (const BuiltinType *BT = Ty->getAs<BuiltinType>()) {
-    if (BT->getKind() == BuiltinType::Half ||
-        BT->getKind() == BuiltinType::Float ||
-        BT->getKind() == BuiltinType::Double ||
-        BT->getKind() == BuiltinType::LongDouble)
-      AllocatedVFP++;
   }
 
   if (!isAggregateTypeForABI(Ty)) {
@@ -3950,14 +3884,6 @@ ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
     if (const EnumType *EnumTy = Ty->getAs<EnumType>())
       Ty = EnumTy->getDecl()->getIntegerType();
 
-    if (!Ty->isFloatingType() && !Ty->isVectorType()) {
-      unsigned Alignment = getContext().getTypeAlign(Ty);
-      if (!isDarwinPCS() && Alignment > 64)
-        AllocatedGPR = llvm::RoundUpToAlignment(AllocatedGPR, Alignment / 64);
-
-      int RegsNeeded = getContext().getTypeSize(Ty) > 64 ? 2 : 1;
-      AllocatedGPR += RegsNeeded;
-    }
     return (Ty->isPromotableIntegerType() && isDarwinPCS()
                 ? ABIArgInfo::getExtend()
                 : ABIArgInfo::getDirect());
@@ -3966,9 +3892,8 @@ ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
   // Structures with either a non-trivial destructor or a non-trivial
   // copy constructor are always indirect.
   if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, getCXXABI())) {
-    AllocatedGPR++;
     return ABIArgInfo::getIndirect(0, /*ByVal=*/RAA ==
-                                          CGCXXABI::RAA_DirectInMemory);
+                                   CGCXXABI::RAA_DirectInMemory);
   }
 
   // Empty records are always ignored on Darwin, but actually passed in C++ mode
@@ -3977,7 +3902,6 @@ ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
     if (!getContext().getLangOpts().CPlusPlus || isDarwinPCS())
       return ABIArgInfo::getIgnore();
 
-    ++AllocatedGPR;
     return ABIArgInfo::getDirect(llvm::Type::getInt8Ty(getVMContext()));
   }
 
@@ -3985,28 +3909,16 @@ ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
   const Type *Base = nullptr;
   uint64_t Members = 0;
   if (isHomogeneousAggregate(Ty, Base, Members)) {
-    IsHA = true;
-    if (!IsNamedArg && isDarwinPCS()) {
-      // With the Darwin ABI, variadic arguments are always passed on the stack
-      // and should not be expanded. Treat variadic HFAs as arrays of doubles.
-      uint64_t Size = getContext().getTypeSize(Ty);
-      llvm::Type *BaseTy = llvm::Type::getDoubleTy(getVMContext());
-      return ABIArgInfo::getDirect(llvm::ArrayType::get(BaseTy, Size / 64));
-    }
-    AllocatedVFP += Members;
-    return ABIArgInfo::getExpand();
+    return ABIArgInfo::getDirect(
+        llvm::ArrayType::get(CGT.ConvertType(QualType(Base, 0)), Members));
   }
 
   // Aggregates <= 16 bytes are passed directly in registers or on the stack.
   uint64_t Size = getContext().getTypeSize(Ty);
   if (Size <= 128) {
     unsigned Alignment = getContext().getTypeAlign(Ty);
-    if (!isDarwinPCS() && Alignment > 64)
-      AllocatedGPR = llvm::RoundUpToAlignment(AllocatedGPR, Alignment / 64);
-
     Size = 64 * ((Size + 63) / 64); // round up to multiple of 8 bytes
-    AllocatedGPR += Size / 64;
-    IsSmallAggr = true;
+
     // We use a pair of i64 for 16-byte aggregate with 8-byte alignment.
     // For aggregates with 16-byte alignment, we use i128.
     if (Alignment < 128 && Size == 128) {
@@ -4016,7 +3928,6 @@ ABIArgInfo AArch64ABIInfo::classifyArgumentType(QualType Ty,
     return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(), Size));
   }
 
-  AllocatedGPR++;
   return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
 }
 
@@ -4092,13 +4003,24 @@ bool AArch64ABIInfo::isHomogeneousAggregateSmallEnough(const Type *Base,
   return Members <= 4;
 }
 
-llvm::Value *AArch64ABIInfo::EmitAAPCSVAArg(llvm::Value *VAListAddr, QualType Ty,
-                                          CodeGenFunction &CGF) const {
-  unsigned AllocatedGPR = 0, AllocatedVFP = 0;
-  bool IsHA = false, IsSmallAggr = false;
-  ABIArgInfo AI = classifyArgumentType(Ty, AllocatedVFP, IsHA, AllocatedGPR,
-                                       IsSmallAggr, false /*IsNamedArg*/);
+llvm::Value *AArch64ABIInfo::EmitAAPCSVAArg(llvm::Value *VAListAddr,
+                                            QualType Ty,
+                                            CodeGenFunction &CGF) const {
+  ABIArgInfo AI = classifyArgumentType(Ty);
   bool IsIndirect = AI.isIndirect();
+
+  llvm::Type *BaseTy = CGF.ConvertType(Ty);
+  if (IsIndirect)
+    BaseTy = llvm::PointerType::getUnqual(BaseTy);
+  else if (AI.getCoerceToType())
+    BaseTy = AI.getCoerceToType();
+
+  unsigned NumRegs = 1;
+  if (llvm::ArrayType *ArrTy = dyn_cast<llvm::ArrayType>(BaseTy)) {
+    BaseTy = ArrTy->getElementType();
+    NumRegs = ArrTy->getNumElements();
+  }
+  bool IsFPR = BaseTy->isFloatingPointTy() || BaseTy->isVectorTy();
 
   // The AArch64 va_list type and handling is specified in the Procedure Call
   // Standard, section B.4:
@@ -4119,21 +4041,19 @@ llvm::Value *AArch64ABIInfo::EmitAAPCSVAArg(llvm::Value *VAListAddr, QualType Ty
 
   llvm::Value *reg_offs_p = nullptr, *reg_offs = nullptr;
   int reg_top_index;
-  int RegSize;
-  if (AllocatedGPR) {
-    assert(!AllocatedVFP && "Arguments never split between int & VFP regs");
+  int RegSize = IsIndirect ? 8 : getContext().getTypeSize(Ty) / 8;
+  if (!IsFPR) {
     // 3 is the field number of __gr_offs
     reg_offs_p = CGF.Builder.CreateStructGEP(VAListAddr, 3, "gr_offs_p");
     reg_offs = CGF.Builder.CreateLoad(reg_offs_p, "gr_offs");
     reg_top_index = 1; // field number for __gr_top
-    RegSize = 8 * AllocatedGPR;
+    RegSize = llvm::RoundUpToAlignment(RegSize, 8);
   } else {
-    assert(!AllocatedGPR && "Argument must go in VFP or int regs");
     // 4 is the field number of __vr_offs.
     reg_offs_p = CGF.Builder.CreateStructGEP(VAListAddr, 4, "vr_offs_p");
     reg_offs = CGF.Builder.CreateLoad(reg_offs_p, "vr_offs");
     reg_top_index = 2; // field number for __vr_top
-    RegSize = 16 * AllocatedVFP;
+    RegSize = 16 * NumRegs;
   }
 
   //=======================================
@@ -4157,7 +4077,7 @@ llvm::Value *AArch64ABIInfo::EmitAAPCSVAArg(llvm::Value *VAListAddr, QualType Ty
   // Integer arguments may need to correct register alignment (for example a
   // "struct { __int128 a; };" gets passed in x_2N, x_{2N+1}). In this case we
   // align __gr_offs to calculate the potential address.
-  if (AllocatedGPR && !IsIndirect && Ctx.getTypeAlign(Ty) > 64) {
+  if (!IsFPR && !IsIndirect && Ctx.getTypeAlign(Ty) > 64) {
     int Align = Ctx.getTypeAlign(Ty) / 8;
 
     reg_offs = CGF.Builder.CreateAdd(
@@ -4691,6 +4611,8 @@ ABIArgInfo ARMABIInfo::classifyArgumentType(QualType Ty, bool isVariadic,
   //   64-bit containerized vectors or 128-bit containerized vectors with one
   //   to four Elements.
   bool IsEffectivelyAAPCS_VFP = getABIKind() == AAPCS_VFP && !isVariadic;
+
+  Ty = useFirstFieldIfTransparentUnion(Ty);
 
   // Handle illegal vector types here.
   if (isIllegalVectorType(Ty)) {
@@ -5896,6 +5818,14 @@ llvm::Value* MipsABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                     CodeGenFunction &CGF) const {
   llvm::Type *BP = CGF.Int8PtrTy;
   llvm::Type *BPP = CGF.Int8PtrPtrTy;
+
+  // Integer arguments are promoted 32-bit on O32 and 64-bit on N32/N64.
+  unsigned SlotSizeInBits = IsO32 ? 32 : 64;
+  if (Ty->isIntegerType() &&
+      CGF.getContext().getIntWidth(Ty) < SlotSizeInBits) {
+    Ty = CGF.getContext().getIntTypeForBitwidth(SlotSizeInBits,
+                                                Ty->isSignedIntegerType());
+  }
  
   CGBuilderTy &Builder = CGF.Builder;
   llvm::Value *VAListAddrAsBPP = Builder.CreateBitCast(VAListAddr, BPP, "ap");
@@ -5920,8 +5850,8 @@ llvm::Value* MipsABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
 
   llvm::Value *AlignedAddr = Builder.CreateBitCast(AddrTyped, BP);
   TypeAlign = std::max((unsigned)TypeAlign, MinABIStackAlignInBytes);
-  uint64_t Offset =
-    llvm::RoundUpToAlignment(CGF.getContext().getTypeSize(Ty) / 8, TypeAlign);
+  unsigned ArgSizeInBits = CGF.getContext().getTypeSize(Ty);
+  uint64_t Offset = llvm::RoundUpToAlignment(ArgSizeInBits / 8, TypeAlign);
   llvm::Value *NextAddr =
     Builder.CreateGEP(AlignedAddr, llvm::ConstantInt::get(IntTy, Offset),
                       "ap.next");
@@ -7176,7 +7106,7 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
     bool IsDarwinVectorABI = Triple.isOSDarwin();
     bool IsSmallStructInRegABI =
         X86_32TargetCodeGenInfo::isStructReturnInRegABI(Triple, CodeGenOpts);
-    bool IsWin32FloatStructABI = Triple.isWindowsMSVCEnvironment();
+    bool IsWin32FloatStructABI = Triple.isOSWindows() && !Triple.isOSCygMing();
 
     if (Triple.getOS() == llvm::Triple::Win32) {
       return *(TheTargetCodeGenInfo =

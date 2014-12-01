@@ -117,6 +117,7 @@ TOK(eod)                 // End of preprocessing directive (end of line inside a
                          // directive).
 TOK(code_completion)     // Code completion marker
 TOK(cxx_defaultarg_end)  // C++ default argument end marker
+TOK(cxx_exceptspec_end)  // C++ exception-specification end marker
 
 // C99 6.4.9: Comments.
 TOK(comment)             // Comment (only in -E -C[C] mode)
@@ -470,10 +471,12 @@ KEYWORD(__global                    , KEYOPENCL)
 KEYWORD(__local                     , KEYOPENCL)
 KEYWORD(__constant                  , KEYOPENCL)
 KEYWORD(__private                   , KEYOPENCL)
+KEYWORD(__generic                   , KEYOPENCL)
 ALIAS("global", __global            , KEYOPENCL)
 ALIAS("local", __local              , KEYOPENCL)
 ALIAS("constant", __constant        , KEYOPENCL)
 ALIAS("private", __private          , KEYOPENCL)
+ALIAS("generic", __generic          , KEYOPENCL)
 // OpenCL function qualifiers
 KEYWORD(__kernel                    , KEYOPENCL)
 ALIAS("kernel", __kernel            , KEYOPENCL)

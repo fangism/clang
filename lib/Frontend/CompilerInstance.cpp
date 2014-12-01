@@ -159,9 +159,8 @@ static void SetUpDiagnosticLog(DiagnosticOptions *DiagOpts,
   if (CodeGenOpts)
     Logger->setDwarfDebugFlags(CodeGenOpts->DwarfDebugFlags);
   assert(Diags.ownsClient());
-  Diags.setClient(new ChainedDiagnosticConsumer(
-      std::unique_ptr<DiagnosticConsumer>(Diags.takeClient()),
-      std::move(Logger)));
+  Diags.setClient(
+      new ChainedDiagnosticConsumer(Diags.takeClient(), std::move(Logger)));
 }
 
 static void SetupSerializedDiagnostics(DiagnosticOptions *DiagOpts,
@@ -170,10 +169,13 @@ static void SetupSerializedDiagnostics(DiagnosticOptions *DiagOpts,
   auto SerializedConsumer =
       clang::serialized_diags::create(OutputFile, DiagOpts);
 
-  assert(Diags.ownsClient());
-  Diags.setClient(new ChainedDiagnosticConsumer(
-      std::unique_ptr<DiagnosticConsumer>(Diags.takeClient()),
-      std::move(SerializedConsumer)));
+  if (Diags.ownsClient()) {
+    Diags.setClient(new ChainedDiagnosticConsumer(
+        Diags.takeClient(), std::move(SerializedConsumer)));
+  } else {
+    Diags.setClient(new ChainedDiagnosticConsumer(
+        Diags.getClient(), std::move(SerializedConsumer)));
+  }
 }
 
 void CompilerInstance::createDiagnostics(DiagnosticConsumer *Client,

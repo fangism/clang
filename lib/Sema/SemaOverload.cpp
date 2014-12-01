@@ -161,7 +161,7 @@ static const char* GetImplicitConversionName(ImplicitConversionKind Kind) {
     "Vector splat",
     "Complex-real conversion",
     "Block Pointer conversion",
-    "Transparent Union Conversion"
+    "Transparent Union Conversion",
     "Writeback conversion"
   };
   return Name[Kind];
@@ -4817,9 +4817,8 @@ Sema::PerformObjectArgumentInitialization(Expr *From,
 
   // Note that we always use the true parent context when performing
   // the actual argument initialization.
-  ImplicitConversionSequence ICS
-    = TryObjectArgumentInitialization(*this, From->getType(), FromClassification,
-                                      Method, Method->getParent());
+  ImplicitConversionSequence ICS = TryObjectArgumentInitialization(
+      *this, From->getType(), FromClassification, Method, Method->getParent());
   if (ICS.isBad()) {
     if (ICS.Bad.Kind == BadConversionSequence::bad_qualifiers) {
       Qualifiers FromQs = FromRecordType.getQualifiers();
@@ -4895,41 +4894,51 @@ static bool CheckConvertedConstantConversions(Sema &S,
   // conversions are fine.
   switch (SCS.Second) {
   case ICK_Identity:
+  case ICK_NoReturn_Adjustment:
   case ICK_Integral_Promotion:
-  case ICK_Integral_Conversion:
-  case ICK_Zero_Event_Conversion:
+  case ICK_Integral_Conversion: // Narrowing conversions are checked elsewhere.
     return true;
 
   case ICK_Boolean_Conversion:
     // Conversion from an integral or unscoped enumeration type to bool is
-    // classified as ICK_Boolean_Conversion, but it's also an integral
-    // conversion, so it's permitted in a converted constant expression.
+    // classified as ICK_Boolean_Conversion, but it's also arguably an integral
+    // conversion, so we allow it in a converted constant expression.
+    //
+    // FIXME: Per core issue 1407, we should not allow this, but that breaks
+    // a lot of popular code. We should at least add a warning for this
+    // (non-conforming) extension.
     return SCS.getFromType()->isIntegralOrUnscopedEnumerationType() &&
            SCS.getToType(2)->isBooleanType();
 
+  case ICK_Pointer_Conversion:
+  case ICK_Pointer_Member:
+    // C++1z: null pointer conversions and null member pointer conversions are
+    // only permitted if the source type is std::nullptr_t.
+    return SCS.getFromType()->isNullPtrType();
+
+  case ICK_Floating_Promotion:
+  case ICK_Complex_Promotion:
+  case ICK_Floating_Conversion:
+  case ICK_Complex_Conversion:
   case ICK_Floating_Integral:
+  case ICK_Compatible_Conversion:
+  case ICK_Derived_To_Base:
+  case ICK_Vector_Conversion:
+  case ICK_Vector_Splat:
   case ICK_Complex_Real:
+  case ICK_Block_Pointer_Conversion:
+  case ICK_TransparentUnionConversion:
+  case ICK_Writeback_Conversion:
+  case ICK_Zero_Event_Conversion:
     return false;
 
   case ICK_Lvalue_To_Rvalue:
   case ICK_Array_To_Pointer:
   case ICK_Function_To_Pointer:
-  case ICK_NoReturn_Adjustment:
+    llvm_unreachable("found a first conversion kind in Second");
+
   case ICK_Qualification:
-  case ICK_Compatible_Conversion:
-  case ICK_Vector_Conversion:
-  case ICK_Vector_Splat:
-  case ICK_Derived_To_Base:
-  case ICK_Pointer_Conversion:
-  case ICK_Pointer_Member:
-  case ICK_Block_Pointer_Conversion:
-  case ICK_Writeback_Conversion:
-  case ICK_Floating_Promotion:
-  case ICK_Complex_Promotion:
-  case ICK_Complex_Conversion:
-  case ICK_Floating_Conversion:
-  case ICK_TransparentUnionConversion:
-    llvm_unreachable("unexpected second conversion kind");
+    llvm_unreachable("found a third conversion kind in Second");
 
   case ICK_Num_Conversion_Kinds:
     break;
@@ -4941,67 +4950,71 @@ static bool CheckConvertedConstantConversions(Sema &S,
 /// CheckConvertedConstantExpression - Check that the expression From is a
 /// converted constant expression of type T, perform the conversion and produce
 /// the converted expression, per C++11 [expr.const]p3.
-ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
-                                                  llvm::APSInt &Value,
-                                                  CCEKind CCE) {
-  assert(LangOpts.CPlusPlus11 && "converted constant expression outside C++11");
-  assert(T->isIntegralOrEnumerationType() && "unexpected converted const type");
+static ExprResult CheckConvertedConstantExpression(Sema &S, Expr *From,
+                                                   QualType T, APValue &Value,
+                                                   Sema::CCEKind CCE,
+                                                   bool RequireInt) {
+  assert(S.getLangOpts().CPlusPlus11 &&
+         "converted constant expression outside C++11");
 
-  if (checkPlaceholderForOverload(*this, From))
+  if (checkPlaceholderForOverload(S, From))
     return ExprError();
 
-  // C++11 [expr.const]p3 with proposed wording fixes:
-  //  A converted constant expression of type T is a core constant expression,
-  //  implicitly converted to a prvalue of type T, where the converted
-  //  expression is a literal constant expression and the implicit conversion
-  //  sequence contains only user-defined conversions, lvalue-to-rvalue
-  //  conversions, integral promotions, and integral conversions other than
-  //  narrowing conversions.
+  // C++1z [expr.const]p3:
+  //  A converted constant expression of type T is an expression,
+  //  implicitly converted to type T, where the converted
+  //  expression is a constant expression and the implicit conversion
+  //  sequence contains only [... list of conversions ...].
   ImplicitConversionSequence ICS =
-    TryImplicitConversion(From, T,
+    TryCopyInitialization(S, From, T,
                           /*SuppressUserConversions=*/false,
-                          /*AllowExplicit=*/false,
                           /*InOverloadResolution=*/false,
-                          /*CStyle=*/false,
-                          /*AllowObjcWritebackConversion=*/false);
+                          /*AllowObjcWritebackConversion=*/false,
+                          /*AllowExplicit=*/false);
   StandardConversionSequence *SCS = nullptr;
   switch (ICS.getKind()) {
   case ImplicitConversionSequence::StandardConversion:
-    if (!CheckConvertedConstantConversions(*this, ICS.Standard))
-      return Diag(From->getLocStart(),
-                  diag::err_typecheck_converted_constant_expression_disallowed)
-               << From->getType() << From->getSourceRange() << T;
     SCS = &ICS.Standard;
     break;
   case ImplicitConversionSequence::UserDefinedConversion:
-    // We are converting from class type to an integral or enumeration type, so
-    // the Before sequence must be trivial.
-    if (!CheckConvertedConstantConversions(*this, ICS.UserDefined.After))
-      return Diag(From->getLocStart(),
-                  diag::err_typecheck_converted_constant_expression_disallowed)
-               << From->getType() << From->getSourceRange() << T;
+    // We are converting to a non-class type, so the Before sequence
+    // must be trivial.
     SCS = &ICS.UserDefined.After;
     break;
   case ImplicitConversionSequence::AmbiguousConversion:
   case ImplicitConversionSequence::BadConversion:
-    if (!DiagnoseMultipleUserDefinedConversion(From, T))
-      return Diag(From->getLocStart(),
-                  diag::err_typecheck_converted_constant_expression)
-                    << From->getType() << From->getSourceRange() << T;
+    if (!S.DiagnoseMultipleUserDefinedConversion(From, T))
+      return S.Diag(From->getLocStart(),
+                    diag::err_typecheck_converted_constant_expression)
+                << From->getType() << From->getSourceRange() << T;
     return ExprError();
 
   case ImplicitConversionSequence::EllipsisConversion:
     llvm_unreachable("ellipsis conversion in converted constant expression");
   }
 
-  ExprResult Result = PerformImplicitConversion(From, T, ICS, AA_Converting);
+  // Check that we would only use permitted conversions.
+  if (!CheckConvertedConstantConversions(S, *SCS)) {
+    return S.Diag(From->getLocStart(),
+                  diag::err_typecheck_converted_constant_expression_disallowed)
+             << From->getType() << From->getSourceRange() << T;
+  }
+  // [...] and where the reference binding (if any) binds directly.
+  if (SCS->ReferenceBinding && !SCS->DirectBinding) {
+    return S.Diag(From->getLocStart(),
+                  diag::err_typecheck_converted_constant_expression_indirect)
+             << From->getType() << From->getSourceRange() << T;
+  }
+
+  ExprResult Result =
+      S.PerformImplicitConversion(From, T, ICS, Sema::AA_Converting);
   if (Result.isInvalid())
     return Result;
 
   // Check for a narrowing implicit conversion.
   APValue PreNarrowingValue;
   QualType PreNarrowingType;
-  switch (SCS->getNarrowingKind(Context, Result.get(), PreNarrowingValue,
+  switch (SCS->getNarrowingKind(S.Context, Result.get(), PreNarrowingValue,
                                 PreNarrowingType)) {
   case NK_Variable_Narrowing:
     // Implicit conversion to a narrower type, and the value is not a constant
@@ -5010,13 +5023,13 @@ ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
     break;
 
   case NK_Constant_Narrowing:
-    Diag(From->getLocStart(), diag::ext_cce_narrowing)
+    S.Diag(From->getLocStart(), diag::ext_cce_narrowing)
       << CCE << /*Constant*/1
-      << PreNarrowingValue.getAsString(Context, PreNarrowingType) << T;
+      << PreNarrowingValue.getAsString(S.Context, PreNarrowingType) << T;
     break;
 
   case NK_Type_Narrowing:
-    Diag(From->getLocStart(), diag::ext_cce_narrowing)
+    S.Diag(From->getLocStart(), diag::ext_cce_narrowing)
       << CCE << /*Constant*/0 << From->getType() << T;
     break;
   }
@@ -5026,12 +5039,15 @@ ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
   Expr::EvalResult Eval;
   Eval.Diag = &Notes;
 
-  if (!Result.get()->EvaluateAsRValue(Eval, Context) || !Eval.Val.isInt()) {
+  if ((T->isReferenceType()
+           ? !Result.get()->EvaluateAsLValue(Eval, S.Context)
+           : !Result.get()->EvaluateAsRValue(Eval, S.Context)) ||
+      (RequireInt && !Eval.Val.isInt())) {
     // The expression can't be folded, so we can't keep it at this position in
     // the AST.
     Result = ExprError();
   } else {
-    Value = Eval.Val.getInt();
+    Value = Eval.Val;
 
     if (Notes.empty()) {
       // It's a constant expression.
@@ -5042,15 +5058,33 @@ ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
   // It's not a constant expression. Produce an appropriate diagnostic.
   if (Notes.size() == 1 &&
       Notes[0].second.getDiagID() == diag::note_invalid_subexpr_in_const_expr)
-    Diag(Notes[0].first, diag::err_expr_not_cce) << CCE;
+    S.Diag(Notes[0].first, diag::err_expr_not_cce) << CCE;
   else {
-    Diag(From->getLocStart(), diag::err_expr_not_cce)
+    S.Diag(From->getLocStart(), diag::err_expr_not_cce)
       << CCE << From->getSourceRange();
     for (unsigned I = 0; I < Notes.size(); ++I)
-      Diag(Notes[I].first, Notes[I].second);
+      S.Diag(Notes[I].first, Notes[I].second);
   }
-  return Result;
+  return ExprError();
 }
+
+ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
+                                                  APValue &Value, CCEKind CCE) {
+  return ::CheckConvertedConstantExpression(*this, From, T, Value, CCE, false);
+}
+
+ExprResult Sema::CheckConvertedConstantExpression(Expr *From, QualType T,
+                                                  llvm::APSInt &Value,
+                                                  CCEKind CCE) {
+  assert(T->isIntegralOrEnumerationType() && "unexpected converted const type");
+
+  APValue V;
+  auto R = ::CheckConvertedConstantExpression(*this, From, T, V, CCE, true);
+  if (!R.isInvalid())
+    Value = V.getInt();
+  return R;
+}
+
 
 /// dropPointerConversions - If the given standard conversion sequence
 /// involves any pointer conversions, remove them.  This may change
@@ -6676,7 +6710,7 @@ BuiltinCandidateTypeSet::AddPointerWithMoreQualifiedTypeVariants(QualType Ty,
                                              const Qualifiers &VisibleQuals) {
 
   // Insert this type.
-  if (!PointerTypes.insert(Ty))
+  if (!PointerTypes.insert(Ty).second)
     return false;
 
   QualType PointeeTy;
@@ -6744,7 +6778,7 @@ bool
 BuiltinCandidateTypeSet::AddMemberPointerWithMoreQualifiedTypeVariants(
     QualType Ty) {
   // Insert this type.
-  if (!MemberPointerTypes.insert(Ty))
+  if (!MemberPointerTypes.insert(Ty).second)
     return false;
 
   const MemberPointerType *PointerTy = Ty->getAs<MemberPointerType>();
@@ -7314,7 +7348,7 @@ public:
            MemPtr != MemPtrEnd;
            ++MemPtr) {
         // Don't add the same builtin candidate twice.
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)).second)
           continue;
 
         QualType ParamTypes[2] = { *MemPtr, *MemPtr };
@@ -7389,7 +7423,7 @@ public:
              PtrEnd = CandidateTypes[ArgIdx].pointer_end();
            Ptr != PtrEnd; ++Ptr) {
         // Don't add the same builtin candidate twice.
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)).second)
           continue;
 
         QualType ParamTypes[2] = { *Ptr, *Ptr };
@@ -7403,7 +7437,7 @@ public:
 
         // Don't add the same builtin candidate twice, or if a user defined
         // candidate exists.
-        if (!AddedTypes.insert(CanonType) ||
+        if (!AddedTypes.insert(CanonType).second ||
             UserDefinedBinaryOperators.count(std::make_pair(CanonType,
                                                             CanonType)))
           continue;
@@ -7414,7 +7448,7 @@ public:
       
       if (CandidateTypes[ArgIdx].hasNullPtrType()) {
         CanQualType NullPtrTy = S.Context.getCanonicalType(S.Context.NullPtrTy);
-        if (AddedTypes.insert(NullPtrTy) &&
+        if (AddedTypes.insert(NullPtrTy).second &&
             !UserDefinedBinaryOperators.count(std::make_pair(NullPtrTy,
                                                              NullPtrTy))) {
           QualType ParamTypes[2] = { NullPtrTy, NullPtrTy };
@@ -7467,7 +7501,7 @@ public:
         }
         if (Op == OO_Minus) {
           // ptrdiff_t operator-(T, T);
-          if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)))
+          if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)).second)
             continue;
 
           QualType ParamTypes[2] = { *Ptr, *Ptr };
@@ -7596,7 +7630,7 @@ public:
                 Enum = CandidateTypes[ArgIdx].enumeration_begin(),
              EnumEnd = CandidateTypes[ArgIdx].enumeration_end();
            Enum != EnumEnd; ++Enum) {
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*Enum)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*Enum)).second)
           continue;
 
         AddBuiltinAssignmentOperatorCandidates(S, *Enum, Args, CandidateSet);
@@ -7606,7 +7640,7 @@ public:
                 MemPtr = CandidateTypes[ArgIdx].member_pointer_begin(),
              MemPtrEnd = CandidateTypes[ArgIdx].member_pointer_end();
            MemPtr != MemPtrEnd; ++MemPtr) {
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)).second)
           continue;
 
         AddBuiltinAssignmentOperatorCandidates(S, *MemPtr, Args, CandidateSet);
@@ -7689,7 +7723,7 @@ public:
              PtrEnd = CandidateTypes[1].pointer_end();
            Ptr != PtrEnd; ++Ptr) {
         // Make sure we don't add the same candidate twice.
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)).second)
           continue;
 
         QualType ParamTypes[2] = {
@@ -7970,7 +8004,7 @@ public:
                 Ptr = CandidateTypes[ArgIdx].pointer_begin(),
              PtrEnd = CandidateTypes[ArgIdx].pointer_end();
            Ptr != PtrEnd; ++Ptr) {
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*Ptr)).second)
           continue;
 
         QualType ParamTypes[2] = { *Ptr, *Ptr };
@@ -7981,7 +8015,7 @@ public:
                 MemPtr = CandidateTypes[ArgIdx].member_pointer_begin(),
              MemPtrEnd = CandidateTypes[ArgIdx].member_pointer_end();
            MemPtr != MemPtrEnd; ++MemPtr) {
-        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)))
+        if (!AddedTypes.insert(S.Context.getCanonicalType(*MemPtr)).second)
           continue;
 
         QualType ParamTypes[2] = { *MemPtr, *MemPtr };
@@ -7996,7 +8030,7 @@ public:
           if (!(*Enum)->getAs<EnumType>()->getDecl()->isScoped())
             continue;
 
-          if (!AddedTypes.insert(S.Context.getCanonicalType(*Enum)))
+          if (!AddedTypes.insert(S.Context.getCanonicalType(*Enum)).second)
             continue;
 
           QualType ParamTypes[2] = { *Enum, *Enum };
@@ -11698,7 +11732,8 @@ Sema::BuildCallToObjectOfClassType(Scope *S, Expr *Obj,
   if (checkArgPlaceholdersForOverload(*this, Args, UnbridgedCasts))
     return ExprError();
 
-  assert(Object.get()->getType()->isRecordType() && "Requires object type argument");
+  assert(Object.get()->getType()->isRecordType() &&
+         "Requires object type argument");
   const RecordType *Record = Object.get()->getType()->getAs<RecordType>();
 
   // C++ [over.call.object]p1:

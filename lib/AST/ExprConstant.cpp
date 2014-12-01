@@ -3657,6 +3657,22 @@ static bool CheckConstexprFunction(EvalInfo &Info, SourceLocation CallLoc,
   return false;
 }
 
+/// Determine if a class has any fields that might need to be copied by a
+/// trivial copy or move operation.
+static bool hasFields(const CXXRecordDecl *RD) {
+  if (!RD || RD->isEmpty())
+    return false;
+  for (auto *FD : RD->fields()) {
+    if (FD->isUnnamedBitfield())
+      continue;
+    return true;
+  }
+  for (auto &Base : RD->bases())
+    if (hasFields(Base.getType()->getAsCXXRecordDecl()))
+      return true;
+  return false;
+}
+
 namespace {
 typedef SmallVector<APValue, 8> ArgVector;
 }
@@ -3695,8 +3711,12 @@ static bool HandleFunctionCall(SourceLocation CallLoc,
   // For a trivial copy or move assignment, perform an APValue copy. This is
   // essential for unions, where the operations performed by the assignment
   // operator cannot be represented as statements.
+  //
+  // Skip this for non-union classes with no fields; in that case, the defaulted
+  // copy/move does not actually read the object.
   const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Callee);
-  if (MD && MD->isDefaulted() && MD->isTrivial()) {
+  if (MD && MD->isDefaulted() && MD->isTrivial() &&
+      (MD->getParent()->isUnion() || hasFields(MD->getParent()))) {
     assert(This &&
            (MD->isCopyAssignmentOperator() || MD->isMoveAssignmentOperator()));
     LValue RHS;
@@ -3753,11 +3773,18 @@ static bool HandleConstructorCall(SourceLocation CallLoc, const LValue &This,
   }
 
   // For a trivial copy or move constructor, perform an APValue copy. This is
-  // essential for unions, where the operations performed by the constructor
-  // cannot be represented by ctor-initializers.
+  // essential for unions (or classes with anonymous union members), where the
+  // operations performed by the constructor cannot be represented by
+  // ctor-initializers.
+  //
+  // Skip this for empty non-union classes; we should not perform an
+  // lvalue-to-rvalue conversion on them because their copy constructor does not
+  // actually read them.
   if (Definition->isDefaulted() &&
       ((Definition->isCopyConstructor() && Definition->isTrivial()) ||
-       (Definition->isMoveConstructor() && Definition->isTrivial()))) {
+       (Definition->isMoveConstructor() && Definition->isTrivial())) &&
+      (Definition->getParent()->isUnion() ||
+       hasFields(Definition->getParent()))) {
     LValue RHS;
     RHS.setFrom(Info.Ctx, ArgValues[0]);
     return handleLValueToRValueConversion(Info, Args[0], Args[0]->getType(),
@@ -4802,6 +4829,7 @@ bool PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
   case CK_CPointerToObjCPointerCast:
   case CK_BlockPointerToObjCPointerCast:
   case CK_AnyPointerToBlockPointerCast:
+  case CK_AddressSpaceConversion:
     if (!Visit(SubExpr))
       return false;
     // Bitcasts to cv void* are static_casts, not reinterpret_casts, so are
@@ -8971,7 +8999,11 @@ static bool EvaluateCPlusPlus11IntegralConstantExpr(const ASTContext &Ctx,
   if (!E->isCXX11ConstantExpr(Ctx, &Result, Loc))
     return false;
 
-  assert(Result.isInt() && "pointer cast to int is not an ICE");
+  if (!Result.isInt()) {
+    if (Loc) *Loc = E->getExprLoc();
+    return false;
+  }
+
   if (Value) *Value = Result.getInt();
   return true;
 }

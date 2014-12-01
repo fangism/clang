@@ -32,8 +32,7 @@ class Value;
 } // namespace llvm
 
 namespace clang {
-class VarDecl;
-
+class Expr;
 class OMPExecutableDirective;
 class VarDecl;
 
@@ -93,7 +92,9 @@ public:
     OMPRTL__kmpc_end_serialized_parallel,
     // Call to void __kmpc_push_num_threads(ident_t *loc, kmp_int32 global_tid,
     // kmp_int32 num_threads);
-    OMPRTL__kmpc_push_num_threads
+    OMPRTL__kmpc_push_num_threads,
+    // Call to void __kmpc_flush(ident_t *loc, ...);
+    OMPRTL__kmpc_flush
   };
 
 private:
@@ -229,6 +230,13 @@ private:
                                    llvm::Value *Ctor, llvm::Value *CopyCtor,
                                    llvm::Value *Dtor, SourceLocation Loc);
 
+  /// \brief Returns corresponding lock object for the specified critical region
+  /// name. If the lock object does not exist it is created, otherwise the
+  /// reference to the existing copy is returned.
+  /// \param CriticalName Name of the critical region.
+  ///
+  llvm::Value *GetCriticalRegionLock(StringRef CriticalName);
+
 public:
   explicit CGOpenMPRuntime(CodeGenModule &CGM);
   virtual ~CGOpenMPRuntime() {}
@@ -269,28 +277,14 @@ public:
                                  llvm::Value *OutlinedFn,
                                  llvm::Value *CapturedStruct);
 
-  /// \brief Returns corresponding lock object for the specified critical region
-  /// name. If the lock object does not exist it is created, otherwise the
-  /// reference to the existing copy is returned.
+  /// \brief Emits a critical region.
   /// \param CriticalName Name of the critical region.
-  ///
-  llvm::Value *GetCriticalRegionLock(StringRef CriticalName);
-
-  /// \brief Emits start of the critical region by calling void
-  /// __kmpc_critical(ident_t *loc, kmp_int32 global_tid, kmp_critical_name
-  /// * \a RegionLock)
-  /// \param RegionLock The lock object for critical region.
-  virtual void EmitOMPCriticalRegionStart(CodeGenFunction &CGF,
-                                          llvm::Value *RegionLock,
-                                          SourceLocation Loc);
-
-  /// \brief Emits end of the critical region by calling void
-  /// __kmpc_end_critical(ident_t *loc, kmp_int32 global_tid, kmp_critical_name
-  /// * \a RegionLock)
-  /// \param RegionLock The lock object for critical region.
-  virtual void EmitOMPCriticalRegionEnd(CodeGenFunction &CGF,
-                                        llvm::Value *RegionLock,
-                                        SourceLocation Loc);
+  /// \param CriticalOpGen Generator for the statement associated with the given
+  /// critical region.
+  virtual void EmitOMPCriticalRegion(CodeGenFunction &CGF,
+                                     StringRef CriticalName,
+                                     const std::function<void()> &CriticalOpGen,
+                                     SourceLocation Loc);
 
   /// \brief Emits a barrier for OpenMP threads.
   /// \param Flags Flags for the barrier.
@@ -329,6 +323,11 @@ public:
   EmitOMPThreadPrivateVarDefinition(const VarDecl *VD, llvm::Value *VDAddr,
                                     SourceLocation Loc, bool PerformInit,
                                     CodeGenFunction *CGF = nullptr);
+
+  /// \brief Emit flush of the variables specified in 'omp flush' directive.
+  /// \param Vars List of variables to flush.
+  virtual void EmitOMPFlush(CodeGenFunction &CGF, ArrayRef<const Expr *> Vars,
+                            SourceLocation Loc);
 };
 } // namespace CodeGen
 } // namespace clang

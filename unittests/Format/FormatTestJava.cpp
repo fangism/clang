@@ -50,6 +50,45 @@ protected:
   }
 };
 
+TEST_F(FormatTestJava, NoAlternativeOperatorNames) {
+  verifyFormat("someObject.and();");
+}
+
+TEST_F(FormatTestJava, UnderstandsCasts) {
+  verifyFormat("a[b >> 1] = (byte) (c() << 4);");
+}
+
+TEST_F(FormatTestJava, FormatsInstanceOfLikeOperators) {
+  FormatStyle Style = getStyleWithColumns(50);
+  verifyFormat("return aaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+               "    instanceof bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;",
+               Style);
+  Style.BreakBeforeBinaryOperators = FormatStyle::BOS_None;
+  verifyFormat("return aaaaaaaaaaaaaaaaaaaaaaaaaaaaa instanceof\n"
+               "    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;",
+               Style);
+}
+
+TEST_F(FormatTestJava, Chromium) {
+  verifyFormat("class SomeClass {\n"
+               "    void f() {}\n"
+               "    int g() {\n"
+               "        return 0;\n"
+               "    }\n"
+               "    void h() {\n"
+               "        while (true) f();\n"
+               "        for (;;) f();\n"
+               "        if (true) f();\n"
+               "    }\n"
+               "}",
+               getChromiumStyle(FormatStyle::LK_Java));
+}
+
+TEST_F(FormatTestJava, ClassKeyword) {
+  verifyFormat("SomeClass.class.getName();");
+  verifyFormat("Class c = SomeClass.class;");
+}
+
 TEST_F(FormatTestJava, ClassDeclarations) {
   verifyFormat("public class SomeClass {\n"
                "  private int a;\n"
@@ -65,8 +104,11 @@ TEST_F(FormatTestJava, ClassDeclarations) {
                "}");
   verifyFormat("public class A extends B.C {}");
 
+  verifyFormat("abstract class SomeClass\n"
+               "    extends SomeOtherClass implements SomeInterface {}",
+               getStyleWithColumns(60));
   verifyFormat("abstract class SomeClass extends SomeOtherClass\n"
-               "    implements SomeInterface {}",
+               "    implements SomeInterfaceeeeeeeeeeeee {}",
                getStyleWithColumns(60));
   verifyFormat("abstract class SomeClass\n"
                "    extends SomeOtherClass\n"
@@ -77,15 +119,16 @@ TEST_F(FormatTestJava, ClassDeclarations) {
                "    implements SomeInterface,\n"
                "               AnotherInterface {}",
                getStyleWithColumns(40));
+  verifyFormat("abstract class SomeClass\n"
+               "    implements SomeInterface, AnotherInterface {}",
+               getStyleWithColumns(60));
   verifyFormat("@SomeAnnotation()\n"
-               "abstract class aaaaaaaaaaaa extends bbbbbbbbbbbbbbb\n"
-               "    implements cccccccccccc {\n"
-               "}",
+               "abstract class aaaaaaaaaaaa\n"
+               "    extends bbbbbbbbbbbbbbb implements cccccccccccc {}",
                getStyleWithColumns(76));
   verifyFormat("@SomeAnnotation()\n"
-               "abstract class aaaaaaaaa<a> extends bbbbbbbbbbbb<b>\n"
-               "    implements cccccccccccc {\n"
-               "}",
+               "abstract class aaaaaaaaa<a>\n"
+               "    extends bbbbbbbbbbbb<b> implements cccccccccccc {}",
                getStyleWithColumns(76));
   verifyFormat("interface SomeInterface<A> extends Foo, Bar {\n"
                "  void doStuff(int theStuff);\n"
@@ -113,37 +156,100 @@ TEST_F(FormatTestJava, EnumDeclarations) {
                "}");
   verifyFormat("public class SomeClass {\n"
                "  enum SomeThing { ABC, CDE }\n"
-               "  void f() {\n"
-               "  }\n"
+               "  void f() {}\n"
                "}");
+  verifyFormat("public class SomeClass implements SomeInterface {\n"
+               "  enum SomeThing { ABC, CDE }\n"
+               "  void f() {}\n"
+               "}");
+  verifyFormat("enum SomeThing {\n"
+               "  ABC,\n"
+               "  CDE;\n"
+               "  void f() {}\n"
+               "}");
+  verifyFormat("enum SomeThing {\n"
+               "  ABC(1, \"ABC\"),\n"
+               "  CDE(2, \"CDE\");\n"
+               "  Something(int i, String s) {}\n"
+               "}");
+  verifyFormat("enum SomeThing {\n"
+               "  ABC(new int[] {1, 2}),\n"
+               "  CDE(new int[] {2, 3});\n"
+               "  Something(int[] i) {}\n"
+               "}");
+  verifyFormat("public enum SomeThing {\n"
+               "  ABC {\n"
+               "    public String toString() {\n"
+               "      return \"ABC\";\n"
+               "    }\n"
+               "  },\n"
+               "  CDE {\n"
+               "    @Override\n"
+               "    public String toString() {\n"
+               "      return \"CDE\";\n"
+               "    }\n"
+               "  };\n"
+               "  public void f() {}\n"
+               "}");
+  verifyFormat("private enum SomeEnum implements Foo<?, B> {\n"
+               "  ABC {\n"
+               "    @Override\n"
+               "    public String toString() {\n"
+               "      return \"ABC\";\n"
+               "    }\n"
+               "  },\n"
+               "  CDE {\n"
+               "    @Override\n"
+               "    public String toString() {\n"
+               "      return \"CDE\";\n"
+               "    }\n"
+               "  };\n"
+               "}");
+}
+
+TEST_F(FormatTestJava, ArrayInitializers) {
+  verifyFormat("new int[] {1, 2, 3, 4};");
+  verifyFormat("new int[] {\n"
+               "    1, 2, 3, 4,\n"
+               "};");
+
+  FormatStyle Style = getStyleWithColumns(65);
+  Style.Cpp11BracedListStyle = false;
+  verifyFormat(
+      "expected = new int[] { 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,\n"
+      "  100, 100, 100, 100, 100, 100, 100, 100, 100, 100 };",
+      Style);
 }
 
 TEST_F(FormatTestJava, ThrowsDeclarations) {
   verifyFormat("public void doSooooooooooooooooooooooooooomething()\n"
-               "    throws LooooooooooooooooooooooooooooongException {\n}");
+               "    throws LooooooooooooooooooooooooooooongException {}");
+  verifyFormat("public void doSooooooooooooooooooooooooooomething()\n"
+               "    throws LoooooooooongException, LooooooooooongException {}");
 }
 
 TEST_F(FormatTestJava, Annotations) {
   verifyFormat("@Override\n"
-               "public String toString() {\n}");
+               "public String toString() {}");
   verifyFormat("@Override\n"
                "@Nullable\n"
-               "public String getNameIfPresent() {\n}");
+               "public String getNameIfPresent() {}");
+  verifyFormat("@Override // comment\n"
+               "@Nullable\n"
+               "public String getNameIfPresent() {}");
 
   verifyFormat("@SuppressWarnings(value = \"unchecked\")\n"
-               "public void doSomething() {\n}");
+               "public void doSomething() {}");
   verifyFormat("@SuppressWarnings(value = \"unchecked\")\n"
                "@Author(name = \"abc\")\n"
-               "public void doSomething() {\n}");
+               "public void doSomething() {}");
 
   verifyFormat("DoSomething(new A() {\n"
                "  @Override\n"
-               "  public String toString() {\n"
-               "  }\n"
+               "  public String toString() {}\n"
                "});");
 
-  verifyFormat("void SomeFunction(@Nullable String something) {\n"
-               "}");
+  verifyFormat("void SomeFunction(@Nullable String something) {}");
 
   verifyFormat("@Partial @Mock DataLoader loader;");
   verifyFormat("@SuppressWarnings(value = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\")\n"
@@ -161,10 +267,26 @@ TEST_F(FormatTestJava, Generics) {
   verifyFormat("A.<B>doSomething();");
 
   verifyFormat("@Override\n"
-               "public Map<String, ?> getAll() {\n}");
+               "public Map<String, ?> getAll() {}");
 
-  verifyFormat("public static <R> ArrayList<R> get() {\n}");
+  verifyFormat("public <R> ArrayList<R> get() {}");
+  verifyFormat("protected <R> ArrayList<R> get() {}");
+  verifyFormat("private <R> ArrayList<R> get() {}");
+  verifyFormat("public static <R> ArrayList<R> get() {}");
+  verifyFormat("public final <X> Foo foo() {}");
+  verifyFormat("public abstract <X> Foo foo();");
   verifyFormat("<T extends B> T getInstance(Class<T> type);");
+  verifyFormat("Function<F, ? extends T> function;");
+
+  verifyFormat("private Foo<X, Y>[] foos;");
+  verifyFormat("Foo<X, Y>[] foos = this.foos;");
+
+  verifyFormat(
+      "SomeLoooooooooooooooooooooongType name =\n"
+      "    SomeType.foo(someArgument)\n"
+      "        .<X>method()\n"
+      "        .aaaaaaaaaaaaaaaaaaa()\n"
+      "        .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
 }
 
 TEST_F(FormatTestJava, StringConcatenation) {
@@ -204,9 +326,82 @@ TEST_F(FormatTestJava, SynchronizedKeyword) {
                "}");
 }
 
+TEST_F(FormatTestJava, PackageDeclarations) {
+  verifyFormat("package some.really.loooooooooooooooooooooong.package;",
+               getStyleWithColumns(50));
+}
+
 TEST_F(FormatTestJava, ImportDeclarations) {
   verifyFormat("import some.really.loooooooooooooooooooooong.imported.Class;",
                getStyleWithColumns(50));
+}
+
+TEST_F(FormatTestJava, MethodDeclarations) {
+  verifyFormat("void methodName(Object arg1,\n"
+               "    Object arg2, Object arg3) {}",
+               getStyleWithColumns(40));
+  verifyFormat("void methodName(\n"
+               "    Object arg1, Object arg2) {}",
+               getStyleWithColumns(40));
+}
+
+TEST_F(FormatTestJava, CppKeywords) {
+  verifyFormat("public void union(Type a, Type b);");
+  verifyFormat("public void struct(Object o);");
+  verifyFormat("public void delete(Object o);");
+}
+
+TEST_F(FormatTestJava, NeverAlignAfterReturn) {
+  verifyFormat("return aaaaaaaaaaaaaaaaaaa\n"
+               "    && bbbbbbbbbbbbbbbbbbb\n"
+               "    && ccccccccccccccccccc;",
+               getStyleWithColumns(40));
+  verifyFormat("return (result == null)\n"
+               "    ? aaaaaaaaaaaaaaaaa\n"
+               "    : bbbbbbbbbbbbbbbbb;",
+               getStyleWithColumns(40));
+  verifyFormat("return aaaaaaaaaaaaaaaaaaa()\n"
+               "    .bbbbbbbbbbbbbbbbbbb()\n"
+               "    .ccccccccccccccccccc();",
+               getStyleWithColumns(40));
+}
+
+TEST_F(FormatTestJava, FormatsInnerBlocks) {
+  verifyFormat("someObject.someFunction(new Runnable() {\n"
+               "  @Override\n"
+               "  public void run() {\n"
+               "    System.out.println(42);\n"
+               "  }\n"
+               "}, someOtherParameter);");
+  verifyFormat("someObject.someFunction(\n"
+               "    new Runnable() {\n"
+               "      @Override\n"
+               "      public void run() {\n"
+               "        System.out.println(42);\n"
+               "      }\n"
+               "    },\n"
+               "    new Runnable() {\n"
+               "      @Override\n"
+               "      public void run() {\n"
+               "        System.out.println(43);\n"
+               "      }\n"
+               "    },\n"
+               "    someOtherParameter);");
+}
+
+TEST_F(FormatTestJava, FormatsLambdas) {
+  verifyFormat("(aaaaaaaaaa, bbbbbbbbbb) -> aaaaaaaaaa + bbbbbbbbbb;");
+  verifyFormat("(aaaaaaaaaa, bbbbbbbbbb)\n"
+               "    -> aaaaaaaaaa + bbbbbbbbbb;",
+               getStyleWithColumns(40));
+  verifyFormat("Runnable someLambda = () -> DoSomething();");
+  verifyFormat("Runnable someLambda = () -> {\n"
+               "  DoSomething();\n"
+               "}");
+
+  verifyFormat("Runnable someLambda =\n"
+               "    (int aaaaa) -> DoSomething(aaaaa);",
+               getStyleWithColumns(40));
 }
 
 } // end namespace tooling

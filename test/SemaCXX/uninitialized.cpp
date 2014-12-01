@@ -1302,3 +1302,86 @@ C<int> c;
 // expected-note@-1 {{in instantiation of member function 'template_class::C<int>::C' requested here}}
 
 }
+
+namespace base_class_access {
+struct A {
+  A();
+  A(int);
+
+  int i;
+  int foo();
+
+  static int bar();
+};
+
+struct B : public A {
+  B(int (*)[1]) : A() {}
+  B(int (*)[2]) : A(bar()) {}
+
+  B(int (*)[3]) : A(i) {}
+  // expected-warning@-1 {{base class 'base_class_access::A' is uninitialized when used here to access 'base_class_access::A::i'}}
+
+  B(int (*)[4]) : A(foo()) {}
+  // expected-warning@-1 {{base_class_access::A' is uninitialized when used here to access 'base_class_access::A::foo'}}
+};
+
+struct C {
+  C(int) {}
+};
+
+struct D : public C, public A {
+  D(int (*)[1]) : C(0) {}
+  D(int (*)[2]) : C(bar()) {}
+
+  D(int (*)[3]) : C(i) {}
+  // expected-warning@-1 {{base class 'base_class_access::A' is uninitialized when used here to access 'base_class_access::A::i'}}
+
+  D(int (*)[4]) : C(foo()) {}
+  // expected-warning@-1 {{base_class_access::A' is uninitialized when used here to access 'base_class_access::A::foo'}}
+};
+
+}
+
+namespace value {
+template <class T> T move(T t);
+template <class T> T notmove(T t);
+}
+namespace lvalueref {
+template <class T> T move(T& t);
+template <class T> T notmove(T& t);
+}
+namespace rvalueref {
+template <class T> T move(T&& t);
+template <class T> T notmove(T&& t);
+}
+
+namespace move_test {
+int a1 = std::move(a1); // expected-warning {{uninitialized}}
+int a2 = value::move(a2); // expected-warning {{uninitialized}}
+int a3 = value::notmove(a3); // expected-warning {{uninitialized}}
+int a4 = lvalueref::move(a4);
+int a5 = lvalueref::notmove(a5);
+int a6 = rvalueref::move(a6);
+int a7 = rvalueref::notmove(a7);
+
+void test() {
+  int a1 = std::move(a1); // expected-warning {{uninitialized}}
+  int a2 = value::move(a2); // expected-warning {{uninitialized}}
+  int a3 = value::notmove(a3); // expected-warning {{uninitialized}}
+  int a4 = lvalueref::move(a4);
+  int a5 = lvalueref::notmove(a5);
+  int a6 = rvalueref::move(a6);
+  int a7 = rvalueref::notmove(a7);
+}
+
+class A {
+  int a;
+  A(int (*) [1]) : a(std::move(a)) {} // expected-warning {{uninitialized}}
+  A(int (*) [2]) : a(value::move(a)) {} // expected-warning {{uninitialized}}
+  A(int (*) [3]) : a(value::notmove(a)) {} // expected-warning {{uninitialized}}
+  A(int (*) [4]) : a(lvalueref::move(a)) {}
+  A(int (*) [5]) : a(lvalueref::notmove(a)) {}
+  A(int (*) [6]) : a(rvalueref::move(a)) {}
+  A(int (*) [7]) : a(rvalueref::notmove(a)) {}
+};
+}

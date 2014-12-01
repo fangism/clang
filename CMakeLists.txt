@@ -240,7 +240,7 @@ configure_file(
 
 # Add appropriate flags for GCC
 if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common -Woverloaded-virtual -Wcast-qual -fno-strict-aliasing")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common -Woverloaded-virtual -fno-strict-aliasing")
 
   # Enable -pedantic for Clang even if it's not enabled for LLVM.
   if (NOT LLVM_ENABLE_PEDANTIC)
@@ -252,6 +252,26 @@ if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-nested-anon-types" )
   endif()
 endif ()
+
+# Determine HOST_LINK_VERSION on Darwin.
+set(HOST_LINK_VERSION)
+if (APPLE)
+  set(LD_V_OUTPUT)
+  execute_process(
+    COMMAND sh -c "${CMAKE_LINKER} -v 2>&1 | head -1"
+    RESULT_VARIABLE HAD_ERROR
+    OUTPUT_VARIABLE LD_V_OUTPUT
+  )
+  if (NOT HAD_ERROR)
+    if ("${LD_V_OUTPUT}" MATCHES ".*ld64.*")
+      string(REGEX REPLACE ".*ld64-([0-9.]*).*" "\\1" HOST_LINK_VERSION ${LD_V_OUTPUT})
+    else()
+      string(REGEX REPLACE "[^0-9]*([0-9.]*).*" "\\1" HOST_LINK_VERSION ${LD_V_OUTPUT})
+    endif()
+  else()
+    message(FATAL_ERROR "${CMAKE_LINKER} failed with status ${HAD_ERROR}")
+  endif()
+endif()
 
 configure_file(
   ${CLANG_SOURCE_DIR}/include/clang/Config/config.h.cmake

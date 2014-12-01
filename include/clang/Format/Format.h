@@ -212,6 +212,8 @@ struct FormatStyle {
     SFS_None,
     /// \brief Only merge functions defined inside a class.
     SFS_Inline,
+    /// \brief Only merge empty functions.
+    SFS_Empty,
     /// \brief Merge all functions fitting on a single line.
     SFS_All,
   };
@@ -227,6 +229,16 @@ struct FormatStyle {
   /// \brief Add a space in front of an Objective-C protocol list, i.e. use
   /// <tt>Foo <Protocol></tt> instead of \c Foo<Protocol>.
   bool ObjCSpaceBeforeProtocolList;
+
+  /// \brief If \c true, horizontally aligns arguments after an open bracket.
+  ///
+  /// This applies to round brackets (parentheses), angle brackets and square
+  /// brackets. This will result in formattings like
+  /// \code
+  /// someLongFunction(argument1,
+  ///                  argument2);
+  /// \endcode
+  bool AlignAfterOpenBracket;
 
   /// \brief If \c true, aligns trailing comments.
   bool AlignTrailingComments;
@@ -394,6 +406,7 @@ struct FormatStyle {
 
   bool operator==(const FormatStyle &R) const {
     return AccessModifierOffset == R.AccessModifierOffset &&
+           AlignAfterOpenBracket == R.AlignAfterOpenBracket &&
            AlignEscapedNewlinesLeft == R.AlignEscapedNewlinesLeft &&
            AlignTrailingComments == R.AlignTrailingComments &&
            AllowAllParametersOfDeclarationOnNextLine ==
