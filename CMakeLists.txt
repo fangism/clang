@@ -254,6 +254,8 @@ if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
 endif ()
 
 # Determine HOST_LINK_VERSION on Darwin.
+if (FALSE)
+# temporary revert r221844 until regex failure is more robust
 set(HOST_LINK_VERSION)
 if (APPLE)
   set(LD_V_OUTPUT)
@@ -271,6 +273,7 @@ if (APPLE)
   else()
     message(FATAL_ERROR "${CMAKE_LINKER} failed with status ${HAD_ERROR}")
   endif()
+endif()
 endif()
 
 configure_file(
