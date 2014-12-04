@@ -254,8 +254,6 @@ if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
 endif ()
 
 # Determine HOST_LINK_VERSION on Darwin.
-if (FALSE)
-# temporary revert r221844 until regex failure is more robust
 set(HOST_LINK_VERSION)
 if (APPLE)
   set(LD_V_OUTPUT)
@@ -267,13 +265,12 @@ if (APPLE)
   if (NOT HAD_ERROR)
     if ("${LD_V_OUTPUT}" MATCHES ".*ld64.*")
       string(REGEX REPLACE ".*ld64-([0-9.]*).*" "\\1" HOST_LINK_VERSION ${LD_V_OUTPUT})
-    elseif ("${LD_V_OUTPUT}" MATCHES "[^0-9]*([0-9.]*).*")
-      string(REGEX REPLACE "[^0-9]*([0-9.]*).*" "\\1" HOST_LINK_VERSION ${LD_V_OUTPUT})
+    elseif ("${LD_V_OUTPUT}" MATCHES "[^0-9]*([0-9.]+).*")
+      string(REGEX REPLACE "[^0-9]*([0-9.]+).*" "\\1" HOST_LINK_VERSION ${LD_V_OUTPUT})
     endif()
   else()
     message(FATAL_ERROR "${CMAKE_LINKER} failed with status ${HAD_ERROR}")
   endif()
-endif()
 endif()
 
 configure_file(
