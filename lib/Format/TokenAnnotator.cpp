@@ -615,7 +615,8 @@ public:
     if ((Style.Language == FormatStyle::LK_Java &&
          CurrentToken->is(Keywords.kw_package)) ||
         (Info && Info->getPPKeywordID() == tok::pp_import &&
-         CurrentToken->Next)) {
+         CurrentToken->Next &&
+         CurrentToken->Next->isOneOf(tok::string_literal, tok::identifier))) {
       next();
       parseIncludeDirective();
       return LT_ImportStatement;
@@ -1147,16 +1148,7 @@ public:
           (CurrentPrecedence != -1 && CurrentPrecedence < Precedence) ||
           (CurrentPrecedence == prec::Conditional &&
            Precedence == prec::Assignment && Current->is(tok::colon))) {
-        if (LatestOperator) {
-          LatestOperator->LastOperator = true;
-          if (Precedence == PrecedenceArrowAndPeriod) {
-            // Call expressions don't have a binary operator precedence.
-            addFakeParenthesis(Start, prec::Unknown);
-          } else {
-            addFakeParenthesis(Start, prec::Level(Precedence));
-          }
-        }
-        return;
+        break;
       }
 
       // Consume scopes: (), [], <> and {}
@@ -1174,6 +1166,16 @@ public:
           ++OperatorIndex;
         }
         next(/*SkipPastLeadingComments=*/Precedence > 0);
+      }
+    }
+
+    if (LatestOperator && (Current || Precedence > 0)) {
+      LatestOperator->LastOperator = true;
+      if (Precedence == PrecedenceArrowAndPeriod) {
+        // Call expressions don't have a binary operator precedence.
+        addFakeParenthesis(Start, prec::Unknown);
+      } else {
+        addFakeParenthesis(Start, prec::Level(Precedence));
       }
     }
   }
@@ -1216,7 +1218,7 @@ private:
       Start->StartsBinaryExpression = true;
     if (Current) {
       FormatToken *Previous = Current->Previous;
-      if (Previous->is(tok::comment) && Previous->Previous)
+      while (Previous->is(tok::comment) && Previous->Previous)
         Previous = Previous->Previous;
       ++Previous->FakeRParens;
       if (Precedence > prec::Unknown)
@@ -1472,8 +1474,6 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     return 0;
 
   if (Style.Language == FormatStyle::LK_Java) {
-    if (Left.is(TT_LeadingJavaAnnotation))
-      return 1;
     if (Right.isOneOf(Keywords.kw_extends, Keywords.kw_throws))
       return 1;
     if (Right.is(Keywords.kw_implements))
@@ -1888,6 +1888,9 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     // FIXME: This might apply to other languages and token kinds.
     if (Right.is(tok::char_constant) && Left.is(tok::plus) && Left.Previous &&
         Left.Previous->is(tok::char_constant))
+      return true;
+    if (Left.is(TT_DictLiteral) && Left.is(tok::l_brace) &&
+        Left.NestingLevel == 0)
       return true;
   } else if (Style.Language == FormatStyle::LK_Java) {
     if (Left.is(TT_LeadingJavaAnnotation) && Right.isNot(tok::l_paren) &&

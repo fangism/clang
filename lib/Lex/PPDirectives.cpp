@@ -100,6 +100,17 @@ void Preprocessor::DiscardUntilEndOfDirective() {
   } while (Tmp.isNot(tok::eod));
 }
 
+static bool shouldWarnOnMacroDef(Preprocessor &PP, IdentifierInfo *II) {
+  const LangOptions &Lang = PP.getLangOpts();
+  StringRef Text = II->getName();
+  // Do not warn on keyword undef.  It is generally harmless and widely used.
+  if (II->isKeyword(Lang))
+    return true;
+  if (Lang.CPlusPlus && (Text.equals("override") || Text.equals("final")))
+    return true;
+  return false;
+}
+
 bool Preprocessor::CheckMacroName(Token &MacroNameTok, MacroUse isDefineUndef) {
   // Missing macro name?
   if (MacroNameTok.is(tok::eod))
@@ -138,6 +149,14 @@ bool Preprocessor::CheckMacroName(Token &MacroNameTok, MacroUse isDefineUndef) {
     // Warn if undefining "__LINE__" and other builtins, per C99 6.10.8/4
     // and C++ [cpp.predefined]p4], but allow it as an extension.
     Diag(MacroNameTok, diag::ext_pp_undef_builtin_macro);
+  }
+
+  // Warn if defining/undefining reserved identifier including keywords.
+  SourceLocation MacroNameLoc = MacroNameTok.getLocation();
+  if (!SourceMgr.isInSystemHeader(MacroNameLoc) &&
+      (strcmp(SourceMgr.getBufferName(MacroNameLoc), "<built-in>") != 0)) {
+    if (isDefineUndef == MU_Define && shouldWarnOnMacroDef(*this, II))
+      Diag(MacroNameTok, diag::warn_pp_macro_hides_keyword);
   }
 
   // Okay, we got a good identifier.
@@ -550,14 +569,22 @@ const FileEntry *Preprocessor::LookupFile(
     const FileEntry *FileEnt = SourceMgr.getFileEntryForID(FID);
 
     // If there is no file entry associated with this file, it must be the
-    // predefines buffer.  Any other file is not lexed with a normal lexer, so
-    // it won't be scanned for preprocessor directives.   If we have the
-    // predefines buffer, resolve #include references (which come from the
-    // -include command line argument) from the current working directory
-    // instead of relative to the main file.
+    // predefines buffer or the module includes buffer. Any other file is not
+    // lexed with a normal lexer, so it won't be scanned for preprocessor
+    // directives.
+    //
+    // If we have the predefines buffer, resolve #include references (which come
+    // from the -include command line argument) from the current working
+    // directory instead of relative to the main file.
+    //
+    // If we have the module includes buffer, resolve #include references (which
+    // come from header declarations in the module map) relative to the module
+    // map file.
     if (!FileEnt) {
-      FileEnt = SourceMgr.getFileEntryForID(SourceMgr.getMainFileID());
-      if (FileEnt)
+      if (FID == SourceMgr.getMainFileID() && MainFileDir)
+        Includers.push_back(std::make_pair(nullptr, MainFileDir));
+      else if ((FileEnt =
+                    SourceMgr.getFileEntryForID(SourceMgr.getMainFileID())))
         Includers.push_back(std::make_pair(FileEnt, FileMgr.getDirectory(".")));
     } else {
       Includers.push_back(std::make_pair(FileEnt, FileEnt->getDir()));

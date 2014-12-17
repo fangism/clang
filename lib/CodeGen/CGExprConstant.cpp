@@ -1143,7 +1143,7 @@ llvm::Constant *CodeGenModule::EmitConstantValue(const APValue &Value,
     // FIXME: the target may want to specify that this is packed.
     llvm::StructType *STy = llvm::StructType::get(Complex[0]->getType(),
                                                   Complex[1]->getType(),
-                                                  NULL);
+                                                  nullptr);
     return llvm::ConstantStruct::get(STy, Complex);
   }
   case APValue::Float: {
@@ -1166,7 +1166,7 @@ llvm::Constant *CodeGenModule::EmitConstantValue(const APValue &Value,
     // FIXME: the target may want to specify that this is packed.
     llvm::StructType *STy = llvm::StructType::get(Complex[0]->getType(),
                                                   Complex[1]->getType(),
-                                                  NULL);
+                                                  nullptr);
     return llvm::ConstantStruct::get(STy, Complex);
   }
   case APValue::Vector: {
@@ -1217,7 +1217,8 @@ llvm::Constant *CodeGenModule::EmitConstantValue(const APValue &Value,
                                           CAT->getElementType(), CGF);
 
     // Emit initializer elements.
-    llvm::Type *CommonElementType = nullptr;
+    llvm::Type *CommonElementType =
+        getTypes().ConvertType(CAT->getElementType());
     for (unsigned I = 0; I < NumElements; ++I) {
       llvm::Constant *C = Filler;
       if (I < NumInitElts)

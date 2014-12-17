@@ -1955,3 +1955,23 @@ namespace EmptyClass {
   constexpr E2 e2b(e2); // expected-error {{constant expression}} expected-note{{read of non-const}} expected-note {{in call}}
   constexpr E3 e3b(e3);
 }
+
+namespace PR21786 {
+  extern void (*start[])();
+  extern void (*end[])();
+  static_assert(&start != &end, ""); // expected-error {{constant expression}}
+  static_assert(&start != nullptr, "");
+
+  struct Foo;
+  struct Bar {
+    static const Foo x;
+    static const Foo y;
+  };
+  static_assert(&Bar::x != nullptr, "");
+  static_assert(&Bar::x != &Bar::y, "");
+}
+
+namespace PR21859 {
+  constexpr int Fun() { return; } // expected-error {{non-void constexpr function 'Fun' should return a value}}
+  constexpr int Var = Fun(); // expected-error {{constexpr variable 'Var' must be initialized by a constant expression}}
+}

@@ -360,7 +360,7 @@ llvm::Type *
 ItaniumCXXABI::ConvertMemberPointerType(const MemberPointerType *MPT) {
   if (MPT->isMemberDataPointer())
     return CGM.PtrDiffTy;
-  return llvm::StructType::get(CGM.PtrDiffTy, CGM.PtrDiffTy, NULL);
+  return llvm::StructType::get(CGM.PtrDiffTy, CGM.PtrDiffTy, nullptr);
 }
 
 /// In the Itanium and ARM ABIs, method pointers have the form:
@@ -1711,8 +1711,10 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
 
     // The ABI says: It is suggested that it be emitted in the same COMDAT group
     // as the associated data object
-    if (!D.isLocalVarDecl() && var->isWeakForLinker() && CGM.supportsCOMDAT()) {
-      llvm::Comdat *C = CGM.getModule().getOrInsertComdat(var->getName());
+    if (var->isWeakForLinker() && CGM.supportsCOMDAT()) {
+      StringRef ComdatName =
+        D.isLocalVarDecl() ? CGF.CurFn->getName() : var->getName();
+      llvm::Comdat *C = CGM.getModule().getOrInsertComdat(ComdatName);
       guard->setComdat(C);
       var->setComdat(C);
       CGF.CurFn->setComdat(C);
