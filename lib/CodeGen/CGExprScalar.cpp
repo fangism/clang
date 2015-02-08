@@ -1413,7 +1413,8 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     if (!E->getType()->isVariableArrayType()) {
       assert(isa<llvm::PointerType>(V->getType()) && "Expected pointer");
       V = CGF.Builder.CreatePointerCast(
-          V, ConvertType(E->getType())->getPointerTo());
+          V, ConvertType(E->getType())->getPointerTo(
+            V->getType()->getPointerAddressSpace()));
 
       assert(isa<llvm::ArrayType>(V->getType()->getPointerElementType()) &&
              "Expected pointer to array");
@@ -3315,8 +3316,12 @@ Value *ScalarExprEmitter::VisitVAArgExpr(VAArgExpr *VE) {
   llvm::Value *Val = Builder.CreateLoad(ArgPtr);
 
   // If EmitVAArg promoted the type, we must truncate it.
-  if (ArgTy != Val->getType())
-    Val = Builder.CreateTrunc(Val, ArgTy);
+  if (ArgTy != Val->getType()) {
+    if (ArgTy->isPointerTy() && !Val->getType()->isPointerTy())
+      Val = Builder.CreateIntToPtr(Val, ArgTy);
+    else
+      Val = Builder.CreateTrunc(Val, ArgTy);
+  }
 
   return Val;
 }

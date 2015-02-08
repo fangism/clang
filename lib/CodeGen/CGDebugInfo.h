@@ -53,7 +53,7 @@ class CGDebugInfo {
   const CodeGenOptions::DebugInfoKind DebugKind;
   llvm::DIBuilder DBuilder;
   llvm::DICompileUnit TheCU;
-  SourceLocation CurLoc, PrevLoc;
+  SourceLocation CurLoc;
   llvm::DIType VTablePtrType;
   llvm::DIType ClassTy;
   llvm::DICompositeType ObjTy;
@@ -457,6 +457,7 @@ public:
   ApplyDebugLocation(CodeGenFunction &CGF,
                      SourceLocation TemporaryLocation = SourceLocation(),
                      bool ForceColumnInfo = false);
+  ApplyDebugLocation(CodeGenFunction &CGF, llvm::DebugLoc Loc);
   ~ApplyDebugLocation();
 };
 

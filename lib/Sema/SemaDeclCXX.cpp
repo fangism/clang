@@ -388,9 +388,14 @@ void Sema::CheckExtraCXXDefaultArguments(Declarator &D) {
         ParmVarDecl *Param = cast<ParmVarDecl>(chunk.Fun.Params[argIdx].Param);
         if (Param->hasUnparsedDefaultArg()) {
           CachedTokens *Toks = chunk.Fun.Params[argIdx].DefaultArgTokens;
+          SourceRange SR;
+          if (Toks->size() > 1)
+            SR = SourceRange((*Toks)[1].getLocation(),
+                             Toks->back().getLocation());
+          else
+            SR = UnparsedDefaultArgLocs[Param];
           Diag(Param->getLocation(), diag::err_param_default_argument_nonfunc)
-            << SourceRange((*Toks)[1].getLocation(),
-                           Toks->back().getLocation());
+            << SR;
           delete Toks;
           chunk.Fun.Params[argIdx].DefaultArgTokens = nullptr;
         } else if (Param->getDefaultArg()) {
@@ -2164,7 +2169,7 @@ Sema::ActOnCXXMemberDeclarator(Scope *S, AccessSpecifier AS, Declarator &D,
     if (BitWidth) {
       if (Member->isInvalidDecl()) {
         // don't emit another diagnostic.
-      } else if (isa<VarDecl>(Member)) {
+      } else if (isa<VarDecl>(Member) || isa<VarTemplateDecl>(Member)) {
         // C++ 9.6p3: A bit-field shall not be a static member.
         // "static member 'A' cannot be a bit-field"
         Diag(Loc, diag::err_static_not_bitfield)
@@ -6796,6 +6801,22 @@ QualType Sema::CheckDestructorDeclarator(Declarator &D, QualType R,
   return Context.getFunctionType(Context.VoidTy, None, EPI);
 }
 
+static void extendLeft(SourceRange &R, const SourceRange &Before) {
+  if (Before.isInvalid())
+    return;
+  R.setBegin(Before.getBegin());
+  if (R.getEnd().isInvalid())
+    R.setEnd(Before.getEnd());
+}
+
+static void extendRight(SourceRange &R, const SourceRange &After) {
+  if (After.isInvalid())
+    return;
+  if (R.getBegin().isInvalid())
+    R.setBegin(After.getBegin());
+  R.setEnd(After.getEnd());
+}
+
 /// CheckConversionDeclarator - Called by ActOnDeclarator to check the
 /// well-formednes of the conversion function declarator @p D with
 /// type @p R. If there are any errors in the declarator, this routine
@@ -6817,7 +6838,9 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
     SC = SC_None;
   }
 
-  QualType ConvType = GetTypeFromParser(D.getName().ConversionFunctionId);
+  TypeSourceInfo *ConvTSI = nullptr;
+  QualType ConvType =
+      GetTypeFromParser(D.getName().ConversionFunctionId, &ConvTSI);
 
   if (D.getDeclSpec().hasTypeSpecifier() && !D.isInvalidType()) {
     // Conversion functions don't have return types, but the parser will
@@ -6851,9 +6874,75 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
   // Diagnose "&operator bool()" and other such nonsense.  This
   // is actually a gcc extension which we don't support.
   if (Proto->getReturnType() != ConvType) {
-    Diag(D.getIdentifierLoc(), diag::err_conv_function_with_complex_decl)
-        << Proto->getReturnType();
-    D.setInvalidType();
+    bool NeedsTypedef = false;
+    SourceRange Before, After;
+
+    // Walk the chunks and extract information on them for our diagnostic.
+    bool PastFunctionChunk = false;
+    for (auto &Chunk : D.type_objects()) {
+      switch (Chunk.Kind) {
+      case DeclaratorChunk::Function:
+        if (!PastFunctionChunk) {
+          if (Chunk.Fun.HasTrailingReturnType) {
+            TypeSourceInfo *TRT = nullptr;
+            GetTypeFromParser(Chunk.Fun.getTrailingReturnType(), &TRT);
+            if (TRT) extendRight(After, TRT->getTypeLoc().getSourceRange());
+          }
+          PastFunctionChunk = true;
+          break;
+        }
+        // Fall through.
+      case DeclaratorChunk::Array:
+        NeedsTypedef = true;
+        extendRight(After, Chunk.getSourceRange());
+        break;
+
+      case DeclaratorChunk::Pointer:
+      case DeclaratorChunk::BlockPointer:
+      case DeclaratorChunk::Reference:
+      case DeclaratorChunk::MemberPointer:
+        extendLeft(Before, Chunk.getSourceRange());
+        break;
+
+      case DeclaratorChunk::Paren:
+        extendLeft(Before, Chunk.Loc);
+        extendRight(After, Chunk.EndLoc);
+        break;
+      }
+    }
+
+    SourceLocation Loc = Before.isValid() ? Before.getBegin() :
+                         After.isValid()  ? After.getBegin() :
+                                            D.getIdentifierLoc();
+    auto &&DB = Diag(Loc, diag::err_conv_function_with_complex_decl);
+    DB << Before << After;
+
+    if (!NeedsTypedef) {
+      DB << /*don't need a typedef*/0;
+
+      // If we can provide a correct fix-it hint, do so.
+      if (After.isInvalid() && ConvTSI) {
+        SourceLocation InsertLoc =
+            PP.getLocForEndOfToken(ConvTSI->getTypeLoc().getLocEnd());
+        DB << FixItHint::CreateInsertion(InsertLoc, " ")
+           << FixItHint::CreateInsertionFromRange(
+                  InsertLoc, CharSourceRange::getTokenRange(Before))
+           << FixItHint::CreateRemoval(Before);
+      }
+    } else if (!Proto->getReturnType()->isDependentType()) {
+      DB << /*typedef*/1 << Proto->getReturnType();
+    } else if (getLangOpts().CPlusPlus11) {
+      DB << /*alias template*/2 << Proto->getReturnType();
+    } else {
+      DB << /*might not be fixable*/3;
+    }
+
+    // Recover by incorporating the other type chunks into the result type.
+    // Note, this does *not* change the name of the function. This is compatible
+    // with the GCC extension:
+    //   struct S { &operator int(); } s;
+    //   int &r = s.operator int(); // ok in GCC
+    //   S::operator int&() {} // error in GCC, function name is 'operator int'.
     ConvType = Proto->getReturnType();
   }
 
@@ -8159,7 +8248,7 @@ bool Sema::CheckUsingDeclQualifier(SourceLocation UsingLoc,
     // If we weren't able to compute a valid scope, it must be a
     // dependent class scope.
     if (!NamedContext || NamedContext->isRecord()) {
-      auto *RD = dyn_cast<CXXRecordDecl>(NamedContext);
+      auto *RD = dyn_cast_or_null<CXXRecordDecl>(NamedContext);
       if (RD && RequireCompleteDeclContext(const_cast<CXXScopeSpec&>(SS), RD))
         RD = nullptr;
 
@@ -12931,7 +13020,7 @@ void Sema::MarkVTableUsed(SourceLocation Loc, CXXRecordDecl *Class,
     Pos = VTablesUsed.insert(std::make_pair(Class, DefinitionRequired));
   if (!Pos.second) {
     // If we already had an entry, check to see if we are promoting this vtable
-    // to required a definition. If so, we need to reappend to the VTableUses
+    // to require a definition. If so, we need to reappend to the VTableUses
     // list, since we may have already processed the first entry.
     if (DefinitionRequired && !Pos.first->second) {
       Pos.first->second = true;

@@ -660,15 +660,15 @@ void UnwrappedLineParser::parseStructuralElement() {
     }
     break;
   case tok::kw_asm:
-    FormatTok->Finalized = true;
     nextToken();
     if (FormatTok->is(tok::l_brace)) {
+      nextToken();
       while (FormatTok && FormatTok->isNot(tok::eof)) {
-        FormatTok->Finalized = true;
         if (FormatTok->is(tok::r_brace)) {
           nextToken();
           break;
         }
+        FormatTok->Finalized = true;
         nextToken();
       }
     }
@@ -1033,6 +1033,8 @@ void UnwrappedLineParser::parseParens() {
     switch (FormatTok->Tok.getKind()) {
     case tok::l_paren:
       parseParens();
+      if (Style.Language == FormatStyle::LK_Java && FormatTok->is(tok::l_brace))
+        parseChildBlock();
       break;
     case tok::r_paren:
       nextToken();
@@ -1043,12 +1045,11 @@ void UnwrappedLineParser::parseParens() {
     case tok::l_square:
       tryToParseLambda();
       break;
-    case tok::l_brace: {
+    case tok::l_brace:
       if (!tryToParseBracedList()) {
         parseChildBlock();
       }
       break;
-    }
     case tok::at:
       nextToken();
       if (FormatTok->Tok.is(tok::l_brace))
@@ -1162,6 +1163,10 @@ void UnwrappedLineParser::parseTryCatch() {
       if (FormatTok->is(tok::comma))
         nextToken();
     }
+  }
+  // Parse try with resource.
+  if (Style.Language == FormatStyle::LK_Java && FormatTok->is(tok::l_paren)) {
+    parseParens();
   }
   if (FormatTok->is(tok::l_brace)) {
     CompoundStatementIndenter Indenter(this, Style, Line->Level);
