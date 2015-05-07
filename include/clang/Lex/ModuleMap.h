@@ -64,6 +64,9 @@ private:
   /// \brief The top-level modules that are known.
   llvm::StringMap<Module *> Modules;
 
+  /// \brief The number of modules we have created in total.
+  unsigned NumCreatedModules;
+
 public:
   /// \brief Flags describing the role of a module header.
   enum ModuleHeaderRole {
@@ -104,7 +107,7 @@ public:
 
     // \brief Whether this known header is valid (i.e., it has an
     // associated module).
-    LLVM_EXPLICIT operator bool() const {
+    explicit operator bool() const {
       return Storage.getPointer() != nullptr;
     }
   };

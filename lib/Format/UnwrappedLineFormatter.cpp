@@ -27,16 +27,25 @@ bool startsExternCBlock(const AnnotatedLine &Line) {
 
 class LineJoiner {
 public:
-  LineJoiner(const FormatStyle &Style) : Style(Style) {}
+  LineJoiner(const FormatStyle &Style, const AdditionalKeywords &Keywords)
+      : Style(Style), Keywords(Keywords) {}
 
   /// \brief Calculates how many lines can be merged into 1 starting at \p I.
   unsigned
   tryFitMultipleLinesInOne(unsigned Indent,
                            SmallVectorImpl<AnnotatedLine *>::const_iterator I,
                            SmallVectorImpl<AnnotatedLine *>::const_iterator E) {
+    // Can't join the last line with anything.
+    if (I + 1 == E)
+      return 0;
     // We can never merge stuff if there are trailing line comments.
     const AnnotatedLine *TheLine = *I;
     if (TheLine->Last->is(TT_LineComment))
+      return 0;
+    if (I[1]->Type == LT_Invalid || I[1]->First->MustBreakBefore)
+      return 0;
+    if (TheLine->InPPDirective &&
+        (!I[1]->InPPDirective || I[1]->First->HasUnescapedNewline))
       return 0;
 
     if (Style.ColumnLimit > 0 && Indent > Style.ColumnLimit)
@@ -49,9 +58,6 @@ public:
     Limit = TheLine->Last->TotalLength > Limit
                 ? 0
                 : Limit - TheLine->Last->TotalLength;
-
-    if (I + 1 == E || I[1]->Type == LT_Invalid || I[1]->First->MustBreakBefore)
-      return 0;
 
     // FIXME: TheLine->Level != 0 might or might not be the right check to do.
     // If necessary, change to something smarter.
@@ -119,8 +125,6 @@ private:
                             SmallVectorImpl<AnnotatedLine *>::const_iterator E,
                             unsigned Limit) {
     if (Limit == 0)
-      return 0;
-    if (!I[1]->InPPDirective || I[1]->First->HasUnescapedNewline)
       return 0;
     if (I + 2 != E && I[2]->InPPDirective && !I[2]->First->HasUnescapedNewline)
       return 0;
@@ -191,16 +195,21 @@ private:
     AnnotatedLine &Line = **I;
 
     // Don't merge ObjC @ keywords and methods.
+    // FIXME: If an option to allow short exception handling clauses on a single
+    // line is added, change this to not return for @try and friends.
     if (Style.Language != FormatStyle::LK_Java &&
         Line.First->isOneOf(tok::at, tok::minus, tok::plus))
       return 0;
 
     // Check that the current line allows merging. This depends on whether we
     // are in a control flow statements as well as several style flags.
-    if (Line.First->isOneOf(tok::kw_else, tok::kw_case))
+    if (Line.First->isOneOf(tok::kw_else, tok::kw_case) ||
+        (Line.First->Next && Line.First->Next->is(tok::kw_else)))
       return 0;
     if (Line.First->isOneOf(tok::kw_if, tok::kw_while, tok::kw_do, tok::kw_try,
-                            tok::kw_catch, tok::kw_for, tok::r_brace)) {
+                            tok::kw___try, tok::kw_catch, tok::kw___finally,
+                            tok::kw_for, tok::r_brace) ||
+        Line.First->is(Keywords.kw___except)) {
       if (!Style.AllowShortBlocksOnASingleLine)
         return 0;
       if (!Style.AllowShortIfStatementsOnASingleLine &&
@@ -211,7 +220,11 @@ private:
         return 0;
       // FIXME: Consider an option to allow short exception handling clauses on
       // a single line.
-      if (Line.First->isOneOf(tok::kw_try, tok::kw_catch))
+      // FIXME: This isn't covered by tests.
+      // FIXME: For catch, __except, __finally the first token on the line
+      // is '}', so this isn't correct here.
+      if (Line.First->isOneOf(tok::kw_try, tok::kw___try, tok::kw_catch,
+                              Keywords.kw___except, tok::kw___finally))
         return 0;
     }
 
@@ -226,7 +239,8 @@ private:
     } else if (Limit != 0 && Line.First->isNot(tok::kw_namespace) &&
                !startsExternCBlock(Line)) {
       // We don't merge short records.
-      if (Line.First->isOneOf(tok::kw_class, tok::kw_union, tok::kw_struct))
+      if (Line.First->isOneOf(tok::kw_class, tok::kw_union, tok::kw_struct,
+                              Keywords.kw_interface))
         return 0;
 
       // Check that we still have three lines and they fit into the limit.
@@ -250,6 +264,10 @@ private:
       // Last, check that the third line starts with a closing brace.
       Tok = I[2]->First;
       if (Tok->isNot(tok::r_brace))
+        return 0;
+
+      // Don't merge "if (a) { .. } else {".
+      if (Tok->Next && Tok->Next->is(tok::kw_else))
         return 0;
 
       return 2;
@@ -286,11 +304,14 @@ private:
   }
 
   const FormatStyle &Style;
+  const AdditionalKeywords &Keywords;
 };
 
 class NoColumnLimitFormatter {
 public:
-  NoColumnLimitFormatter(ContinuationIndenter *Indenter) : Indenter(Indenter) {}
+  NoColumnLimitFormatter(ContinuationIndenter *Indenter,
+                         UnwrappedLineFormatter *Formatter)
+      : Indenter(Indenter), Formatter(Formatter) {}
 
   /// \brief Formats the line starting at \p State, simply keeping all of the
   /// input's line breaking decisions.
@@ -301,13 +322,25 @@ public:
       bool Newline =
           Indenter->mustBreak(State) ||
           (Indenter->canBreak(State) && State.NextToken->NewlinesBefore > 0);
+      unsigned Penalty = 0;
+      Formatter->formatChildren(State, Newline, /*DryRun=*/false, Penalty);
       Indenter->addTokenToState(State, Newline, /*DryRun=*/false);
     }
   }
 
 private:
   ContinuationIndenter *Indenter;
+  UnwrappedLineFormatter *Formatter;
 };
+
+
+static void markFinalized(FormatToken *Tok) {
+  for (; Tok; Tok = Tok->Next) {
+    Tok->Finalized = true;
+    for (AnnotatedLine *Child : Tok->Children)
+      markFinalized(Child->First);
+  }
+}
 
 } // namespace
 
@@ -315,7 +348,7 @@ unsigned
 UnwrappedLineFormatter::format(const SmallVectorImpl<AnnotatedLine *> &Lines,
                                bool DryRun, int AdditionalIndent,
                                bool FixBadIndentation) {
-  LineJoiner Joiner(Style);
+  LineJoiner Joiner(Style, Keywords);
 
   // Try to look up already computed penalty in DryRun-mode.
   std::pair<const SmallVectorImpl<AnnotatedLine *> *, unsigned> CacheKey(
@@ -400,12 +433,11 @@ UnwrappedLineFormatter::format(const SmallVectorImpl<AnnotatedLine *> &Lines,
           TheLine.Type == LT_ImportStatement) {
         LineState State = Indenter->getInitialState(Indent, &TheLine, DryRun);
         while (State.NextToken) {
-          formatChildren(State, /*Newline=*/false, /*DryRun=*/false, Penalty);
+          formatChildren(State, /*Newline=*/false, DryRun, Penalty);
           Indenter->addTokenToState(State, /*Newline=*/false, DryRun);
         }
       } else if (Style.ColumnLimit == 0) {
-        // FIXME: Implement nested blocks for ColumnLimit = 0.
-        NoColumnLimitFormatter Formatter(Indenter);
+        NoColumnLimitFormatter Formatter(Indenter, this);
         if (!DryRun)
           Formatter.format(Indent, &TheLine);
       } else {
@@ -435,18 +467,17 @@ UnwrappedLineFormatter::format(const SmallVectorImpl<AnnotatedLine *> &Lines,
 
           if (static_cast<int>(LevelIndent) - Offset >= 0)
             LevelIndent -= Offset;
-          if (Tok->isNot(tok::comment) && !TheLine.InPPDirective)
+          if ((Tok->isNot(tok::comment) ||
+               IndentForLevel[TheLine.Level] == -1) &&
+              !TheLine.InPPDirective)
             IndentForLevel[TheLine.Level] = LevelIndent;
         } else if (!DryRun) {
           Whitespaces->addUntouchableToken(*Tok, TheLine.InPPDirective);
         }
       }
     }
-    if (!DryRun) {
-      for (FormatToken *Tok = TheLine.First; Tok; Tok = Tok->Next) {
-        Tok->Finalized = true;
-      }
-    }
+    if (!DryRun)
+      markFinalized(TheLine.First);
     PreviousLine = *I;
   }
   PenaltyCache[CacheKey] = Penalty;
@@ -496,7 +527,8 @@ void UnwrappedLineFormatter::formatFirstToken(FormatToken &RootToken,
     ++Newlines;
 
   // Remove empty lines after access specifiers.
-  if (PreviousLine && PreviousLine->First->isAccessSpecifier())
+  if (PreviousLine && PreviousLine->First->isAccessSpecifier() &&
+      (!PreviousLine->InPPDirective || !RootToken.HasUnescapedNewline))
     Newlines = std::min(1u, Newlines);
 
   Whitespaces->replaceWhitespace(RootToken, Newlines, IndentLevel, Indent,
@@ -651,8 +683,8 @@ void UnwrappedLineFormatter::addNextStateToQueue(unsigned Penalty,
 
 bool UnwrappedLineFormatter::formatChildren(LineState &State, bool NewLine,
                                             bool DryRun, unsigned &Penalty) {
-  FormatToken &Previous = *State.NextToken->Previous;
   const FormatToken *LBrace = State.NextToken->getPreviousNonComment();
+  FormatToken &Previous = *State.NextToken->Previous;
   if (!LBrace || LBrace->isNot(tok::l_brace) || LBrace->BlockKind != BK_Block ||
       Previous.Children.size() == 0)
     // The previous token does not open a block. Nothing to do. We don't

@@ -58,6 +58,12 @@ namespace clang {
         Active = false;
       }
     }
+    SuppressAccessChecks(SuppressAccessChecks &&Other)
+      : S(Other.S), DiagnosticPool(std::move(Other.DiagnosticPool)),
+        State(Other.State), Active(Other.Active) {
+      Other.Active = false;
+    }
+    void operator=(SuppressAccessChecks &&Other) = delete;
 
     void done() {
       assert(Active && "trying to end an inactive suppression");
@@ -87,8 +93,8 @@ namespace clang {
     Sema::ParsingDeclState State;
     bool Popped;
 
-    ParsingDeclRAIIObject(const ParsingDeclRAIIObject &) LLVM_DELETED_FUNCTION;
-    void operator=(const ParsingDeclRAIIObject &) LLVM_DELETED_FUNCTION;
+    ParsingDeclRAIIObject(const ParsingDeclRAIIObject &) = delete;
+    void operator=(const ParsingDeclRAIIObject &) = delete;
 
   public:
     enum NoParent_t { NoParent };
@@ -244,8 +250,8 @@ namespace clang {
   /// the way they used to be.  This is used to handle __extension__ in the
   /// parser.
   class ExtensionRAIIObject {
-    ExtensionRAIIObject(const ExtensionRAIIObject &) LLVM_DELETED_FUNCTION;
-    void operator=(const ExtensionRAIIObject &) LLVM_DELETED_FUNCTION;
+    ExtensionRAIIObject(const ExtensionRAIIObject &) = delete;
+    void operator=(const ExtensionRAIIObject &) = delete;
 
     DiagnosticsEngine &Diags;
   public:

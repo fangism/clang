@@ -247,7 +247,9 @@ static bool format(StringRef FileName) {
     Rewriter Rewrite(Sources, LangOptions());
     tooling::applyAllReplacements(Replaces, Rewrite);
     if (Inplace) {
-      if (Rewrite.overwriteChangedFiles())
+      if (FileName == "-")
+        llvm::errs() << "error: cannot use -i when reading from stdin.\n";
+      else if (Rewrite.overwriteChangedFiles())
         return true;
     } else {
       if (Cursor.getNumOccurrences() != 0)
@@ -270,15 +272,7 @@ static void PrintVersion() {
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal();
 
-  // Hide unrelated options.
-  StringMap<cl::Option*> Options;
-  cl::getRegisteredOptions(Options);
-  for (StringMap<cl::Option *>::iterator I = Options.begin(), E = Options.end();
-       I != E; ++I) {
-    if (I->second->Category != &ClangFormatCategory && I->first() != "help" &&
-        I->first() != "version")
-      I->second->setHiddenFlag(cl::ReallyHidden);
-  }
+  cl::HideUnrelatedOptions(ClangFormatCategory);
 
   cl::SetVersionPrinter(PrintVersion);
   cl::ParseCommandLineOptions(

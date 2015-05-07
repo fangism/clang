@@ -73,8 +73,8 @@ class IdentifierInfo {
   void *FETokenInfo;               // Managed by the language front-end.
   llvm::StringMapEntry<IdentifierInfo*> *Entry;
 
-  IdentifierInfo(const IdentifierInfo&) LLVM_DELETED_FUNCTION;
-  void operator=(const IdentifierInfo&) LLVM_DELETED_FUNCTION;
+  IdentifierInfo(const IdentifierInfo&) = delete;
+  void operator=(const IdentifierInfo&) = delete;
 
   friend class IdentifierTable;
   
@@ -124,6 +124,7 @@ public:
   }
 
   /// \brief Return true if this identifier is \#defined to some other value.
+  /// \note The current definition may be in a module and not currently visible.
   bool hasMacroDefinition() const {
     return HasMacro;
   }
@@ -308,7 +309,12 @@ public:
     else
       RecomputeNeedsHandleIdentifier();
   }
-  
+
+  /// \brief Provide less than operator for lexicographical sorting.
+  bool operator<(const IdentifierInfo &RHS) const {
+    return getName() < RHS.getName();
+  }
+
 private:
   /// The Preprocessor::HandleIdentifier does several special (but rare)
   /// things to identifiers of various sorts.  For example, it changes the
@@ -356,8 +362,8 @@ public:
 /// actual functionality.
 class IdentifierIterator {
 private:
-  IdentifierIterator(const IdentifierIterator &) LLVM_DELETED_FUNCTION;
-  void operator=(const IdentifierIterator &) LLVM_DELETED_FUNCTION;
+  IdentifierIterator(const IdentifierIterator &) = delete;
+  void operator=(const IdentifierIterator &) = delete;
 
 protected:
   IdentifierIterator() { }
@@ -727,8 +733,8 @@ public:
 /// multi-keyword caching.
 class SelectorTable {
   void *Impl;  // Actually a SelectorTableImpl
-  SelectorTable(const SelectorTable &) LLVM_DELETED_FUNCTION;
-  void operator=(const SelectorTable &) LLVM_DELETED_FUNCTION;
+  SelectorTable(const SelectorTable &) = delete;
+  void operator=(const SelectorTable &) = delete;
 public:
   SelectorTable();
   ~SelectorTable();

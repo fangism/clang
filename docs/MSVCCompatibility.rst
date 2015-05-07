@@ -84,9 +84,16 @@ The status of major ABI-impacting C++ features:
 * RTTI: :good:`Complete`.  Generation of RTTI data structures has been
   finished, along with support for the ``/GR`` flag.
 
-* Exceptions and SEH: :partial:`Minimal`.  Clang can parse both constructs, but
-  does not know how to emit compatible handlers.  Clang cannot throw exceptions
-  but it can rethrow them.
+* Exceptions and SEH: :partial:`Partial`.  C++ exceptions (``try`` / ``catch``)
+  and structured exceptions (``__try`` / ``__except`` / ``__finally``) mostly
+  work on x64. 32-bit exception handling support is being worked on.  LLVM does
+  not model asynchronous exceptions, so it is currently impossible to catch an
+  asynchronous exception generated in the same frame as the catching ``__try``.
+  C++ exception specifications are ignored, but this is `consistent with Visual
+  C++`_.
+
+.. _consistent with Visual C++:
+  https://msdn.microsoft.com/en-us/library/wfa0edys.aspx
 
 * Thread-safe initialization of local statics: :none:`Unstarted`.  We are ABI
   compatible with MSVC 2013, which does not support thread-safe local statics.
@@ -112,7 +119,7 @@ time.  By default on Windows, Clang attempts to follow suit.  This behavior is
 controlled by the ``-fdelayed-template-parsing`` flag.  While Clang delays
 parsing of method bodies, it still parses the bodies *before* template argument
 substitution, which is not what MSVC does.  The following compatibility tweaks
-are necessary to parse the the template in those cases.
+are necessary to parse the template in those cases.
 
 MSVC allows some name lookup into dependent base classes.  Even on other
 platforms, this has been a `frequently asked question`_ for Clang users.  A

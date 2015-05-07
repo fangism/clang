@@ -345,6 +345,8 @@ def AddressSpace : TypeAttr {
 def Alias : Attr {
   let Spellings = [GCC<"alias">];
   let Args = [StringArgument<"Aliasee">];
+  let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag,
+                             "ExpectedFunctionGlobalVarMethodOrProperty">;
   let Documentation = [Undocumented];
 }
 
@@ -438,8 +440,11 @@ def Availability : InheritableAttr {
   let AdditionalMembers =
 [{static llvm::StringRef getPrettyPlatformName(llvm::StringRef Platform) {
     return llvm::StringSwitch<llvm::StringRef>(Platform)
+             .Case("android", "Android")
              .Case("ios", "iOS")
              .Case("macosx", "OS X")
+             .Case("ios_app_extension", "iOS (App Extension)")
+             .Case("macosx_app_extension", "OS X (App Extension)")
              .Default(llvm::StringRef());
 } }];
   let HasCustomParsing = 1;
@@ -576,7 +581,7 @@ def CUDAInvalidTarget : InheritableAttr {
 
 def CUDALaunchBounds : InheritableAttr {
   let Spellings = [GNU<"launch_bounds">];
-  let Args = [IntArgument<"MaxThreads">, DefaultIntArgument<"MinBlocks", 0>];
+  let Args = [ExprArgument<"MaxThreads">, ExprArgument<"MinBlocks", 1>];
   let LangOpts = [CUDA];
   let Subjects = SubjectList<[ObjCMethod, FunctionLike], WarnDiag,
                              "ExpectedFunctionOrMethod">;
@@ -788,9 +793,9 @@ def IBOutletCollection : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def Malloc : InheritableAttr {
-  let Spellings = [GCC<"malloc">];
-//  let Subjects = [Function];
+def Restrict : InheritableAttr {
+  let Spellings = [Declspec<"restrict">, GCC<"malloc">];
+  let Subjects = SubjectList<[Function]>;
   let Documentation = [Undocumented];
 }
 
@@ -979,7 +984,8 @@ def NoThrow : InheritableAttr {
 
 def ObjCBridge : InheritableAttr {
   let Spellings = [GNU<"objc_bridge">];
-  let Subjects = SubjectList<[Record], ErrorDiag>;
+  let Subjects = SubjectList<[Record, TypedefName], ErrorDiag,
+                             "ExpectedStructOrUnionOrTypedef">;
   let Args = [IdentifierArgument<"BridgedType">];
   let Documentation = [Undocumented];
 }
@@ -1049,6 +1055,11 @@ def ObjCMethodFamily : InheritableAttr {
 
 def ObjCNSObject : InheritableAttr {
   let Spellings = [GNU<"NSObject">];
+  let Documentation = [Undocumented];
+}
+
+def ObjCIndependentClass : InheritableAttr {
+  let Spellings = [GNU<"objc_independent_class">];
   let Documentation = [Undocumented];
 }
 
@@ -1136,12 +1147,6 @@ def Ownership : InheritableAttr {
 def Packed : InheritableAttr {
   let Spellings = [GCC<"packed">];
 //  let Subjects = [Tag, Field];
-  let Documentation = [Undocumented];
-}
-
-def PnaclCall : InheritableAttr {
-  let Spellings = [GNU<"pnaclcall">];
-//  let Subjects = [Function, ObjCMethod];
   let Documentation = [Undocumented];
 }
 
@@ -1764,11 +1769,17 @@ def TypeTagForDatatype : InheritableAttr {
 
 // Microsoft-related attributes
 
-def MsProperty : IgnoredAttr {
+def MSNoVTable : InheritableAttr {
+  let Spellings = [Declspec<"novtable">];
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [MSNoVTableDocs];
+}
+
+def : IgnoredAttr {
   let Spellings = [Declspec<"property">];
 }
 
-def MsStruct : InheritableAttr {
+def MSStruct : InheritableAttr {
   let Spellings = [GCC<"ms_struct">];
   let Subjects = SubjectList<[Record]>;
   let Documentation = [Undocumented];

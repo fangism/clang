@@ -32,6 +32,7 @@ class FileEntry;
 class FileManager;
 class HeaderSearchOptions;
 class IdentifierInfo;
+class Preprocessor;
 
 /// \brief The preprocessor keeps track of this information for each
 /// file that is \#included.
@@ -255,8 +256,8 @@ class HeaderSearch {
   const LangOptions &LangOpts;
 
   // HeaderSearch doesn't support default or copy construction.
-  HeaderSearch(const HeaderSearch&) LLVM_DELETED_FUNCTION;
-  void operator=(const HeaderSearch&) LLVM_DELETED_FUNCTION;
+  HeaderSearch(const HeaderSearch&) = delete;
+  void operator=(const HeaderSearch&) = delete;
 
   friend class DirectoryLookup;
   
@@ -419,8 +420,8 @@ public:
   ///
   /// \return false if \#including the file will have no effect or true
   /// if we should include it.
-  bool ShouldEnterIncludeFile(const FileEntry *File, bool isImport);
-
+  bool ShouldEnterIncludeFile(Preprocessor &PP, const FileEntry *File,
+                              bool isImport);
 
   /// \brief Return whether the specified file is a normal header,
   /// a system header, or a C++ friendly system header.

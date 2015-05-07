@@ -1048,7 +1048,6 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   if (TryConsumeToken(tok::equal)) {
     assert(getLangOpts().CPlusPlus && "Only C++ function definitions have '='");
-    Actions.ActOnFinishFunctionBody(Res, nullptr, false);
 
     bool Delete = false;
     SourceLocation KWLoc;
@@ -1076,6 +1075,8 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       SkipUntil(tok::semi);
     }
 
+    Stmt *GeneratedBody = Res ? Res->getBody() : nullptr;
+    Actions.ActOnFinishFunctionBody(Res, GeneratedBody, false);
     return Res;
   }
 
@@ -1251,6 +1252,10 @@ ExprResult Parser::ParseAsmStringLiteral() {
 ExprResult Parser::ParseSimpleAsm(SourceLocation *EndLoc) {
   assert(Tok.is(tok::kw_asm) && "Not an asm!");
   SourceLocation Loc = ConsumeToken();
+
+  // Check if GNU-style InlineAsm is disabled.
+  if (!getLangOpts().GNUAsm)
+    Diag(Loc, diag::err_gnu_inline_asm_disabled);
 
   if (Tok.is(tok::kw_volatile)) {
     // Remove from the end of 'asm' to the end of 'volatile'.

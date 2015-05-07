@@ -383,6 +383,7 @@ private:
   ImportDecl *LastLocalImport;
   
   TranslationUnitDecl *TUDecl;
+  mutable ExternCContextDecl *ExternCContext;
 
   /// \brief The associated SourceManager object.a
   SourceManager &SourceMgr;
@@ -782,6 +783,7 @@ public:
 
   TranslationUnitDecl *getTranslationUnitDecl() const { return TUDecl; }
 
+  ExternCContextDecl *getExternCContextDecl() const;
 
   // Builtin Types.
   CanQualType VoidTy;
@@ -1689,6 +1691,10 @@ public:
   /// beneficial for performance to overalign a data type.
   unsigned getPreferredTypeAlign(const Type *T) const;
 
+  /// \brief Return the default alignment for __attribute__((aligned)) on
+  /// this target, to be used if no alignment value is specified.
+  unsigned getTargetDefaultAlignForAttributeAligned(void) const;
+
   /// \brief Return the alignment in bits that should be given to a
   /// global variable with type \p T.
   unsigned getAlignOfGlobalVar(QualType T) const;
@@ -1935,6 +1941,8 @@ public:
   /// of a function, decaying array and function types and removing top-level
   /// cv-qualifiers.
   QualType getSignatureParameterType(QualType T) const;
+  
+  QualType getExceptionObjectType(QualType T) const;
   
   /// \brief Return the properly qualified result of decaying the specified
   /// array type to a pointer.
@@ -2191,6 +2199,18 @@ public:
   /// it is not used.
   bool DeclMustBeEmitted(const Decl *D);
 
+  const CXXConstructorDecl *
+  getCopyConstructorForExceptionObject(CXXRecordDecl *RD);
+
+  void addCopyConstructorForExceptionObject(CXXRecordDecl *RD,
+                                            CXXConstructorDecl *CD);
+
+  void addDefaultArgExprForConstructor(const CXXConstructorDecl *CD,
+                                       unsigned ParmIdx, Expr *DAE);
+
+  Expr *getDefaultArgExprForConstructor(const CXXConstructorDecl *CD,
+                                        unsigned ParmIdx);
+
   void setManglingNumber(const NamedDecl *ND, unsigned Number);
   unsigned getManglingNumber(const NamedDecl *ND) const;
 
@@ -2263,8 +2283,8 @@ public:
   static unsigned NumImplicitDestructorsDeclared;
   
 private:
-  ASTContext(const ASTContext &) LLVM_DELETED_FUNCTION;
-  void operator=(const ASTContext &) LLVM_DELETED_FUNCTION;
+  ASTContext(const ASTContext &) = delete;
+  void operator=(const ASTContext &) = delete;
 
 public:
   /// \brief Initialize built-in types.
