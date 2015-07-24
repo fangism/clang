@@ -275,10 +275,9 @@ struct ComputeRegionCounts : public ConstStmtVisitor<ComputeRegionCounts> {
 
   void VisitStmt(const Stmt *S) {
     RecordStmtCount(S);
-    for (Stmt::const_child_range I = S->children(); I; ++I) {
-      if (*I)
-        this->Visit(*I);
-    }
+    for (const Stmt *Child : S->children())
+      if (Child)
+        this->Visit(Child);
   }
 
   void VisitFunctionDecl(const FunctionDecl *D) {
@@ -773,6 +772,8 @@ CodeGenPGO::applyFunctionAttributes(llvm::IndexedInstrProfReader *PGOReader,
     // Turn on Cold attribute for cold functions.
     // FIXME: 1% is from preliminary tuning on SPEC, it may not be optimal.
     Fn->addFnAttr(llvm::Attribute::Cold);
+
+  Fn->setEntryCount(FunctionCount);
 }
 
 void CodeGenPGO::emitCounterIncrement(CGBuilderTy &Builder, const Stmt *S) {
@@ -783,11 +784,11 @@ void CodeGenPGO::emitCounterIncrement(CGBuilderTy &Builder, const Stmt *S) {
 
   unsigned Counter = (*RegionCounterMap)[S];
   auto *I8PtrTy = llvm::Type::getInt8PtrTy(CGM.getLLVMContext());
-  Builder.CreateCall4(CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment),
-                      llvm::ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
+  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment),
+                     {llvm::ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
                       Builder.getInt64(FunctionHash),
                       Builder.getInt32(NumRegionCounters),
-                      Builder.getInt32(Counter));
+                      Builder.getInt32(Counter)});
 }
 
 void CodeGenPGO::loadRegionCounts(llvm::IndexedInstrProfReader *PGOReader,

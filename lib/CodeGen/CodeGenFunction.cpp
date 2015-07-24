@@ -45,12 +45,12 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
       LambdaThisCaptureField(nullptr), NormalCleanupDest(nullptr),
       NextCleanupDestIndex(1), FirstBlockInfo(nullptr), EHResumeBlock(nullptr),
       ExceptionSlot(nullptr), EHSelectorSlot(nullptr),
-      AbnormalTerminationSlot(nullptr), SEHPointersDecl(nullptr),
-      DebugInfo(CGM.getModuleDebugInfo()), DisableDebugInfo(false),
-      DidCallStackSave(false), IndirectBranch(nullptr), PGO(cgm),
-      SwitchInsn(nullptr), SwitchWeights(nullptr), CaseRangeBlock(nullptr),
-      UnreachableBlock(nullptr), NumReturnExprs(0), NumSimpleReturnExprs(0),
-      CXXABIThisDecl(nullptr), CXXABIThisValue(nullptr), CXXThisValue(nullptr),
+      DebugInfo(CGM.getModuleDebugInfo()),
+      DisableDebugInfo(false), DidCallStackSave(false), IndirectBranch(nullptr),
+      PGO(cgm), SwitchInsn(nullptr), SwitchWeights(nullptr),
+      CaseRangeBlock(nullptr), UnreachableBlock(nullptr), NumReturnExprs(0),
+      NumSimpleReturnExprs(0), CXXABIThisDecl(nullptr),
+      CXXABIThisValue(nullptr), CXXThisValue(nullptr),
       CXXDefaultInitExprThis(nullptr), CXXStructorImplicitParamDecl(nullptr),
       CXXStructorImplicitParamValue(nullptr), OutermostConditional(nullptr),
       CurLexicalScope(nullptr), TerminateLandingPad(nullptr),
@@ -284,7 +284,7 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
     Builder.ClearInsertionPoint();
   }
 
-  // If some of our locals escaped, insert a call to llvm.frameescape in the
+  // If some of our locals escaped, insert a call to llvm.localescape in the
   // entry block.
   if (!EscapedLocals.empty()) {
     // Invert the map from local to index into a simple vector. There should be
@@ -294,7 +294,7 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
     for (auto &Pair : EscapedLocals)
       EscapeArgs[Pair.second] = Pair.first;
     llvm::Function *FrameEscapeFn = llvm::Intrinsic::getDeclaration(
-        &CGM.getModule(), llvm::Intrinsic::frameescape);
+        &CGM.getModule(), llvm::Intrinsic::localescape);
     CGBuilderTy(AllocaInsertPt).CreateCall(FrameEscapeFn, EscapeArgs);
   }
 
@@ -608,6 +608,22 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
   if (CGM.isInSanitizerBlacklist(Fn, Loc))
     SanOpts.clear();
 
+  if (D) {
+    // Apply the no_sanitize* attributes to SanOpts.
+    for (auto Attr : D->specific_attrs<NoSanitizeAttr>())
+      SanOpts.Mask &= ~Attr->getMask();
+  }
+
+  // Apply sanitizer attributes to the function.
+  if (SanOpts.hasOneOf(SanitizerKind::Address | SanitizerKind::KernelAddress))
+    Fn->addFnAttr(llvm::Attribute::SanitizeAddress);
+  if (SanOpts.has(SanitizerKind::Thread))
+    Fn->addFnAttr(llvm::Attribute::SanitizeThread);
+  if (SanOpts.has(SanitizerKind::Memory))
+    Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
+  if (SanOpts.has(SanitizerKind::SafeStack))
+    Fn->addFnAttr(llvm::Attribute::SafeStack);
+
   // Pass inline keyword to optimizer if it appears explicitly on any
   // declaration. Also, in the case of -fno-inline attach NoInline
   // attribute to all function that are not marked AlwaysInline.
@@ -878,7 +894,7 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   else if (getLangOpts().CUDA &&
            !getLangOpts().CUDAIsDevice &&
            FD->hasAttr<CUDAGlobalAttr>())
-    CGM.getCUDARuntime().EmitDeviceStubBody(*this, Args);
+    CGM.getCUDARuntime().emitDeviceStub(*this, Args);
   else if (isa<CXXConversionDecl>(FD) &&
            cast<CXXConversionDecl>(FD)->isLambdaToBlockPointerConversion()) {
     // The lambda conversion to block pointer is special; the semantics can't be
@@ -914,8 +930,9 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
       EmitCheck(std::make_pair(IsFalse, SanitizerKind::Return),
                 "missing_return", EmitCheckSourceLocation(FD->getLocation()),
                 None);
-    } else if (CGM.getCodeGenOpts().OptimizationLevel == 0)
-      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::trap));
+    } else if (CGM.getCodeGenOpts().OptimizationLevel == 0) {
+      EmitTrapCall(llvm::Intrinsic::trap);
+    }
     Builder.CreateUnreachable();
     Builder.ClearInsertionPoint();
   }
@@ -954,8 +971,8 @@ bool CodeGenFunction::ContainsLabel(const Stmt *S, bool IgnoreCaseStmts) {
     IgnoreCaseStmts = true;
 
   // Scan subexpressions for verboten labels.
-  for (Stmt::const_child_range I = S->children(); I; ++I)
-    if (ContainsLabel(*I, IgnoreCaseStmts))
+  for (const Stmt *SubStmt : S->children())
+    if (ContainsLabel(SubStmt, IgnoreCaseStmts))
       return true;
 
   return false;
@@ -978,8 +995,8 @@ bool CodeGenFunction::containsBreak(const Stmt *S) {
     return true;
 
   // Scan subexpressions for verboten breaks.
-  for (Stmt::const_child_range I = S->children(); I; ++I)
-    if (containsBreak(*I))
+  for (const Stmt *SubStmt : S->children())
+    if (containsBreak(SubStmt))
       return true;
 
   return false;

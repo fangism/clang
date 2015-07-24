@@ -133,7 +133,7 @@ ExprResult Sema::BuildObjCStringLiteral(SourceLocation AtLoc, StringLiteral *S){
           ObjCInterfaceDecl::Create (Context, 
                                      Context.getTranslationUnitDecl(), 
                                      SourceLocation(), NSIdent, 
-                                     nullptr, SourceLocation());
+                                     nullptr, nullptr, SourceLocation());
         Ty = Context.getObjCInterfaceType(NSStringIDecl);
         Context.setObjCNSStringType(Ty);
       }
@@ -208,7 +208,8 @@ static ObjCMethodDecl *getNSNumberFactoryMethod(Sema &S, SourceLocation Loc,
         S.NSNumberDecl = ObjCInterfaceDecl::Create(CX,
                                                    CX.getTranslationUnitDecl(),
                                                    SourceLocation(), NSNumberId,
-                                                   nullptr, SourceLocation());
+                                                   nullptr, nullptr,
+                                                   SourceLocation());
       } else {
         // Otherwise, require a declaration of NSNumber.
         S.Diag(Loc, diag::err_undeclared_nsnumber);
@@ -475,7 +476,8 @@ ExprResult Sema::BuildObjCBoxedExpr(SourceRange SR, Expr *ValueExpr) {
             NSStringDecl = ObjCInterfaceDecl::Create(Context, TU,
                                                      SourceLocation(),
                                                      NSStringId,
-                                                     nullptr, SourceLocation());
+                                                     nullptr, nullptr,
+                                                     SourceLocation());
           } else {
             Diag(SR.getBegin(), diag::err_undeclared_nsstring);
             return ExprError();
@@ -563,7 +565,6 @@ ExprResult Sema::BuildObjCBoxedExpr(SourceRange SR, Expr *ValueExpr) {
     // Look for the appropriate method within NSNumber.
     BoxingMethod = getNSNumberFactoryMethod(*this, SR.getBegin(), ValueType);
     BoxedType = NSNumberPointer;
-
   } else if (const EnumType *ET = ValueType->getAs<EnumType>()) {
     if (!ET->getDecl()->isComplete()) {
       Diag(SR.getBegin(), diag::err_objc_incomplete_boxed_expression_type)
@@ -574,6 +575,110 @@ ExprResult Sema::BuildObjCBoxedExpr(SourceRange SR, Expr *ValueExpr) {
     BoxingMethod = getNSNumberFactoryMethod(*this, SR.getBegin(),
                                             ET->getDecl()->getIntegerType());
     BoxedType = NSNumberPointer;
+  } else if (ValueType->isObjCBoxableRecordType()) {
+    // Support for structure types, that marked as objc_boxable
+    // struct __attribute__((objc_boxable)) s { ... };
+    
+    // Look up the NSValue class, if we haven't done so already. It's cached
+    // in the Sema instance.
+    if (!NSValueDecl) {
+      IdentifierInfo *NSValueId =
+        NSAPIObj->getNSClassId(NSAPI::ClassId_NSValue);
+      NamedDecl *IF = LookupSingleName(TUScope, NSValueId,
+                                       SR.getBegin(), Sema::LookupOrdinaryName);
+      NSValueDecl = dyn_cast_or_null<ObjCInterfaceDecl>(IF);
+      if (!NSValueDecl) {
+        if (getLangOpts().DebuggerObjCLiteral) {
+          // Create a stub definition of NSValue.
+          DeclContext *TU = Context.getTranslationUnitDecl();
+          NSValueDecl = ObjCInterfaceDecl::Create(Context, TU,
+                                                  SourceLocation(), NSValueId,
+                                                  nullptr, nullptr,
+                                                  SourceLocation());
+        } else {
+          // Otherwise, require a declaration of NSValue.
+          Diag(SR.getBegin(), diag::err_undeclared_nsvalue);
+          return ExprError();
+        }
+      } else if (!NSValueDecl->hasDefinition()) {
+        Diag(SR.getBegin(), diag::err_undeclared_nsvalue);
+        return ExprError();
+      }
+      
+      // generate the pointer to NSValue type.
+      QualType NSValueObject = Context.getObjCInterfaceType(NSValueDecl);
+      NSValuePointer = Context.getObjCObjectPointerType(NSValueObject);
+    }
+    
+    if (!ValueWithBytesObjCTypeMethod) {
+      IdentifierInfo *II[] = {
+        &Context.Idents.get("valueWithBytes"),
+        &Context.Idents.get("objCType")
+      };
+      Selector ValueWithBytesObjCType = Context.Selectors.getSelector(2, II);
+      
+      // Look for the appropriate method within NSValue.
+      BoxingMethod = NSValueDecl->lookupClassMethod(ValueWithBytesObjCType);
+      if (!BoxingMethod && getLangOpts().DebuggerObjCLiteral) {
+        // Debugger needs to work even if NSValue hasn't been defined.
+        TypeSourceInfo *ReturnTInfo = nullptr;
+        ObjCMethodDecl *M = ObjCMethodDecl::Create(
+                                               Context,
+                                               SourceLocation(),
+                                               SourceLocation(),
+                                               ValueWithBytesObjCType,
+                                               NSValuePointer,
+                                               ReturnTInfo,
+                                               NSValueDecl,
+                                               /*isInstance=*/false,
+                                               /*isVariadic=*/false,
+                                               /*isPropertyAccessor=*/false,
+                                               /*isImplicitlyDeclared=*/true,
+                                               /*isDefined=*/false,
+                                               ObjCMethodDecl::Required,
+                                               /*HasRelatedResultType=*/false);
+        
+        SmallVector<ParmVarDecl *, 2> Params;
+        
+        ParmVarDecl *bytes =
+        ParmVarDecl::Create(Context, M,
+                            SourceLocation(), SourceLocation(),
+                            &Context.Idents.get("bytes"),
+                            Context.VoidPtrTy.withConst(),
+                            /*TInfo=*/nullptr,
+                            SC_None, nullptr);
+        Params.push_back(bytes);
+        
+        QualType ConstCharType = Context.CharTy.withConst();
+        ParmVarDecl *type =
+        ParmVarDecl::Create(Context, M,
+                            SourceLocation(), SourceLocation(),
+                            &Context.Idents.get("type"),
+                            Context.getPointerType(ConstCharType),
+                            /*TInfo=*/nullptr,
+                            SC_None, nullptr);
+        Params.push_back(type);
+        
+        M->setMethodParams(Context, Params, None);
+        BoxingMethod = M;
+      }
+      
+      if (!validateBoxingMethod(*this, SR.getBegin(), NSValueDecl,
+                                ValueWithBytesObjCType, BoxingMethod))
+        return ExprError();
+      
+      ValueWithBytesObjCTypeMethod = BoxingMethod;
+    }
+    
+    if (!ValueType.isTriviallyCopyableType(Context)) {
+      Diag(SR.getBegin(), 
+           diag::err_objc_non_trivially_copyable_boxed_expression_type)
+        << ValueType << ValueExpr->getSourceRange();
+      return ExprError();
+    }
+
+    BoxingMethod = ValueWithBytesObjCTypeMethod;
+    BoxedType = NSValuePointer;
   }
 
   if (!BoxingMethod) {
@@ -582,13 +687,22 @@ ExprResult Sema::BuildObjCBoxedExpr(SourceRange SR, Expr *ValueExpr) {
     return ExprError();
   }
   
-  // Convert the expression to the type that the parameter requires.
-  ParmVarDecl *ParamDecl = BoxingMethod->parameters()[0];
-  InitializedEntity Entity = InitializedEntity::InitializeParameter(Context,
-                                                                    ParamDecl);
-  ExprResult ConvertedValueExpr = PerformCopyInitialization(Entity,
-                                                            SourceLocation(),
-                                                            ValueExpr);
+  DiagnoseUseOfDecl(BoxingMethod, SR.getBegin());
+
+  ExprResult ConvertedValueExpr;
+  if (ValueType->isObjCBoxableRecordType()) {
+    InitializedEntity IE = InitializedEntity::InitializeTemporary(ValueType);
+    ConvertedValueExpr = PerformCopyInitialization(IE, ValueExpr->getExprLoc(), 
+                                                   ValueExpr);
+  } else {
+    // Convert the expression to the type that the parameter requires.
+    ParmVarDecl *ParamDecl = BoxingMethod->parameters()[0];
+    InitializedEntity IE = InitializedEntity::InitializeParameter(Context,
+                                                                  ParamDecl);
+    ConvertedValueExpr = PerformCopyInitialization(IE, SourceLocation(),
+                                                   ValueExpr);
+  }
+  
   if (ConvertedValueExpr.isInvalid())
     return ExprError();
   ValueExpr = ConvertedValueExpr.get();
@@ -644,7 +758,7 @@ ExprResult Sema::BuildObjCArrayLiteral(SourceRange SR, MultiExprArg Elements) {
                             Context.getTranslationUnitDecl(),
                             SourceLocation(),
                             NSAPIObj->getNSClassId(NSAPI::ClassId_NSArray),
-                            nullptr, SourceLocation());
+                            nullptr, nullptr, SourceLocation());
 
     if (!NSArrayDecl) {
       Diag(SR.getBegin(), diag::err_undeclared_nsarray);
@@ -759,7 +873,7 @@ ExprResult Sema::BuildObjCDictionaryLiteral(SourceRange SR,
                             Context.getTranslationUnitDecl(),
                             SourceLocation(),
                             NSAPIObj->getNSClassId(NSAPI::ClassId_NSDictionary),
-                            nullptr, SourceLocation());
+                            nullptr, nullptr, SourceLocation());
 
     if (!NSDictionaryDecl) {
       Diag(SR.getBegin(), diag::err_undeclared_nsdictionary);
@@ -845,8 +959,11 @@ ExprResult Sema::BuildObjCDictionaryLiteral(SourceRange SR,
               LookupProtocol(&Context.Idents.get("NSCopying"), SR.getBegin())) {
             ObjCProtocolDecl *PQ[] = {NSCopyingPDecl};
             QIDNSCopying = 
-              Context.getObjCObjectType(Context.ObjCBuiltinIdTy,
-                                        (ObjCProtocolDecl**) PQ,1);
+              Context.getObjCObjectType(Context.ObjCBuiltinIdTy, { },
+                                        llvm::makeArrayRef(
+                                          (ObjCProtocolDecl**) PQ,
+                                          1),
+                                        false);
             QIDNSCopying = Context.getObjCObjectPointerType(QIDNSCopying);
           }
         }
@@ -1135,49 +1252,156 @@ ObjCMethodDecl *Sema::tryCaptureObjCSelf(SourceLocation Loc) {
 }
 
 static QualType stripObjCInstanceType(ASTContext &Context, QualType T) {
+  QualType origType = T;
+  if (auto nullability = AttributedType::stripOuterNullability(T)) {
+    if (T == Context.getObjCInstanceType()) {
+      return Context.getAttributedType(
+               AttributedType::getNullabilityAttrKind(*nullability),
+               Context.getObjCIdType(),
+               Context.getObjCIdType());
+    }
+
+    return origType;
+  }
+
   if (T == Context.getObjCInstanceType())
     return Context.getObjCIdType();
   
-  return T;
+  return origType;
 }
 
-QualType Sema::getMessageSendResultType(QualType ReceiverType,
-                                        ObjCMethodDecl *Method,
-                                    bool isClassMessage, bool isSuperMessage) {
+/// Determine the result type of a message send based on the receiver type,
+/// method, and the kind of message send.
+///
+/// This is the "base" result type, which will still need to be adjusted
+/// to account for nullability.
+static QualType getBaseMessageSendResultType(Sema &S,
+                                             QualType ReceiverType,
+                                             ObjCMethodDecl *Method,
+                                             bool isClassMessage,
+                                             bool isSuperMessage) {
   assert(Method && "Must have a method");
   if (!Method->hasRelatedResultType())
-    return Method->getSendResultType();
-  
+    return Method->getSendResultType(ReceiverType);
+
+  ASTContext &Context = S.Context;
+
+  // Local function that transfers the nullability of the method's
+  // result type to the returned result.
+  auto transferNullability = [&](QualType type) -> QualType {
+    // If the method's result type has nullability, extract it.
+    if (auto nullability = Method->getSendResultType(ReceiverType)
+                             ->getNullability(Context)){
+      // Strip off any outer nullability sugar from the provided type.
+      (void)AttributedType::stripOuterNullability(type);
+
+      // Form a new attributed type using the method result type's nullability.
+      return Context.getAttributedType(
+               AttributedType::getNullabilityAttrKind(*nullability),
+               type,
+               type);
+    }
+
+    return type;
+  };
+
   // If a method has a related return type:
   //   - if the method found is an instance method, but the message send
   //     was a class message send, T is the declared return type of the method
   //     found
   if (Method->isInstanceMethod() && isClassMessage)
-    return stripObjCInstanceType(Context, Method->getSendResultType());
-  
-  //   - if the receiver is super, T is a pointer to the class of the 
+    return stripObjCInstanceType(Context, 
+                                 Method->getSendResultType(ReceiverType));
+
+  //   - if the receiver is super, T is a pointer to the class of the
   //     enclosing method definition
   if (isSuperMessage) {
-    if (ObjCMethodDecl *CurMethod = getCurMethodDecl())
-      if (ObjCInterfaceDecl *Class = CurMethod->getClassInterface())
-        return Context.getObjCObjectPointerType(
-                                        Context.getObjCInterfaceType(Class));
+    if (ObjCMethodDecl *CurMethod = S.getCurMethodDecl())
+      if (ObjCInterfaceDecl *Class = CurMethod->getClassInterface()) {
+        return transferNullability(
+                 Context.getObjCObjectPointerType(
+                   Context.getObjCInterfaceType(Class)));
+      }
   }
-    
+
   //   - if the receiver is the name of a class U, T is a pointer to U
-  if (ReceiverType->getAs<ObjCInterfaceType>() ||
-      ReceiverType->isObjCQualifiedInterfaceType())
-    return Context.getObjCObjectPointerType(ReceiverType);
-  //   - if the receiver is of type Class or qualified Class type, 
+  if (ReceiverType->getAsObjCInterfaceType())
+    return transferNullability(Context.getObjCObjectPointerType(ReceiverType));
+  //   - if the receiver is of type Class or qualified Class type,
   //     T is the declared return type of the method.
   if (ReceiverType->isObjCClassType() ||
       ReceiverType->isObjCQualifiedClassType())
-    return stripObjCInstanceType(Context, Method->getSendResultType());
-  
+    return stripObjCInstanceType(Context, 
+                                 Method->getSendResultType(ReceiverType));
+
   //   - if the receiver is id, qualified id, Class, or qualified Class, T
   //     is the receiver type, otherwise
   //   - T is the type of the receiver expression.
-  return ReceiverType;
+  return transferNullability(ReceiverType);
+}
+
+QualType Sema::getMessageSendResultType(QualType ReceiverType,
+                                        ObjCMethodDecl *Method,
+                                        bool isClassMessage,
+                                        bool isSuperMessage) {
+  // Produce the result type.
+  QualType resultType = getBaseMessageSendResultType(*this, ReceiverType,
+                                                     Method,
+                                                     isClassMessage,
+                                                     isSuperMessage);
+
+  // If this is a class message, ignore the nullability of the receiver.
+  if (isClassMessage)
+    return resultType;
+
+  // Map the nullability of the result into a table index.
+  unsigned receiverNullabilityIdx = 0;
+  if (auto nullability = ReceiverType->getNullability(Context))
+    receiverNullabilityIdx = 1 + static_cast<unsigned>(*nullability);
+
+  unsigned resultNullabilityIdx = 0;
+  if (auto nullability = resultType->getNullability(Context))
+    resultNullabilityIdx = 1 + static_cast<unsigned>(*nullability);
+
+  // The table of nullability mappings, indexed by the receiver's nullability
+  // and then the result type's nullability.
+  static const uint8_t None = 0;
+  static const uint8_t NonNull = 1;
+  static const uint8_t Nullable = 2;
+  static const uint8_t Unspecified = 3;
+  static const uint8_t nullabilityMap[4][4] = {
+    //                  None        NonNull       Nullable    Unspecified
+    /* None */        { None,       None,         Nullable,   None },
+    /* NonNull */     { None,       NonNull,      Nullable,   Unspecified },
+    /* Nullable */    { Nullable,   Nullable,     Nullable,   Nullable },
+    /* Unspecified */ { None,       Unspecified,  Nullable,   Unspecified }
+  };
+
+  unsigned newResultNullabilityIdx
+    = nullabilityMap[receiverNullabilityIdx][resultNullabilityIdx];
+  if (newResultNullabilityIdx == resultNullabilityIdx)
+    return resultType;
+
+  // Strip off the existing nullability. This removes as little type sugar as
+  // possible.
+  do {
+    if (auto attributed = dyn_cast<AttributedType>(resultType.getTypePtr())) {
+      resultType = attributed->getModifiedType();
+    } else {
+      resultType = resultType.getDesugaredType(Context);
+    }
+  } while (resultType->getNullability(Context));
+
+  // Add nullability back if needed.
+  if (newResultNullabilityIdx > 0) {
+    auto newNullability
+      = static_cast<NullabilityKind>(newResultNullabilityIdx-1);
+    return Context.getAttributedType(
+             AttributedType::getNullabilityAttrKind(newNullability),
+             resultType, resultType);
+  }
+
+  return resultType;
 }
 
 /// Look for an ObjC method whose result type exactly matches the given type.
@@ -1371,6 +1595,10 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
     return false;
   }
 
+  // Compute the set of type arguments to be substituted into each parameter
+  // type.
+  Optional<ArrayRef<QualType>> typeArgs
+    = ReceiverType->getObjCSubstitutions(Method->getDeclContext());
   bool IsError = false;
   for (unsigned i = 0; i < NumNamedArgs; i++) {
     // We can't do any type-checking on a type-dependent argument.
@@ -1404,18 +1632,37 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
       continue;
     }
 
+    QualType origParamType = param->getType();
+    QualType paramType = param->getType();
+    if (typeArgs)
+      paramType = paramType.substObjCTypeArgs(
+                    Context,
+                    *typeArgs,
+                    ObjCSubstitutionContext::Parameter);
+
     if (RequireCompleteType(argExpr->getSourceRange().getBegin(),
-                            param->getType(),
+                            paramType,
                             diag::err_call_incomplete_argument, argExpr))
       return true;
 
-    InitializedEntity Entity = InitializedEntity::InitializeParameter(Context,
-                                                                      param);
+    InitializedEntity Entity
+      = InitializedEntity::InitializeParameter(Context, param, paramType);
     ExprResult ArgE = PerformCopyInitialization(Entity, SourceLocation(), argExpr);
     if (ArgE.isInvalid())
       IsError = true;
-    else
+    else {
       Args[i] = ArgE.getAs<Expr>();
+
+      // If we are type-erasing a block to a block-compatible
+      // Objective-C pointer type, we may need to extend the lifetime
+      // of the block object.
+      if (typeArgs && Args[i]->isRValue() && paramType->isBlockPointerType() &&
+          origParamType->isBlockCompatibleObjCPointerType(Context)) {
+        ExprResult arg = Args[i];
+        maybeExtendBlockObject(arg);
+        Args[i] = arg.get();
+      }
+    }
   }
 
   // Promote additional arguments to variadic methods.
@@ -1683,27 +1930,24 @@ ActOnClassPropertyRefExpr(IdentifierInfo &receiverName,
   ObjCInterfaceDecl *IFace = getObjCInterfaceDecl(receiverNamePtr,
                                                   receiverNameLoc);
 
-  bool IsSuper = false;
+  QualType SuperType;
   if (!IFace) {
     // If the "receiver" is 'super' in a method, handle it as an expression-like
     // property reference.
     if (receiverNamePtr->isStr("super")) {
-      IsSuper = true;
-
       if (ObjCMethodDecl *CurMethod = tryCaptureObjCSelf(receiverNameLoc)) {
-        if (ObjCInterfaceDecl *Class = CurMethod->getClassInterface()) {
+        if (auto classDecl = CurMethod->getClassInterface()) {
+          SuperType = QualType(classDecl->getSuperClassType(), 0);
           if (CurMethod->isInstanceMethod()) {
-            ObjCInterfaceDecl *Super = Class->getSuperClass();
-            if (!Super) {
+            if (SuperType.isNull()) {
               // The current class does not have a superclass.
               Diag(receiverNameLoc, diag::error_root_class_cannot_use_super)
-              << Class->getIdentifier();
+                << CurMethod->getClassInterface()->getIdentifier();
               return ExprError();
             }
-            QualType T = Context.getObjCInterfaceType(Super);
-            T = Context.getObjCObjectPointerType(T);
+            QualType T = Context.getObjCObjectPointerType(SuperType);
 
-            return HandleExprPropertyRefExpr(T->getAsObjCInterfacePointerType(),
+            return HandleExprPropertyRefExpr(T->castAs<ObjCObjectPointerType>(),
                                              /*BaseExpr*/nullptr,
                                              SourceLocation()/*OpLoc*/,
                                              &propertyName,
@@ -1713,7 +1957,7 @@ ActOnClassPropertyRefExpr(IdentifierInfo &receiverName,
 
           // Otherwise, if this is a class method, try dispatching to our
           // superclass.
-          IFace = Class->getSuperClass();
+          IFace = CurMethod->getClassInterface()->getSuperClass();
         }
       }
     }
@@ -1743,7 +1987,7 @@ ActOnClassPropertyRefExpr(IdentifierInfo &receiverName,
   // Look for the matching setter, in case it is needed.
   Selector SetterSel =
     SelectorTable::constructSetterSelector(PP.getIdentifierTable(),
-                                           PP.getSelectorTable(),
+                                            PP.getSelectorTable(),
                                            &propertyName);
 
   ObjCMethodDecl *Setter = IFace->lookupClassMethod(SetterSel);
@@ -1760,11 +2004,11 @@ ActOnClassPropertyRefExpr(IdentifierInfo &receiverName,
     return ExprError();
 
   if (Getter || Setter) {
-    if (IsSuper)
+    if (!SuperType.isNull())
       return new (Context)
           ObjCPropertyRefExpr(Getter, Setter, Context.PseudoObjectTy, VK_LValue,
                               OK_ObjCProperty, propertyNameLoc, receiverNameLoc,
-                              Context.getObjCInterfaceType(IFace));
+                              SuperType);
 
     return new (Context) ObjCPropertyRefExpr(
         Getter, Setter, Context.PseudoObjectTy, VK_LValue, OK_ObjCProperty,
@@ -1911,8 +2155,8 @@ ExprResult Sema::ActOnSuperMessage(Scope *S,
     return ExprError();
   }
 
-  ObjCInterfaceDecl *Super = Class->getSuperClass();
-  if (!Super) {
+  QualType SuperTy(Class->getSuperClassType(), 0);
+  if (SuperTy.isNull()) {
     // The current class does not have a superclass.
     Diag(SuperLoc, diag::error_root_class_cannot_use_super)
       << Class->getIdentifier();
@@ -1927,7 +2171,6 @@ ExprResult Sema::ActOnSuperMessage(Scope *S,
   if (Method->isInstanceMethod()) {
     // Since we are in an instance method, this is an instance
     // message to the superclass instance.
-    QualType SuperTy = Context.getObjCInterfaceType(Super);
     SuperTy = Context.getObjCObjectPointerType(SuperTy);
     return BuildInstanceMessage(nullptr, SuperTy, SuperLoc,
                                 Sel, /*Method=*/nullptr,
@@ -1937,7 +2180,7 @@ ExprResult Sema::ActOnSuperMessage(Scope *S,
   // Since we are in a class method, this is a class message to
   // the superclass.
   return BuildClassMessage(/*ReceiverTypeInfo=*/nullptr,
-                           Context.getObjCInterfaceType(Super),
+                           SuperTy,
                            SuperLoc, Sel, /*Method=*/nullptr,
                            LBracLoc, SelectorLocs, RBracLoc, Args);
 }
@@ -2378,35 +2621,41 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
   // of the more detailed type-checking on the receiver.
 
   if (!Method) {
-    // Handle messages to id.
-    bool receiverIsId = ReceiverType->isObjCIdType();
-    if (receiverIsId || ReceiverType->isBlockPointerType() ||
+    // Handle messages to id and __kindof types (where we use the
+    // global method pool).
+    // FIXME: The type bound is currently ignored by lookup in the
+    // global pool.
+    const ObjCObjectType *typeBound = nullptr;
+    bool receiverIsIdLike = ReceiverType->isObjCIdOrObjectKindOfType(Context,
+                                                                     typeBound);
+    if (receiverIsIdLike || ReceiverType->isBlockPointerType() ||
         (Receiver && Context.isObjCNSObjectType(Receiver->getType()))) {
       Method = LookupInstanceMethodInGlobalPool(Sel, 
                                                 SourceRange(LBracLoc, RBracLoc),
-                                                receiverIsId);
+                                                receiverIsIdLike);
       if (!Method)
         Method = LookupFactoryMethodInGlobalPool(Sel, 
                                                  SourceRange(LBracLoc,RBracLoc),
-                                                 receiverIsId);
+                                                 receiverIsIdLike);
       if (Method) {
         if (ObjCMethodDecl *BestMethod =
               SelectBestMethod(Sel, ArgsIn, Method->isInstanceMethod()))
           Method = BestMethod;
         if (!AreMultipleMethodsInGlobalPool(Sel, Method,
                                             SourceRange(LBracLoc, RBracLoc),
-                                            receiverIsId)) {
+                                            receiverIsIdLike)) {
           DiagnoseUseOfDecl(Method, SelLoc);
         }
       }
-    } else if (ReceiverType->isObjCClassType() ||
+    } else if (ReceiverType->isObjCClassOrClassKindOfType() ||
                ReceiverType->isObjCQualifiedClassType()) {
       // Handle messages to Class.
       // We allow sending a message to a qualified Class ("Class<foo>"), which
       // is ok as long as one of the protocols implements the selector (if not,
       // warn).
-      if (const ObjCObjectPointerType *QClassTy 
-            = ReceiverType->getAsObjCQualifiedClassType()) {
+      if (!ReceiverType->isObjCClassOrClassKindOfType()) {
+        const ObjCObjectPointerType *QClassTy
+          = ReceiverType->getAsObjCQualifiedClassType();
         // Search protocols for class methods.
         Method = LookupMethodInQualifiedType(Sel, QClassTy, false);
         if (!Method) {

@@ -69,6 +69,8 @@ class ValueDecl;
 class VarDecl;
 class LangOptions;
 class CodeGenOptions;
+class HeaderSearchOptions;
+class PreprocessorOptions;
 class DiagnosticsEngine;
 class AnnotateAttr;
 class CXXDestructorDecl;
@@ -278,6 +280,8 @@ public:
 private:
   ASTContext &Context;
   const LangOptions &LangOpts;
+  const HeaderSearchOptions &HeaderSearchOpts; // Only used for debug info.
+  const PreprocessorOptions &PreprocessorOpts; // Only used for debug info.
   const CodeGenOptions &CodeGenOpts;
   llvm::Module &TheModule;
   DiagnosticsEngine &Diags;
@@ -329,7 +333,7 @@ private:
   };
   std::vector<DeferredGlobal> DeferredDeclsToEmit;
   void addDeferredDeclToEmit(llvm::GlobalValue *GV, GlobalDecl GD) {
-    DeferredDeclsToEmit.push_back(DeferredGlobal(GV, GD));
+    DeferredDeclsToEmit.emplace_back(GV, GD);
   }
 
   /// List of alias we have emitted. Used to make sure that what they point to
@@ -488,7 +492,10 @@ private:
 
   std::unique_ptr<CoverageMappingModuleGen> CoverageMapping;
 public:
-  CodeGenModule(ASTContext &C, const CodeGenOptions &CodeGenOpts,
+  CodeGenModule(ASTContext &C,
+                const HeaderSearchOptions &headersearchopts,
+                const PreprocessorOptions &ppopts,
+                const CodeGenOptions &CodeGenOpts,
                 llvm::Module &M, const llvm::DataLayout &TD,
                 DiagnosticsEngine &Diags,
                 CoverageSourceInfo *CoverageInfo = nullptr);
@@ -600,6 +607,10 @@ public:
 
   ASTContext &getContext() const { return Context; }
   const LangOptions &getLangOpts() const { return LangOpts; }
+  const HeaderSearchOptions &getHeaderSearchOpts()
+    const { return HeaderSearchOpts; }
+  const PreprocessorOptions &getPreprocessorOpts()
+    const { return PreprocessorOpts; }
   const CodeGenOptions &getCodeGenOpts() const { return CodeGenOpts; }
   llvm::Module &getModule() const { return TheModule; }
   DiagnosticsEngine &getDiags() const { return Diags; }
@@ -731,6 +742,11 @@ public:
 
   /// Get a reference to the target of VD.
   llvm::Constant *GetWeakRefReference(const ValueDecl *VD);
+
+  CharUnits
+  computeNonVirtualBaseClassOffset(const CXXRecordDecl *DerivedClass,
+                                   CastExpr::path_const_iterator Start,
+                                   CastExpr::path_const_iterator End);
 
   /// Returns the offset from a derived class to  a class. Returns null if the
   /// offset is 0.
@@ -876,7 +892,7 @@ public:
 
   /// Add a destructor and object to add to the C++ global destructor function.
   void AddCXXDtorEntry(llvm::Constant *DtorFn, llvm::Constant *Object) {
-    CXXGlobalDtors.push_back(std::make_pair(DtorFn, Object));
+    CXXGlobalDtors.emplace_back(DtorFn, Object);
   }
 
   /// Create a new runtime function with the specified type and name.
@@ -1018,6 +1034,9 @@ public:
     F->setLinkage(getFunctionLinkage(GD));
   }
 
+  /// Set the DLL storage class on F.
+  void setFunctionDLLStorageClass(GlobalDecl GD, llvm::Function *F);
+
   /// Return the appropriate linkage for the vtable, VTT, and type information
   /// of the given class.
   llvm::GlobalVariable::LinkageTypes getVTableLinkage(const CXXRecordDecl *RD);
@@ -1107,10 +1126,19 @@ public:
   /// \param D Threadprivate declaration.
   void EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D);
 
+  /// Returns whether the given record is blacklisted from control flow
+  /// integrity checks.
+  bool IsCFIBlacklistedRecord(const CXXRecordDecl *RD);
+
   /// Emit bit set entries for the given vtable using the given layout if
   /// vptr CFI is enabled.
   void EmitVTableBitSetEntries(llvm::GlobalVariable *VTable,
                                const VTableLayout &VTLayout);
+
+  /// Create a bitset entry for the given vtable.
+  llvm::MDTuple *CreateVTableBitSetEntry(llvm::GlobalVariable *VTable,
+                                         CharUnits Offset,
+                                         const CXXRecordDecl *RD);
 
   /// \breif Get the declaration of std::terminate for the platform.
   llvm::Constant *getTerminateFn();

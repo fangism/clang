@@ -79,6 +79,7 @@ void CodeGenFunction::EmitDecl(const Decl &D) {
   case Decl::Captured:
   case Decl::ClassScopeFunctionSpecialization:
   case Decl::UsingShadow:
+  case Decl::ObjCTypeParam:
     llvm_unreachable("Declaration should not be in declstmts!");
   case Decl::Function:  // void X();
   case Decl::Record:    // struct/union/class X;
@@ -156,6 +157,8 @@ static std::string getStaticDeclName(CodeGenModule &CGM, const VarDecl &D) {
   assert(!D.isExternallyVisible() && "name shouldn't matter");
   std::string ContextName;
   const DeclContext *DC = D.getDeclContext();
+  if (auto *CD = dyn_cast<CapturedDecl>(DC))
+    DC = cast<DeclContext>(CD->getNonClosureContext());
   if (const auto *FD = dyn_cast<FunctionDecl>(DC))
     ContextName = CGM.getMangledName(FD);
   else if (const auto *BD = dyn_cast<BlockDecl>(DC))
@@ -577,9 +580,9 @@ static bool isAccessedBy(const VarDecl &var, const Stmt *s) {
     }
   }
 
-  for (Stmt::const_child_range children = s->children(); children; ++children)
-    // children might be null; as in missing decl or conditional of an if-stmt.
-    if ((*children) && isAccessedBy(var, *children))
+  for (const Stmt *SubStmt : s->children())
+    // SubStmt might be null; as in missing decl or conditional of an if-stmt.
+    if (SubStmt && isAccessedBy(var, SubStmt))
       return true;
 
   return false;
@@ -862,20 +865,17 @@ llvm::Value *CodeGenFunction::EmitLifetimeStart(uint64_t Size,
     return nullptr;
 
   llvm::Value *SizeV = llvm::ConstantInt::get(Int64Ty, Size);
-  llvm::Value *Args[] = {
-      SizeV,
-      new llvm::BitCastInst(Addr, Int8PtrTy, "", Builder.GetInsertBlock())};
-  llvm::CallInst *C = llvm::CallInst::Create(CGM.getLLVMLifetimeStartFn(), Args,
-                                             "", Builder.GetInsertBlock());
+  Addr = Builder.CreateBitCast(Addr, Int8PtrTy);
+  llvm::CallInst *C =
+      Builder.CreateCall(CGM.getLLVMLifetimeStartFn(), {SizeV, Addr});
   C->setDoesNotThrow();
   return SizeV;
 }
 
 void CodeGenFunction::EmitLifetimeEnd(llvm::Value *Size, llvm::Value *Addr) {
-  llvm::Value *Args[] = {Size, new llvm::BitCastInst(Addr, Int8PtrTy, "",
-                                                     Builder.GetInsertBlock())};
-  llvm::CallInst *C = llvm::CallInst::Create(CGM.getLLVMLifetimeEndFn(), Args,
-                                             "", Builder.GetInsertBlock());
+  Addr = Builder.CreateBitCast(Addr, Int8PtrTy);
+  llvm::CallInst *C =
+      Builder.CreateCall(CGM.getLLVMLifetimeEndFn(), {Size, Addr});
   C->setDoesNotThrow();
 }
 
@@ -1075,8 +1075,8 @@ static bool isCapturedBy(const VarDecl &var, const Expr *e) {
     return false;
   }
 
-  for (Stmt::const_child_range children = e->children(); children; ++children)
-    if (isCapturedBy(var, cast<Expr>(*children)))
+  for (const Stmt *SubStmt : e->children())
+    if (isCapturedBy(var, cast<Expr>(SubStmt)))
       return true;
 
   return false;

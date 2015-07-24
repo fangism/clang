@@ -66,12 +66,22 @@ void *Decl::operator new(std::size_t Size, const ASTContext &Context,
 void *Decl::operator new(std::size_t Size, const ASTContext &Ctx,
                          DeclContext *Parent, std::size_t Extra) {
   assert(!Parent || &Parent->getParentASTContext() == &Ctx);
+  // With local visibility enabled, we track the owning module even for local
+  // declarations.
+  if (Ctx.getLangOpts().ModulesLocalVisibility) {
+    void *Buffer = ::operator new(sizeof(Module *) + Size + Extra, Ctx);
+    return new (Buffer) Module*(nullptr) + 1;
+  }
   return ::operator new(Size + Extra, Ctx);
 }
 
 Module *Decl::getOwningModuleSlow() const {
   assert(isFromASTFile() && "Not from AST file?");
   return getASTContext().getExternalSource()->getModule(getOwningModuleID());
+}
+
+bool Decl::hasLocalOwningModuleStorage() const {
+  return getASTContext().getLangOpts().ModulesLocalVisibility;
 }
 
 const char *Decl::getDeclKindName() const {
@@ -226,6 +236,7 @@ void Decl::setLexicalDeclContext(DeclContext *DC) {
   } else {
     getMultipleDC()->LexicalDC = DC;
   }
+  Hidden = cast<Decl>(DC)->Hidden;
 }
 
 void Decl::setDeclContextsImpl(DeclContext *SemaDC, DeclContext *LexicalDC,
@@ -550,6 +561,7 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
     case TypeAliasTemplate:
     case UnresolvedUsingTypename:
     case TemplateTypeParm:
+    case ObjCTypeParam:
       return IDNS_Ordinary | IDNS_Type;
 
     case UsingShadow:

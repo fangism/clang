@@ -70,6 +70,8 @@ protected:
   unsigned char MinGlobalAlign;
   unsigned char MaxAtomicPromoteWidth, MaxAtomicInlineWidth;
   unsigned short MaxVectorAlign;
+  unsigned short MaxTLSAlign;
+  unsigned short SimdDefaultAlign;
   const char *DescriptionString;
   const char *UserLabelPrefix;
   const char *MCountName;
@@ -363,6 +365,10 @@ public:
     return *LongDoubleFormat;
   }
 
+  /// \brief Return true if the 'long double' type should be mangled like
+  /// __float128.
+  virtual bool useFloat128ManglingForLongDouble() const { return false; }
+
   /// \brief Return the value for the C99 FLT_EVAL_METHOD macro.
   virtual unsigned getFloatEvalMethod() const { return 0; }
 
@@ -389,6 +395,10 @@ public:
 
   /// \brief Return the maximum vector alignment supported for the given target.
   unsigned getMaxVectorAlign() const { return MaxVectorAlign; }
+  /// \brief Return default simd alignment for the given target. Generally, this
+  /// value is type-specific, but this alignment can be used for most of the
+  /// types for the given target.
+  unsigned getSimdDefaultAlign() const { return SimdDefaultAlign; }
 
   /// \brief Return the size of intmax_t and uintmax_t for this target, in bits.
   unsigned getIntMaxTWidth() const {
@@ -607,6 +617,9 @@ public:
     }
   };
 
+  // Validate the contents of the __builtin_cpu_supports(const char*) argument.
+  virtual bool validateCpuSupports(StringRef Name) const { return false; }
+
   // validateOutputConstraint, validateInputConstraint - Checks that
   // a constraint is valid and provides information about it.
   // FIXME: These should return a real error instead of just true/false.
@@ -795,6 +808,21 @@ public:
   /// \brief Whether the target supports thread-local storage.
   bool isTLSSupported() const {
     return TLSSupported;
+  }
+
+  /// \brief Return the maximum alignment (in bits) of a TLS variable
+  ///
+  /// Gets the maximum alignment (in bits) of a TLS variable on this target.
+  /// Returns zero if there is no such constraint.
+  unsigned short getMaxTLSAlign() const {
+    return MaxTLSAlign;
+  }
+
+  /// \brief Whether the target supports SEH __try.
+  bool isSEHTrySupported() const {
+    return getTriple().isOSWindows() &&
+           (getTriple().getArch() == llvm::Triple::x86 ||
+            getTriple().getArch() == llvm::Triple::x86_64);
   }
 
   /// \brief Return true if {|} are normal characters in the asm string.

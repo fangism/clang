@@ -51,12 +51,13 @@
 
 using namespace clang;
 
-CompilerInstance::CompilerInstance(bool BuildingModule)
-  : ModuleLoader(BuildingModule),
-    Invocation(new CompilerInvocation()), ModuleManager(nullptr),
-    BuildGlobalModuleIndex(false), HaveFullGlobalModuleIndex(false),
-    ModuleBuildFailed(false) {
-}
+CompilerInstance::CompilerInstance(
+    std::shared_ptr<PCHContainerOperations> PCHContainerOps,
+    bool BuildingModule)
+    : ModuleLoader(BuildingModule), Invocation(new CompilerInvocation()),
+      ModuleManager(nullptr), ThePCHContainerOperations(PCHContainerOps),
+      BuildGlobalModuleIndex(false), HaveFullGlobalModuleIndex(false),
+      ModuleBuildFailed(false) {}
 
 CompilerInstance::~CompilerInstance() {
   assert(OutputFiles.empty() && "Still output files in flight?");
@@ -321,7 +322,8 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
                           PP->getFileManager(), PPOpts);
 
   // Predefine macros and configure the preprocessor.
-  InitializePreprocessor(*PP, PPOpts, getFrontendOpts());
+  InitializePreprocessor(*PP, PPOpts, *getPCHContainerOperations(),
+                         getFrontendOpts());
 
   // Initialize the header search object.
   ApplyHeaderSearchOptions(PP->getHeaderSearchInfo(), getHeaderSearchOpts(),
@@ -397,22 +399,24 @@ void CompilerInstance::createPCHExternalASTSource(
   ModuleManager = createPCHExternalASTSource(
       Path, getHeaderSearchOpts().Sysroot, DisablePCHValidation,
       AllowPCHWithCompilerErrors, getPreprocessor(), getASTContext(),
-      DeserializationListener, OwnDeserializationListener, Preamble,
+      *getPCHContainerOperations(), DeserializationListener,
+      OwnDeserializationListener, Preamble,
       getFrontendOpts().UseGlobalModuleIndex);
 }
 
 IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
-    StringRef Path, const std::string &Sysroot, bool DisablePCHValidation,
+    StringRef Path, StringRef Sysroot, bool DisablePCHValidation,
     bool AllowPCHWithCompilerErrors, Preprocessor &PP, ASTContext &Context,
+    const PCHContainerOperations &PCHContainerOps,
     void *DeserializationListener, bool OwnDeserializationListener,
     bool Preamble, bool UseGlobalModuleIndex) {
   HeaderSearchOptions &HSOpts = PP.getHeaderSearchInfo().getHeaderSearchOpts();
 
-  IntrusiveRefCntPtr<ASTReader> Reader(
-      new ASTReader(PP, Context, Sysroot.empty() ? "" : Sysroot.c_str(),
-                    DisablePCHValidation, AllowPCHWithCompilerErrors,
-                    /*AllowConfigurationMismatch*/ false,
-                    HSOpts.ModulesValidateSystemHeaders, UseGlobalModuleIndex));
+  IntrusiveRefCntPtr<ASTReader> Reader(new ASTReader(
+      PP, Context, PCHContainerOps, Sysroot.empty() ? "" : Sysroot.data(),
+      DisablePCHValidation, AllowPCHWithCompilerErrors,
+      /*AllowConfigurationMismatch*/ false, HSOpts.ModulesValidateSystemHeaders,
+      UseGlobalModuleIndex));
 
   // We need the external source to be set up before we read the AST, because
   // eagerly-deserialized declarations may use it.
@@ -493,12 +497,14 @@ void CompilerInstance::createCodeCompletionConsumer() {
 }
 
 void CompilerInstance::createFrontendTimer() {
-  FrontendTimer.reset(new llvm::Timer("Clang front-end timer"));
+  FrontendTimerGroup.reset(new llvm::TimerGroup("Clang front-end time report"));
+  FrontendTimer.reset(
+      new llvm::Timer("Clang front-end timer", *FrontendTimerGroup));
 }
 
 CodeCompleteConsumer *
 CompilerInstance::createCodeCompletionConsumer(Preprocessor &PP,
-                                               const std::string &Filename,
+                                               StringRef Filename,
                                                unsigned Line,
                                                unsigned Column,
                                                const CodeCompleteOptions &Opts,
@@ -918,7 +924,8 @@ static bool compileModuleImpl(CompilerInstance &ImportingInstance,
   
   // Construct a compiler instance that will be used to actually create the
   // module.
-  CompilerInstance Instance(/*BuildingModule=*/true);
+  CompilerInstance Instance(ImportingInstance.getPCHContainerOperations(),
+                            /*BuildingModule=*/true);
   Instance.setInvocation(&*Invocation);
 
   Instance.createDiagnostics(new ForwardingDiagnosticConsumer(
@@ -946,19 +953,20 @@ static bool compileModuleImpl(CompilerInstance &ImportingInstance,
   if (const FileEntry *ModuleMapFile =
           ModMap.getContainingModuleMapFile(Module)) {
     // Use the module map where this module resides.
-    FrontendOpts.Inputs.push_back(
-        FrontendInputFile(ModuleMapFile->getName(), IK));
+    FrontendOpts.Inputs.emplace_back(ModuleMapFile->getName(), IK);
   } else {
+    SmallString<128> FakeModuleMapFile(Module->Directory->getName());
+    llvm::sys::path::append(FakeModuleMapFile, "__inferred_module.map");
+    FrontendOpts.Inputs.emplace_back(FakeModuleMapFile, IK);
+
     llvm::raw_string_ostream OS(InferredModuleMapContent);
     Module->print(OS);
     OS.flush();
-    FrontendOpts.Inputs.push_back(
-        FrontendInputFile("__inferred_module.map", IK));
 
     std::unique_ptr<llvm::MemoryBuffer> ModuleMapBuffer =
         llvm::MemoryBuffer::getMemBuffer(InferredModuleMapContent);
     ModuleMapFile = Instance.getFileManager().getVirtualFile(
-        "__inferred_module.map", InferredModuleMapContent.size(), 0);
+        FakeModuleMapFile, InferredModuleMapContent.size(), 0);
     SourceMgr.overrideFileContents(ModuleMapFile, std::move(ModuleMapBuffer));
   }
 
@@ -1231,13 +1239,18 @@ void CompilerInstance::createModuleManager() {
     HeaderSearchOptions &HSOpts = getHeaderSearchOpts();
     std::string Sysroot = HSOpts.Sysroot;
     const PreprocessorOptions &PPOpts = getPreprocessorOpts();
-    ModuleManager = new ASTReader(getPreprocessor(), *Context,
-                                  Sysroot.empty() ? "" : Sysroot.c_str(),
-                                  PPOpts.DisablePCHValidation,
-                                  /*AllowASTWithCompilerErrors=*/false,
-                                  /*AllowConfigurationMismatch=*/false,
-                                  HSOpts.ModulesValidateSystemHeaders,
-                                  getFrontendOpts().UseGlobalModuleIndex);
+    std::unique_ptr<llvm::Timer> ReadTimer;
+    if (FrontendTimerGroup)
+      ReadTimer = llvm::make_unique<llvm::Timer>("Reading modules",
+                                                 *FrontendTimerGroup);
+    ModuleManager = new ASTReader(
+        getPreprocessor(), *Context, *getPCHContainerOperations(),
+        Sysroot.empty() ? "" : Sysroot.c_str(), PPOpts.DisablePCHValidation,
+        /*AllowASTWithCompilerErrors=*/false,
+        /*AllowConfigurationMismatch=*/false,
+        HSOpts.ModulesValidateSystemHeaders,
+        getFrontendOpts().UseGlobalModuleIndex,
+        std::move(ReadTimer));
     if (hasASTConsumer()) {
       ModuleManager->setDeserializationListener(
         getASTConsumer().GetASTDeserializationListener());
@@ -1253,6 +1266,11 @@ void CompilerInstance::createModuleManager() {
 }
 
 bool CompilerInstance::loadModuleFile(StringRef FileName) {
+  llvm::Timer Timer;
+  if (FrontendTimerGroup)
+    Timer.init("Preloading " + FileName.str(), *FrontendTimerGroup);
+  llvm::TimeRegion TimeLoading(FrontendTimerGroup ? &Timer : nullptr);
+
   // Helper to recursively read the module names for all modules we're adding.
   // We mark these as known and redirect any attempt to load that module to
   // the files we were handed.
@@ -1278,6 +1296,7 @@ bool CompilerInstance::loadModuleFile(StringRef FileName) {
       ModuleFileStack.push_back(FileName);
       ModuleNameStack.push_back(StringRef());
       if (ASTReader::readASTFileControlBlock(FileName, CI.getFileManager(),
+                                             *CI.getPCHContainerOperations(),
                                              *this)) {
         CI.getDiagnostics().Report(
             SourceLocation(), CI.getFileManager().getBufferForFile(FileName)
@@ -1410,6 +1429,11 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
 
     for (auto &Listener : DependencyCollectors)
       Listener->attachToASTReader(*ModuleManager);
+
+    llvm::Timer Timer;
+    if (FrontendTimerGroup)
+      Timer.init("Loading " + ModuleFileName, *FrontendTimerGroup);
+    llvm::TimeRegion TimeLoading(FrontendTimerGroup ? &Timer : nullptr);
 
     // Try to load the module file.
     unsigned ARRFlags =
@@ -1610,25 +1634,6 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
                      Module, ImportLoc);
   }
 
-  // Determine whether we're in the #include buffer for a module. The #includes
-  // in that buffer do not qualify as module imports; they're just an
-  // implementation detail of us building the module.
-  bool IsInModuleIncludes = !getLangOpts().CurrentModule.empty() &&
-                            getSourceManager().getFileID(ImportLoc) ==
-                                getSourceManager().getMainFileID();
-
-  // If this module import was due to an inclusion directive, create an 
-  // implicit import declaration to capture it in the AST.
-  if (IsInclusionDirective && hasASTContext() && !IsInModuleIncludes) {
-    TranslationUnitDecl *TU = getASTContext().getTranslationUnitDecl();
-    ImportDecl *ImportD = ImportDecl::CreateImplicit(getASTContext(), TU,
-                                                     ImportLoc, Module,
-                                                     Path.back().second);
-    TU->addDecl(ImportD);
-    if (Consumer)
-      Consumer->HandleImplicitImportDecl(ImportD);
-  }
-  
   LastModuleImportLoc = ImportLoc;
   LastModuleImportResult = ModuleLoadResult(Module, false);
   return LastModuleImportResult;
@@ -1637,6 +1642,11 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
 void CompilerInstance::makeModuleVisible(Module *Mod,
                                          Module::NameVisibilityKind Visibility,
                                          SourceLocation ImportLoc) {
+  if (!ModuleManager)
+    createModuleManager();
+  if (!ModuleManager)
+    return;
+
   ModuleManager->makeModuleVisible(Mod, Visibility, ImportLoc);
 }
 
@@ -1657,8 +1667,8 @@ GlobalModuleIndex *CompilerInstance::loadGlobalModuleIndex(
     llvm::sys::fs::create_directories(
       getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
     GlobalModuleIndex::writeIndex(
-      getFileManager(),
-      getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
+        getFileManager(), *getPCHContainerOperations(),
+        getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
     ModuleManager->resetForReload();
     ModuleManager->loadGlobalIndex();
     GlobalIndex = ModuleManager->getGlobalIndex();
@@ -1685,8 +1695,8 @@ GlobalModuleIndex *CompilerInstance::loadGlobalModuleIndex(
     }
     if (RecreateIndex) {
       GlobalModuleIndex::writeIndex(
-        getFileManager(),
-        getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
+          getFileManager(), *getPCHContainerOperations(),
+          getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
       ModuleManager->resetForReload();
       ModuleManager->loadGlobalIndex();
       GlobalIndex = ModuleManager->getGlobalIndex();

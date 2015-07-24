@@ -39,6 +39,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/Stmt.h"
@@ -139,8 +140,7 @@ public:
   };
 
   /// \brief Add a binding from an id to a node.
-  void setBinding(const std::string &Id,
-                  const ast_type_traits::DynTypedNode &DynNode) {
+  void setBinding(StringRef Id, const ast_type_traits::DynTypedNode &DynNode) {
     if (Bindings.empty())
       Bindings.emplace_back();
     for (BoundNodesMap &Binding : Bindings)

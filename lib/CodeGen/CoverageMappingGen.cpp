@@ -134,18 +134,23 @@ public:
                            : SM.getIncludeLoc(SM.getFileID(Loc));
   }
 
-  /// \brief Get the start of \c S ignoring macro arguments and system macros.
+  /// \brief Return true if \c Loc is a location in a built-in macro.
+  bool isInBuiltin(SourceLocation Loc) {
+    return strcmp(SM.getBufferName(SM.getSpellingLoc(Loc)), "<built-in>") == 0;
+  }
+
+  /// \brief Get the start of \c S ignoring macro arguments and builtin macros.
   SourceLocation getStart(const Stmt *S) {
     SourceLocation Loc = S->getLocStart();
-    while (SM.isMacroArgExpansion(Loc) || SM.isInSystemMacro(Loc))
+    while (SM.isMacroArgExpansion(Loc) || isInBuiltin(Loc))
       Loc = SM.getImmediateExpansionRange(Loc).first;
     return Loc;
   }
 
-  /// \brief Get the end of \c S ignoring macro arguments and system macros.
+  /// \brief Get the end of \c S ignoring macro arguments and builtin macros.
   SourceLocation getEnd(const Stmt *S) {
     SourceLocation Loc = S->getLocEnd();
-    while (SM.isMacroArgExpansion(Loc) || SM.isInSystemMacro(Loc))
+    while (SM.isMacroArgExpansion(Loc) || isInBuiltin(Loc))
       Loc = SM.getImmediateExpansionRange(Loc).first;
     return getPreciseTokenLocEnd(Loc);
   }
@@ -470,7 +475,8 @@ struct CounterCoverageMappingBuilder
   /// files, this adjusts our current region stack and creates the file regions
   /// for the exited file.
   void handleFileExit(SourceLocation NewLoc) {
-    if (SM.isWrittenInSameFile(MostRecentLocation, NewLoc))
+    if (NewLoc.isInvalid() ||
+        SM.isWrittenInSameFile(MostRecentLocation, NewLoc))
       return;
 
     // If NewLoc is not in a file that contains MostRecentLocation, walk up to
@@ -576,10 +582,9 @@ struct CounterCoverageMappingBuilder
   void VisitStmt(const Stmt *S) {
     if (!S->getLocStart().isInvalid())
       extendRegion(S);
-    for (Stmt::const_child_range I = S->children(); I; ++I) {
-      if (*I)
-        this->Visit(*I);
-    }
+    for (const Stmt *Child : S->children())
+      if (Child)
+        this->Visit(Child);
     handleFileExit(getEnd(S));
   }
 
@@ -801,6 +806,9 @@ struct CounterCoverageMappingBuilder
 
   void VisitIfStmt(const IfStmt *S) {
     extendRegion(S);
+    // Extend into the condition before we propagate through it below - this is
+    // needed to handle macros that generate the "if" but not the condition.
+    extendRegion(S->getCond());
 
     Counter ParentCount = getRegion().getCounter();
     Counter ThenCount = getRegionCounter(S);
@@ -923,7 +931,8 @@ void CoverageMappingModuleGen::addFunctionMappingRecord(
   if (!FunctionRecordTy) {
     llvm::Type *FunctionRecordTypes[] = {Int8PtrTy, Int32Ty, Int32Ty, Int64Ty};
     FunctionRecordTy =
-        llvm::StructType::get(Ctx, makeArrayRef(FunctionRecordTypes));
+        llvm::StructType::get(Ctx, makeArrayRef(FunctionRecordTypes),
+                              /*isPacked=*/true);
   }
 
   llvm::Constant *FunctionRecordVals[] = {

@@ -31,11 +31,12 @@ class MicrosoftNumberingContext : public MangleNumberingContext {
   llvm::DenseMap<const Type *, unsigned> ManglingNumbers;
   unsigned LambdaManglingNumber;
   unsigned StaticLocalNumber;
+  unsigned StaticThreadlocalNumber;
 
 public:
   MicrosoftNumberingContext()
       : MangleNumberingContext(), LambdaManglingNumber(0),
-        StaticLocalNumber(0) {}
+        StaticLocalNumber(0), StaticThreadlocalNumber(0) {}
 
   unsigned getManglingNumber(const CXXMethodDecl *CallOperator) override {
     return ++LambdaManglingNumber;
@@ -47,6 +48,8 @@ public:
   }
 
   unsigned getStaticLocalNumber(const VarDecl *VD) override {
+    if (VD->getTLSKind())
+      return ++StaticThreadlocalNumber;
     return ++StaticLocalNumber;
   }
 
@@ -176,8 +179,9 @@ MSVtorDispAttr::Mode CXXRecordDecl::getMSVtorDispMode() const {
 //     // slot.
 //     void *FunctionPointerOrVirtualThunk;
 //
-//     // An offset to add to the address of the vbtable pointer after (possibly)
-//     // selecting the virtual base but before resolving and calling the function.
+//     // An offset to add to the address of the vbtable pointer after
+//     // (possibly) selecting the virtual base but before resolving and calling
+//     // the function.
 //     // Only needed if the class has any virtual bases or bases at a non-zero
 //     // offset.
 //     int NonVirtualBaseAdjustment;

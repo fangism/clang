@@ -22,6 +22,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
@@ -1036,12 +1037,8 @@ struct PragmaWarningHandler : public PragmaHandler {
 
     PP.Lex(Tok);
     IdentifierInfo *II = Tok.getIdentifierInfo();
-    if (!II) {
-      PP.Diag(Tok, diag::warn_pragma_warning_spec_invalid);
-      return;
-    }
 
-    if (II->isStr("push")) {
+    if (II && II->isStr("push")) {
       // #pragma warning( push[ ,n ] )
       int Level = -1;
       PP.Lex(Tok);
@@ -1058,7 +1055,7 @@ struct PragmaWarningHandler : public PragmaHandler {
       }
       if (Callbacks)
         Callbacks->PragmaWarningPush(DiagLoc, Level);
-    } else if (II->isStr("pop")) {
+    } else if (II && II->isStr("pop")) {
       // #pragma warning( pop )
       PP.Lex(Tok);
       if (Callbacks)
@@ -1068,23 +1065,40 @@ struct PragmaWarningHandler : public PragmaHandler {
       //                  [; warning-specifier : warning-number-list...] )
       while (true) {
         II = Tok.getIdentifierInfo();
-        if (!II) {
+        if (!II && !Tok.is(tok::numeric_constant)) {
           PP.Diag(Tok, diag::warn_pragma_warning_spec_invalid);
           return;
         }
 
         // Figure out which warning specifier this is.
-        StringRef Specifier = II->getName();
-        bool SpecifierValid =
-            llvm::StringSwitch<bool>(Specifier)
-                .Cases("1", "2", "3", "4", true)
-                .Cases("default", "disable", "error", "once", "suppress", true)
-                .Default(false);
+        bool SpecifierValid;
+        StringRef Specifier;
+        llvm::SmallString<1> SpecifierBuf;
+        if (II) {
+          Specifier = II->getName();
+          SpecifierValid = llvm::StringSwitch<bool>(Specifier)
+                               .Cases("default", "disable", "error", "once",
+                                      "suppress", true)
+                               .Default(false);
+          // If we read a correct specifier, snatch next token (that should be
+          // ":", checked later).
+          if (SpecifierValid)
+            PP.Lex(Tok);
+        } else {
+          // Token is a numeric constant. It should be either 1, 2, 3 or 4.
+          uint64_t Value;
+          Specifier = PP.getSpelling(Tok, SpecifierBuf);
+          if (PP.parseSimpleIntegerLiteral(Tok, Value)) {
+            SpecifierValid = (Value >= 1) && (Value <= 4);
+          } else
+            SpecifierValid = false;
+          // Next token already snatched by parseSimpleIntegerLiteral.
+        }
+
         if (!SpecifierValid) {
           PP.Diag(Tok, diag::warn_pragma_warning_spec_invalid);
           return;
         }
-        PP.Lex(Tok);
         if (Tok.isNot(tok::colon)) {
           PP.Diag(Tok, diag::warn_pragma_warning_expected) << ":";
           return;
@@ -1328,6 +1342,60 @@ struct PragmaARCCFCodeAuditedHandler : public PragmaHandler {
   }
 };
 
+/// PragmaAssumeNonNullHandler -
+///   \#pragma clang assume_nonnull begin/end
+struct PragmaAssumeNonNullHandler : public PragmaHandler {
+  PragmaAssumeNonNullHandler() : PragmaHandler("assume_nonnull") {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &NameTok) override {
+    SourceLocation Loc = NameTok.getLocation();
+    bool IsBegin;
+
+    Token Tok;
+
+    // Lex the 'begin' or 'end'.
+    PP.LexUnexpandedToken(Tok);
+    const IdentifierInfo *BeginEnd = Tok.getIdentifierInfo();
+    if (BeginEnd && BeginEnd->isStr("begin")) {
+      IsBegin = true;
+    } else if (BeginEnd && BeginEnd->isStr("end")) {
+      IsBegin = false;
+    } else {
+      PP.Diag(Tok.getLocation(), diag::err_pp_assume_nonnull_syntax);
+      return;
+    }
+
+    // Verify that this is followed by EOD.
+    PP.LexUnexpandedToken(Tok);
+    if (Tok.isNot(tok::eod))
+      PP.Diag(Tok, diag::ext_pp_extra_tokens_at_eol) << "pragma";
+
+    // The start location of the active audit.
+    SourceLocation BeginLoc = PP.getPragmaAssumeNonNullLoc();
+
+    // The start location we want after processing this.
+    SourceLocation NewLoc;
+
+    if (IsBegin) {
+      // Complain about attempts to re-enter an audit.
+      if (BeginLoc.isValid()) {
+        PP.Diag(Loc, diag::err_pp_double_begin_of_assume_nonnull);
+        PP.Diag(BeginLoc, diag::note_pragma_entered_here);
+      }
+      NewLoc = Loc;
+    } else {
+      // Complain about attempts to leave an audit that doesn't exist.
+      if (!BeginLoc.isValid()) {
+        PP.Diag(Loc, diag::err_pp_unmatched_end_of_assume_nonnull);
+        return;
+      }
+      NewLoc = SourceLocation();
+    }
+
+    PP.setPragmaAssumeNonNullLoc(NewLoc);
+  }
+};
+
 /// \brief Handle "\#pragma region [...]"
 ///
 /// The syntax is
@@ -1379,6 +1447,7 @@ void Preprocessor::RegisterBuiltinPragmas() {
   AddPragmaHandler("clang", new PragmaDependencyHandler());
   AddPragmaHandler("clang", new PragmaDiagnosticHandler("clang"));
   AddPragmaHandler("clang", new PragmaARCCFCodeAuditedHandler());
+  AddPragmaHandler("clang", new PragmaAssumeNonNullHandler());
 
   AddPragmaHandler("STDC", new PragmaSTDC_FENV_ACCESSHandler());
   AddPragmaHandler("STDC", new PragmaSTDC_CX_LIMITED_RANGEHandler());

@@ -355,8 +355,8 @@ public:
   bool TraverseObjCMessageExpr(ObjCMessageExpr *E) {
     // Do depth first; we want to rewrite the subexpressions first so that if
     // we have to move expressions we will move them already rewritten.
-    for (Stmt::child_range range = E->children(); range; ++range)
-      if (!TraverseStmt(*range))
+    for (Stmt *SubStmt : E->children())
+      if (!TraverseStmt(SubStmt))
         return false;
 
     return WalkUpFromObjCMessageExpr(E);
@@ -2283,7 +2283,7 @@ bool arcmt::getFileRemappingsFromFileList(
       continue;
     }
 
-    remap.push_back(std::make_pair(I->first->getName(), TempFile));
+    remap.emplace_back(I->first->getName(), TempFile);
   }
 
   return hasErrorOccurred;

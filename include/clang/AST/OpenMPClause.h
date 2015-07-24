@@ -573,8 +573,10 @@ class OMPScheduleClause : public OMPClause {
   SourceLocation KindLoc;
   /// \brief Location of ',' (if any).
   SourceLocation CommaLoc;
-  /// \brief Chunk size.
-  Stmt *ChunkSize;
+  /// \brief Chunk size and a reference to pseudo variable for combined
+  /// directives.
+  enum { CHUNK_SIZE, HELPER_CHUNK_SIZE, NUM_EXPRS };
+  Stmt *ChunkSizes[NUM_EXPRS];
 
   /// \brief Set schedule kind.
   ///
@@ -600,7 +602,12 @@ class OMPScheduleClause : public OMPClause {
   ///
   /// \param E Chunk size.
   ///
-  void setChunkSize(Expr *E) { ChunkSize = E; }
+  void setChunkSize(Expr *E) { ChunkSizes[CHUNK_SIZE] = E; }
+  /// \brief Set helper chunk size.
+  ///
+  /// \param E Helper chunk size.
+  ///
+  void setHelperChunkSize(Expr *E) { ChunkSizes[HELPER_CHUNK_SIZE] = E; }
 
 public:
   /// \brief Build 'schedule' clause with schedule kind \a Kind and chunk size
@@ -613,19 +620,26 @@ public:
   /// \param EndLoc Ending location of the clause.
   /// \param Kind Schedule kind.
   /// \param ChunkSize Chunk size.
+  /// \param HelperChunkSize Helper chunk size for combined directives.
   ///
   OMPScheduleClause(SourceLocation StartLoc, SourceLocation LParenLoc,
                     SourceLocation KLoc, SourceLocation CommaLoc,
                     SourceLocation EndLoc, OpenMPScheduleClauseKind Kind,
-                    Expr *ChunkSize)
+                    Expr *ChunkSize, Expr *HelperChunkSize)
       : OMPClause(OMPC_schedule, StartLoc, EndLoc), LParenLoc(LParenLoc),
-        Kind(Kind), KindLoc(KLoc), CommaLoc(CommaLoc), ChunkSize(ChunkSize) {}
+        Kind(Kind), KindLoc(KLoc), CommaLoc(CommaLoc) {
+    ChunkSizes[CHUNK_SIZE] = ChunkSize;
+    ChunkSizes[HELPER_CHUNK_SIZE] = HelperChunkSize;
+  }
 
   /// \brief Build an empty clause.
   ///
   explicit OMPScheduleClause()
       : OMPClause(OMPC_schedule, SourceLocation(), SourceLocation()),
-        Kind(OMPC_SCHEDULE_unknown), ChunkSize(nullptr) {}
+        Kind(OMPC_SCHEDULE_unknown) {
+    ChunkSizes[CHUNK_SIZE] = nullptr;
+    ChunkSizes[HELPER_CHUNK_SIZE] = nullptr;
+  }
 
   /// \brief Get kind of the clause.
   ///
@@ -641,16 +655,30 @@ public:
   SourceLocation getCommaLoc() { return CommaLoc; }
   /// \brief Get chunk size.
   ///
-  Expr *getChunkSize() { return dyn_cast_or_null<Expr>(ChunkSize); }
+  Expr *getChunkSize() { return dyn_cast_or_null<Expr>(ChunkSizes[CHUNK_SIZE]); }
   /// \brief Get chunk size.
   ///
-  Expr *getChunkSize() const { return dyn_cast_or_null<Expr>(ChunkSize); }
+  Expr *getChunkSize() const {
+    return dyn_cast_or_null<Expr>(ChunkSizes[CHUNK_SIZE]);
+  }
+  /// \brief Get helper chunk size.
+  ///
+  Expr *getHelperChunkSize() {
+    return dyn_cast_or_null<Expr>(ChunkSizes[HELPER_CHUNK_SIZE]);
+  }
+  /// \brief Get helper chunk size.
+  ///
+  Expr *getHelperChunkSize() const {
+    return dyn_cast_or_null<Expr>(ChunkSizes[HELPER_CHUNK_SIZE]);
+  }
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_schedule;
   }
 
-  StmtRange children() { return StmtRange(&ChunkSize, &ChunkSize + 1); }
+  StmtRange children() {
+    return StmtRange(&ChunkSizes[CHUNK_SIZE], &ChunkSizes[CHUNK_SIZE] + 1);
+  }
 };
 
 /// \brief This represents 'ordered' clause in the '#pragma omp ...' directive.
@@ -1724,7 +1752,7 @@ public:
 
   StmtRange children() {
     return StmtRange(reinterpret_cast<Stmt **>(varlist_begin()),
-                     reinterpret_cast<Stmt **>(getFinals().end() + 2));
+                     reinterpret_cast<Stmt **>(varlist_end()));
   }
 
   static bool classof(const OMPClause *T) {
@@ -1809,7 +1837,7 @@ public:
 
   StmtRange children() {
     return StmtRange(reinterpret_cast<Stmt **>(varlist_begin()),
-                     reinterpret_cast<Stmt **>(varlist_end() + 1));
+                     reinterpret_cast<Stmt **>(varlist_end()));
   }
 
   static bool classof(const OMPClause *T) {
@@ -2181,6 +2209,94 @@ public:
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_flush;
+  }
+};
+
+/// \brief This represents implicit clause 'depend' for the '#pragma omp task'
+/// directive.
+///
+/// \code
+/// #pragma omp task depend(in:a,b)
+/// \endcode
+/// In this example directive '#pragma omp task' with clause 'depend' with the
+/// variables 'a' and 'b' with dependency 'in'.
+///
+class OMPDependClause : public OMPVarListClause<OMPDependClause> {
+  friend class OMPClauseReader;
+  /// \brief Dependency type (one of in, out, inout).
+  OpenMPDependClauseKind DepKind;
+  /// \brief Dependency type location.
+  SourceLocation DepLoc;
+  /// \brief Colon location.
+  SourceLocation ColonLoc;
+  /// \brief Build clause with number of variables \a N.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param N Number of the variables in the clause.
+  ///
+  OMPDependClause(SourceLocation StartLoc, SourceLocation LParenLoc,
+                  SourceLocation EndLoc, unsigned N)
+      : OMPVarListClause<OMPDependClause>(OMPC_depend, StartLoc, LParenLoc,
+                                          EndLoc, N),
+        DepKind(OMPC_DEPEND_unknown) {}
+
+  /// \brief Build an empty clause.
+  ///
+  /// \param N Number of variables.
+  ///
+  explicit OMPDependClause(unsigned N)
+      : OMPVarListClause<OMPDependClause>(OMPC_depend, SourceLocation(),
+                                          SourceLocation(), SourceLocation(),
+                                          N),
+        DepKind(OMPC_DEPEND_unknown) {}
+  /// \brief Set dependency kind.
+  void setDependencyKind(OpenMPDependClauseKind K) { DepKind = K; }
+
+  /// \brief Set dependency kind and its location.
+  void setDependencyLoc(SourceLocation Loc) { DepLoc = Loc; }
+
+  /// \brief Set colon location.
+  void setColonLoc(SourceLocation Loc) { ColonLoc = Loc; }
+
+public:
+  /// \brief Creates clause with a list of variables \a VL.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param DepKind Dependency type.
+  /// \param DepLoc Location of the dependency type.
+  /// \param ColonLoc Colon location.
+  /// \param VL List of references to the variables.
+  ///
+  static OMPDependClause *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation LParenLoc,
+         SourceLocation EndLoc, OpenMPDependClauseKind DepKind,
+         SourceLocation DepLoc, SourceLocation ColonLoc, ArrayRef<Expr *> VL);
+  /// \brief Creates an empty clause with \a N variables.
+  ///
+  /// \param C AST context.
+  /// \param N The number of variables.
+  ///
+  static OMPDependClause *CreateEmpty(const ASTContext &C, unsigned N);
+
+  /// \brief Get dependency type.
+  OpenMPDependClauseKind getDependencyKind() const { return DepKind; }
+  /// \brief Get dependency type location.
+  SourceLocation getDependencyLoc() const { return DepLoc; }
+  /// \brief Get colon location.
+  SourceLocation getColonLoc() const { return ColonLoc; }
+
+  StmtRange children() {
+    return StmtRange(reinterpret_cast<Stmt **>(varlist_begin()),
+                     reinterpret_cast<Stmt **>(varlist_end()));
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_depend;
   }
 };
 

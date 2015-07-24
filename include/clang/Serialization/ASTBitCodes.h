@@ -561,6 +561,9 @@ namespace clang {
       /// \brief Record code for the table of offsets to CXXCtorInitializers
       /// lists.
       CXX_CTOR_INITIALIZERS_OFFSETS = 53,
+
+      /// \brief Delete expressions that will be analyzed later.
+      DELETE_EXPRS_TO_ANALYZE = 54
     };
 
     /// \brief Record types used within a source manager block.
@@ -1102,7 +1105,9 @@ namespace clang {
       /// \brief An OMPThreadPrivateDecl record.
       DECL_OMP_THREADPRIVATE,
       /// \brief An EmptyDecl record.
-      DECL_EMPTY
+      DECL_EMPTY,
+      /// \brief An ObjCTypeParamDecl record.
+      DECL_OBJC_TYPE_PARAM,
     };
 
     /// \brief Record codes for each kind of statement or expression.
@@ -1208,8 +1213,12 @@ namespace clang {
       EXPR_INIT_LIST,
       /// \brief A DesignatedInitExpr record.
       EXPR_DESIGNATED_INIT,
+      /// \brief A DesignatedInitUpdateExpr record.
+      EXPR_DESIGNATED_INIT_UPDATE,
       /// \brief An ImplicitValueInitExpr record.
       EXPR_IMPLICIT_VALUE_INIT,
+      /// \brief An NoInitExpr record.
+      EXPR_NO_INIT,
       /// \brief A VAArgExpr record.
       EXPR_VA_ARG,
       /// \brief An AddrLabelExpr record.
@@ -1389,6 +1398,9 @@ namespace clang {
       STMT_OMP_ATOMIC_DIRECTIVE,
       STMT_OMP_TARGET_DIRECTIVE,
       STMT_OMP_TEAMS_DIRECTIVE,
+      STMT_OMP_TASKGROUP_DIRECTIVE,
+      STMT_OMP_CANCELLATION_POINT_DIRECTIVE,
+      STMT_OMP_CANCEL_DIRECTIVE,
 
       // ARC
       EXPR_OBJC_BRIDGED_CAST,     // ObjCBridgedCastExpr
